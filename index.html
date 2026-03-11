@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -1139,7 +1139,7 @@
     // ╔══════════════════════════════════════════╗
     //  DASHBOARD
     // ╚══════════════════════════════════════════╝
-    function Dashboard({ accounts, txns, deals, invoices, kpis, ledger, pendInv, pendChq, setPage, brokers }) {
+    function Dashboard({ accounts, txns, deals, invoices, kpis, ledger, pendInv, pendChq, setPage, setReportTab, brokers }) {
       const isMobile = window.innerWidth <= 768;
       
       // Cash flow calculation
@@ -1199,14 +1199,14 @@
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(160px,1fr))", gap: 14, marginBottom: 22 }}>
           {[
             { l: "Bank Balance", v: fmtAED(kpis.cash), s: "All bank accounts", c: "#2563EB" },
-            { l: "Accounts Receivable", v: fmtAED(kpis.ar), s: `${pendInv} open invoices`, c: GOLD },
+            { l: "Accounts Receivable", v: fmtAED(kpis.ar), s: `${pendInv} open invoices`, c: GOLD, clickable: true, onClick: () => { setReportTab("ar"); setPage("reports"); } },
             { l: "Accounts Payable", v: fmtAED(kpis.ap), s: "Outstanding bills", c: "#DC2626" },
             { l: "Net VAT Payable", v: fmtAED(kpis.vat), s: "Output VAT - Input VAT", c: "#7C3AED" },
             { l: "Revenue YTD", v: fmtAED(kpis.rev), s: "This year", c: "#059669" },
             { l: "Expenses YTD", v: fmtAED(kpis.exp), s: "This year", c: "#D97706" },
             { l: "Net Income YTD", v: fmtAED(kpis.rev - kpis.exp), s: "Profit this year", c: NAVY }
-          ].map((k, i) => <div key={i} style={{ ...C.card, padding: "15px 18px", borderTop: `3px solid ${k.c}`, cursor: "default" }}>
-            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "#6B7280", fontWeight: 600, marginBottom: 5 }}>{k.l}</div>
+          ].map((k, i) => <div key={i} style={{ ...C.card, padding: "15px 18px", borderTop: `3px solid ${k.c}`, cursor: k.clickable ? "pointer" : "default", transition: "transform 0.1s, box-shadow 0.1s" }} onClick={k.onClick} onMouseEnter={e => k.clickable && (e.currentTarget.style.transform = "translateY(-2px)", e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.15)")} onMouseLeave={e => k.clickable && (e.currentTarget.style.transform = "translateY(0)", e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.1)")}>
+            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "#6B7280", fontWeight: 600, marginBottom: 5 }}>{k.l}{k.clickable && <span style={{ marginLeft: 6 }}>→</span>}</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: NAVY }}>{k.v}</div>
             <div style={{ fontSize: 11, color: "#6B7280", marginTop: 3 }}>{k.s}</div>
           </div>)}
@@ -1221,8 +1221,8 @@
                 <span style={{ color: "#6B7280" }}>Bank Accounts</span>
                 <span style={{ fontWeight: 600, color: "#2563EB" }}>{fmtAED(cashFlow.bank)}</span>
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #F3F4F6", fontSize: 13 }}>
-                <span style={{ color: "#6B7280" }}>Accounts Receivable</span>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #F3F4F6", fontSize: 13, cursor: "pointer", transition: "background 0.1s" }} onClick={() => { setReportTab("ar"); setPage("reports"); }} onMouseEnter={e => e.currentTarget.style.background = "#F9FAFB"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                <span style={{ color: "#6B7280" }}>Accounts Receivable →</span>
                 <span style={{ fontWeight: 600, color: GOLD }}>{fmtAED(cashFlow.ar)}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #F3F4F6", fontSize: 13 }}>
@@ -1421,7 +1421,7 @@
     // ╔══════════════════════════════════════════╗
     //  JOURNAL ENTRY
     // ╚══════════════════════════════════════════╝
-    function JournalPage({ accounts, txns, setTxns, deals, brokers, developers, saveTxn, deleteTxn }) {
+    function JournalPage({ accounts, txns, setTxns, deals, brokers, developers, invoices, setInvoices, saveTxn, deleteTxn }) {
       const [open, setOpen] = useState(false);
       const [preview, setPreview] = useState(false);
       const [pending, setPending] = useState(null);
@@ -1485,6 +1485,13 @@
       
       const voidTxn = id => { 
         setTxns(p => p.map(t => t.id === id ? { ...t, isVoid: true } : t)); 
+        
+        // CRITICAL FIX: Also void the related invoice to maintain data consistency
+        const relatedInvoice = invoices.find(inv => inv.txn_id === id);
+        if (relatedInvoice) {
+          setInvoices(p => p.map(i => i.id === relatedInvoice.id ? { ...i, status: "Void" } : i));
+        }
+        
         toast("Transaction voided", "warning"); 
       };
       const list = (search ? txns.filter(t => t.description?.toLowerCase().includes(search.toLowerCase()) || t.ref?.toLowerCase().includes(search.toLowerCase())) : [...txns])
@@ -2166,9 +2173,11 @@
     // ╔══════════════════════════════════════════╗
     //  INVOICES
     // ╚══════════════════════════════════════════╝
-    function InvoicesPage({ accounts, txns, invoices, setInvoices, deals, customers, saveTxn }) {
+    function InvoicesPage({ accounts, txns, setTxns, invoices, setInvoices, deals, customers, saveTxn }) {
       const [open, setOpen] = useState(false); const [preview, setPreview] = useState(false);
       const [pendPost, setPendPost] = useState(null); const [filter, setFilter] = useState("All");
+      const [sortBy, setSortBy] = useState('date'); // 'ref', 'date', 'customer', 'deal'
+      const [sortDesc, setSortDesc] = useState(true);
       const newRef = () => "INV-" + new Date().getFullYear() + "-" + Math.floor(Math.random() * 9000 + 1000);
       const blLine = () => ({ id: uid(), desc: "Commission Income", net: "", vatRate: 5, vat: 0, gross: 0 });
       const [f, setF] = useState({ deal_id: "", customer_id: "", date: todayStr(), ref: newRef(), lines: [blLine()] });
@@ -2209,9 +2218,37 @@
       };
 
       const markPaid = id => { setInvoices(p => p.map(i => i.id === id ? { ...i, status: "Paid" } : i)); toast("Marked as Paid ✅", "success"); };
-      const voidInv = id => { setInvoices(p => p.map(i => i.id === id ? { ...i, status: "Void" } : i)); toast("Invoice voided", "warning"); };
+      const voidInv = id => { 
+        const invoice = invoices.find(i => i.id === id);
+        if (invoice && invoice.txn_id) {
+          // Void the transaction too
+          setTxns(p => p.map(t => t.id === invoice.txn_id ? { ...t, isVoid: true } : t));
+        }
+        // Void the invoice
+        setInvoices(p => p.map(i => i.id === id ? { ...i, status: "Void" } : i)); 
+        toast("Invoice voided", "warning"); 
+      };
       const postExisting = inv => { const post = buildPost(inv); if (!post) return; setPendPost(post); setPreview(true); };
-      const list = filter === "All" ? invoices : invoices.filter(i => i.status === filter);
+      
+      // Filter and sort invoices
+      const filtered = filter === "All" ? invoices : invoices.filter(i => i.status === filter);
+      const list = [...filtered].sort((a, b) => {
+        let cmp = 0;
+        if (sortBy === 'ref') {
+          cmp = (a.ref || '').localeCompare(b.ref || '');
+        } else if (sortBy === 'date') {
+          cmp = (a.date || '').localeCompare(b.date || '');
+        } else if (sortBy === 'customer') {
+          const custA = customers.find(c => c.id === a.customer_id)?.name || '';
+          const custB = customers.find(c => c.id === b.customer_id)?.name || '';
+          cmp = custA.localeCompare(custB);
+        } else if (sortBy === 'deal') {
+          const dealA = deals.find(d => d.id === a.deal_id)?.property_name || '';
+          const dealB = deals.find(d => d.id === b.deal_id)?.property_name || '';
+          cmp = dealA.localeCompare(dealB);
+        }
+        return sortDesc ? -cmp : cmp;
+      });
 
       return <div>
         <PageHeader title="Invoices" sub={`${invoices.length} total`}>
@@ -2220,7 +2257,17 @@
         </PageHeader>
         <div style={C.card}><div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead><tr><th style={C.th}>Ref</th><th style={C.th}>Date</th><th style={C.th}>Customer</th><th style={C.th}>Deal</th><th style={{ ...C.th, textAlign: "right" }}>Net</th><th style={{ ...C.th, textAlign: "right", color: "#7C3AED" }}>VAT</th><th style={{ ...C.th, textAlign: "right" }}>Gross</th><th style={C.th}>Status</th><th style={C.th}>Actions</th></tr></thead>
+            <thead><tr>
+              <th style={{ ...C.th, cursor: "pointer", userSelect: "none" }} onClick={() => { setSortBy('ref'); setSortDesc(sortBy === 'ref' ? !sortDesc : true); }}>Ref {sortBy === 'ref' && (sortDesc ? "↓" : "↑")}</th>
+              <th style={{ ...C.th, cursor: "pointer", userSelect: "none" }} onClick={() => { setSortBy('date'); setSortDesc(sortBy === 'date' ? !sortDesc : true); }}>Date {sortBy === 'date' && (sortDesc ? "↓" : "↑")}</th>
+              <th style={{ ...C.th, cursor: "pointer", userSelect: "none" }} onClick={() => { setSortBy('customer'); setSortDesc(sortBy === 'customer' ? !sortDesc : true); }}>Customer {sortBy === 'customer' && (sortDesc ? "↓" : "↑")}</th>
+              <th style={{ ...C.th, cursor: "pointer", userSelect: "none" }} onClick={() => { setSortBy('deal'); setSortDesc(sortBy === 'deal' ? !sortDesc : true); }}>Deal {sortBy === 'deal' && (sortDesc ? "↓" : "↑")}</th>
+              <th style={{ ...C.th, textAlign: "right" }}>Net</th>
+              <th style={{ ...C.th, textAlign: "right", color: "#7C3AED" }}>VAT</th>
+              <th style={{ ...C.th, textAlign: "right" }}>Gross</th>
+              <th style={C.th}>Status</th>
+              <th style={C.th}>Actions</th>
+            </tr></thead>
             <tbody>{list.map(inv => {
               const cust = customers.find(c => c.id === inv.customer_id);
               const deal = deals.find(d => d.id === inv.deal_id);
@@ -2912,8 +2959,16 @@
     // ╔══════════════════════════════════════════╗
     //  REPORTS
     // ╚══════════════════════════════════════════╝
-    function ReportsPage({ accounts, txns, invoices, customers, deals, ledger }) {
-      const [active, setActive] = useState("pl");
+    function ReportsPage({ accounts, txns, invoices, customers, deals, brokers, ledger, reportTab, setReportTab }) {
+      const [active, setActive] = useState(reportTab || "pl");
+      
+      // Reset reportTab after using it
+      useEffect(() => {
+        if (reportTab) {
+          setActive(reportTab);
+          setReportTab(null);
+        }
+      }, [reportTab, setReportTab]);
       const [from, setFrom] = useState("2024-01-01"); const [to, setTo] = useState(todayStr());
       const [glSortBy, setGlSortBy] = useState('date'); // 'date', 'ref', 'description'
       const [glSortDesc, setGlSortDesc] = useState(false);
@@ -2953,7 +3008,38 @@
       }, [txns, to]);
       
       const pl = useMemo(() => { const rv = {}, ex = {}; filtered.forEach(t => t.lines.forEach(l => { const a = accounts.find(x => x.id === l.accountId); if (!a) return; if (a.type === "Revenue") { if (!rv[a.id]) rv[a.id] = { a, bal: 0 }; rv[a.id].bal += (l.credit - l.debit); } if (a.type === "Expense") { if (!ex[a.id]) ex[a.id] = { a, bal: 0 }; ex[a.id].bal += (l.debit - l.credit); } })); const tRev = Object.values(rv).reduce((s, x) => s + x.bal, 0); const tExp = Object.values(ex).reduce((s, x) => s + x.bal, 0); return { rev: Object.values(rv), exp: Object.values(ex), tRev, tExp, net: tRev - tExp }; }, [filtered, accounts]);
-      const bs = useMemo(() => { const g = { Asset: [], Liability: [], Equity: [] }; accounts.forEach(a => { if (!g[a.type]) return; g[a.type].push({ a, bal: accountBalance(a, dateLimitedLedger) }); }); const currentEarnings = pl.net; return { assets: g.Asset, liabs: g.Liability, equity: g.Equity, currentEarnings, tA: g.Asset.reduce((s, x) => s + x.bal, 0), tL: g.Liability.reduce((s, x) => s + x.bal, 0), tE: g.Equity.reduce((s, x) => s + x.bal, 0) + currentEarnings }; }, [accounts, dateLimitedLedger, pl.net]);
+      const bs = useMemo(() => { 
+        const g = { Asset: [], Liability: [], Equity: [] }; 
+        accounts.forEach(a => { 
+          if (!g[a.type]) return; 
+          g[a.type].push({ a, bal: accountBalance(a, dateLimitedLedger) }); 
+        }); 
+        
+        // FIXED: Calculate cumulative earnings from inception to "As Of" date
+        // NOT from filtered date range - Balance Sheet needs total historical profit
+        let cumulativeRevenue = 0;
+        let cumulativeExpense = 0;
+        accounts.forEach(a => {
+          const ledgerEntry = dateLimitedLedger[a.id];
+          if (!ledgerEntry) return;
+          if (a.type === "Revenue") {
+            cumulativeRevenue += (ledgerEntry.credit - ledgerEntry.debit);
+          } else if (a.type === "Expense") {
+            cumulativeExpense += (ledgerEntry.debit - ledgerEntry.credit);
+          }
+        });
+        const currentEarnings = cumulativeRevenue - cumulativeExpense;
+        
+        return { 
+          assets: g.Asset, 
+          liabs: g.Liability, 
+          equity: g.Equity, 
+          currentEarnings, 
+          tA: g.Asset.reduce((s, x) => s + x.bal, 0), 
+          tL: g.Liability.reduce((s, x) => s + x.bal, 0), 
+          tE: g.Equity.reduce((s, x) => s + x.bal, 0) + currentEarnings 
+        }; 
+      }, [accounts, dateLimitedLedger]);
       const tb = useMemo(() => { 
         const rows = accounts.map(a => { 
           const bal = accountBalance(a, dateLimitedLedger);
@@ -2985,7 +3071,27 @@
         const tCr = rows.reduce((s, r) => s + r.credit, 0); 
         return { rows, tDr, tCr, ok: Math.abs(tDr - tCr) < 2 }; 
       }, [accounts, dateLimitedLedger]);
-      const arAging = useMemo(() => { const today = new Date(); return invoices.filter(i => i.status === "Posted").map(i => { const days = Math.floor((today - new Date(i.date + "T12:00:00")) / 86400000); return { ...i, days, bucket: days <= 30 ? "0-30" : days <= 60 ? "31-60" : days <= 90 ? "61-90" : "90+" }; }); }, [invoices]);
+      const arAging = useMemo(() => { 
+        const today = new Date(); 
+        return invoices
+          .filter(i => {
+            // Only show Posted invoices (not Paid or Void)
+            if (i.status !== "Posted") return false;
+            
+            // CRITICAL FIX: Validate that the transaction exists and is not voided
+            if (!i.txn_id) return false; // Invoice has no transaction (shouldn't happen but safety check)
+            
+            const txn = txns.find(t => t.id === i.txn_id);
+            if (!txn) return false; // Transaction was deleted
+            if (txn.isVoid) return false; // Transaction was voided
+            
+            return true; // Valid open invoice
+          })
+          .map(i => { 
+            const days = Math.floor((today - new Date(i.date + "T12:00:00")) / 86400000); 
+            return { ...i, days, bucket: days <= 30 ? "0-30" : days <= 60 ? "31-60" : days <= 90 ? "61-90" : "90+" }; 
+          }); 
+      }, [invoices, txns]);
       const exportCSV = (data, name) => { if (!data.length) return; const h = Object.keys(data[0]).join(","); const r = data.map(x => Object.values(x).map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n"); const b = new Blob([h + "\n" + r], { type: "text/csv" }); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = name + ".csv"; a.click(); toast("CSV exported ✅", "success"); };
       const tc = { Asset: "info", Liability: "danger", Equity: "gold", Revenue: "success", Expense: "warning" };
       return <div>
@@ -3073,8 +3179,21 @@
           <div style={{ padding: "13px 18px", borderBottom: "1px solid #E5E7EB", fontWeight: 600, fontSize: 15 }}>AR Aging — Open Invoices</div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead><tr><th style={C.th}>Invoice</th><th style={C.th}>Customer</th><th style={C.th}>Date</th><th style={C.th}>Days</th><th style={C.th}>Bucket</th><th style={{ ...C.th, textAlign: "right" }}>Amount</th></tr></thead>
-              <tbody>{arAging.length === 0 && <tr><td colSpan={6} style={{ ...C.td, textAlign: "center", color: "#6B7280", padding: 24 }}>No open invoices</td></tr>}{arAging.map(i => <tr key={i.id}><td style={{ ...C.td, fontFamily: "monospace", color: GOLD_D }}>{i.ref}</td><td style={C.td}>{customers.find(c => c.id === i.customer_id)?.name || "—"}</td><td style={{ ...C.td, whiteSpace: "nowrap" }}>{fmtDate(i.date)}</td><td style={C.td}>{i.days}d</td><td style={C.td}><span style={C.badge(i.bucket === "0-30" ? "success" : i.bucket === "31-60" ? "warning" : "danger")}>{i.bucket}</span></td><td style={{ ...C.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmtAED(toCents(i.totals?.gross))}</td></tr>)}</tbody>
+              <thead><tr><th style={C.th}>Invoice</th><th style={C.th}>Customer</th><th style={C.th}>Broker</th><th style={C.th}>Deal</th><th style={C.th}>Date</th><th style={C.th}>Days</th><th style={C.th}>Bucket</th><th style={{ ...C.th, textAlign: "right" }}>Amount</th></tr></thead>
+              <tbody>{arAging.length === 0 && <tr><td colSpan={8} style={{ ...C.td, textAlign: "center", color: "#6B7280", padding: 24 }}>No open invoices</td></tr>}{arAging.map(i => {
+                const deal = deals.find(d => d.id === i.deal_id);
+                const broker = brokers.find(b => b.id === deal?.broker_id);
+                return <tr key={i.id}>
+                  <td style={{ ...C.td, fontFamily: "monospace", color: GOLD_D }}>{i.ref}</td>
+                  <td style={C.td}>{customers.find(c => c.id === i.customer_id)?.name || "—"}</td>
+                  <td style={{ ...C.td, fontSize: 12 }}>{broker?.name || "—"}</td>
+                  <td style={{ ...C.td, fontSize: 12, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{deal?.property_name || "—"}</td>
+                  <td style={{ ...C.td, whiteSpace: "nowrap" }}>{fmtDate(i.date)}</td>
+                  <td style={C.td}>{i.days}d</td>
+                  <td style={C.td}><span style={C.badge(i.bucket === "0-30" ? "success" : i.bucket === "31-60" ? "warning" : "danger")}>{i.bucket}</span></td>
+                  <td style={{ ...C.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{fmtAED(toCents(i.totals?.gross))}</td>
+                </tr>;
+              })}</tbody>
             </table>
           </div>
         </div>}
@@ -3211,7 +3330,7 @@
         const tE = accounts.filter(a => a.type === "Equity").reduce((s, a) => s + accountBalance(a, ledger), 0);
         const tR = accounts.filter(a => a.type === "Revenue").reduce((s, a) => s + accountBalance(a, ledger), 0);
         const tEx = accounts.filter(a => a.type === "Expense").reduce((s, a) => s + accountBalance(a, ledger), 0);
-        const netIncome = tR - Math.abs(tEx); // Add net income to equity
+        const netIncome = tR - tEx; // FIXED: Removed Math.abs() - tEx is already correctly signed (debit-credit)
         Math.abs(tA - (tL + tE + netIncome)) < 100 ? P("Balance Sheet: Assets = Liabilities + Equity ✅", `A=${fmtAED(tA)} | L+E=${fmtAED(tL + tE + netIncome)}`) : F("Balance Sheet equation broken", `Assets=${fmtAED(tA)}, L+E+NI=${fmtAED(tL + tE + netIncome)}`);
         setTimeout(() => { setResults(r); setRunning(false); }, 400);
       };
@@ -4548,6 +4667,106 @@
               >
                 🔧 Fix Account Classification
               </button>
+              
+              <button 
+                style={{ ...C.btn("warning"), background: "#DC2626", borderColor: "#DC2626", color: "#fff" }} 
+                onClick={async () => {
+                  // Find all voided invoices with active transactions
+                  const voidedInvoices = invoices.filter(inv => inv.status === "Void");
+                  
+                  if (voidedInvoices.length === 0) {
+                    toast('✅ No voided invoices found!', 'success');
+                    return;
+                  }
+                  
+                  // Check which ones have active transactions
+                  const orphanedInvoices = voidedInvoices.filter(inv => {
+                    if (!inv.txn_id) return false;
+                    const txn = txns.find(t => t.id === inv.txn_id);
+                    return txn && !txn.isVoid; // Has transaction that is NOT voided
+                  });
+                  
+                  if (orphanedInvoices.length === 0) {
+                    toast(`✅ All ${voidedInvoices.length} voided invoices are clean! No active transactions found.`, 'success');
+                    return;
+                  }
+                  
+                  const totalAmount = orphanedInvoices.reduce((sum, inv) => sum + (inv.totals?.gross || 0), 0);
+                  
+                  if (!confirm(`⚠️ CLEANUP TOOL\n\nFound ${orphanedInvoices.length} voided invoices with active transactions.\nTotal AR impact: AED ${(totalAmount / 100).toFixed(2)}\n\nThis will void all ${orphanedInvoices.length} transactions IN FIRESTORE.\n\nContinue?`)) {
+                    return;
+                  }
+                  
+                  try {
+                    toast('🔄 Voiding transactions in Firestore...', 'info');
+                    console.log('🔄 Starting cleanup...');
+                    
+                    // Get current transactions from Firestore
+                    const txnsRef = db.collection('transactions').doc('np_transactions');
+                    const txnsSnap = await txnsRef.get();
+                    
+                    if (!txnsSnap.exists) {
+                      toast('❌ Transactions document not found in Firestore!', 'error');
+                      return;
+                    }
+                    
+                    let allTxns = txnsSnap.data().transactions || [];
+                    console.log(`📊 Total transactions in Firestore: ${allTxns.length}`);
+                    
+                    // Void all the transactions
+                    const txnIds = orphanedInvoices.map(inv => inv.txn_id).filter(Boolean);
+                    console.log(`🎯 Transaction IDs to void:`, txnIds);
+                    
+                    let voidedCount = 0;
+                    allTxns = allTxns.map(t => {
+                      if (txnIds.includes(t.id)) {
+                        voidedCount++;
+                        console.log(`  ✓ Voiding transaction: ${t.id} (${t.ref})`);
+                        return { ...t, isVoid: true };
+                      }
+                      return t;
+                    });
+                    
+                    console.log(`📝 Voided ${voidedCount} transactions`);
+                    
+                    // Save back to Firestore
+                    await txnsRef.set({ transactions: allTxns });
+                    console.log('✅ Saved to Firestore');
+                    
+                    // Update local state
+                    setTxns(allTxns);
+                    console.log('✅ Updated local state');
+                    
+                    // Build report
+                    const report = orphanedInvoices.map(inv => 
+                      `• ${inv.ref}: AED ${((inv.totals?.gross || 0) / 100).toFixed(2)}`
+                    ).join('\n');
+                    
+                    toast(`✅ Cleanup Complete!\n\nVoided ${voidedCount} transactions in Firestore:\n${report.substring(0, 150)}${report.length > 150 ? '...' : ''}`, 'success');
+                    
+                    console.log('✅ CLEANUP REPORT:');
+                    console.log(`Total voided invoices: ${voidedInvoices.length}`);
+                    console.log(`Fixed orphaned invoices: ${orphanedInvoices.length}`);
+                    console.log(`Total AR reduction: AED ${(totalAmount / 100).toFixed(2)}`);
+                    console.log('Details:', orphanedInvoices.map(inv => ({
+                      invoice: inv.ref,
+                      amount: (inv.totals?.gross || 0) / 100,
+                      txn_id: inv.txn_id
+                    })));
+                    
+                    setTimeout(() => {
+                      toast('🔄 Refreshing page to show updated data...', 'info');
+                      setTimeout(() => location.reload(), 1000);
+                    }, 2000);
+                    
+                  } catch (error) {
+                    console.error('❌ Cleanup error:', error);
+                    toast(`❌ Cleanup failed: ${error.message}`, 'error');
+                  }
+                }}
+              >
+                🧹 Fix Voided Invoices (Cleanup Tool)
+              </button>
             </div>
             <div style={{ background: "#F9FAFB", borderRadius: 9, padding: "16px 20px", fontSize: 13, lineHeight: 2.2, border: "1px solid #E5E7EB" }}>
               <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 14 }}>⚙️ System Info & Accounting Rules</div>
@@ -4854,6 +5073,7 @@
       const [developers, setDevelopers] = useState(() => ls_get("np_developers", SEED_DEVELOPERS));
       const [settings, setSettings] = useState(() => ls_get("np_settings", { company: "Nasama Properties Company LLC", trn: "100-1234-5678-00003", vatRate: 5, currency: "AED" }));
       const [page, setPage] = useState("dashboard");
+      const [reportTab, setReportTab] = useState(null); // For navigating to specific report tab
       const [dark, setDark] = useState(false);
       
       // Redirect secretary users from dashboard to deals page
@@ -5357,10 +5577,18 @@
         return { cash, ar, ap, vat, rev, exp };
       }, [accounts, txns, ledger]);
 
-      const pendInv = invoices.filter(i => i.status === "Posted").length;
+      const pendInv = invoices.filter(i => {
+        // CRITICAL FIX: Use same validation as AR Aging
+        if (i.status !== "Posted") return false;
+        if (!i.txn_id) return false; // Must have transaction
+        const txn = txns.find(t => t.id === i.txn_id);
+        if (!txn) return false; // Transaction must exist
+        if (txn.isVoid) return false; // Transaction must not be voided
+        return true; // Valid open invoice
+      }).length;
       const pendChq = cheques.filter(c => c.status === "Deposited").length;
 
-      const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, invoices, setInvoices: setInvoicesFS, cheques, setCheques: setChequesFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, settings, setSettings: setSettingsFS, ledger, saveTxn, deleteTxn, dark, setDark };
+      const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, invoices, setInvoices: setInvoicesFS, cheques, setCheques: setChequesFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, settings, setSettings: setSettingsFS, ledger, saveTxn, deleteTxn, dark, setDark, reportTab, setReportTab, setPage };
 
       // ── CLEAR ALL DEMO DATA ──────────────────────────────
       const clearAllDemoData = async () => {
@@ -5413,7 +5641,7 @@
       const renderPage = () => {
         const p = { ...shared, userRole, userEmail };
         switch (page) {
-          case "dashboard": return <Dashboard {...p} kpis={kpis} pendInv={pendInv} pendChq={pendChq} setPage={setPage} />;
+          case "dashboard": return <Dashboard {...p} kpis={kpis} pendInv={pendInv} pendChq={pendChq} setPage={setPage} setReportTab={setReportTab} />;
           case "coa": return <COAPage {...p} />;
           case "journal": return <JournalPage {...p} />;
           case "deals": return <DealsPage {...p} />;
