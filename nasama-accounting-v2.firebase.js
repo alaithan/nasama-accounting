@@ -1,4 +1,4 @@
-// â”€â”€ FIREBASE INIT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+﻿// ── FIREBASE INIT ─────────────────────────────────
     var db, auth;
     try {
       const firebaseConfig = {
@@ -13,7 +13,7 @@
       firebase.initializeApp(firebaseConfig);
       db = firebase.firestore();
       auth = firebase.auth();
-      console.log('Firebase initialized â€” project: nasama-accuntant');
+      console.log('Firebase initialized — project: nasama-accuntant');
 
       // Firestore helpers
       const sanitizeFirestoreData = (value) => {

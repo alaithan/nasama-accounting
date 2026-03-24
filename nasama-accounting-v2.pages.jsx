@@ -1,10 +1,10 @@
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+﻿/* ══════════════════════════════════════════════════
        PAGE COMPONENTS
-       â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+       ══════════════════════════════════════════════════ */
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+    // ╔══════════════════════════════════════════════════╗
     //  DASHBOARD
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╚══════════════════════════════════════════════════╝
     function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark }) {
       const isMobile = window.innerWidth <= 768;
       const isTablet = window.innerWidth <= 1120;
@@ -212,16 +212,16 @@
       </div>;
 
       return <div>
-        <PageHeader title="Dashboard" sub={`Nasama Properties â€” ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}`} />
+        <PageHeader title="Dashboard" sub={`Nasama Properties — ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}`} />
 
         {/* KPI Cards */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(160px,1fr))", gap: 14, marginBottom: 22 }}>
           {[
             { l: "Bank Balance", v: fmtAED(kpis.cash), s: "All bank + cash accounts", c: "#2563EB" },
-            { l: "Net VAT Payable", v: fmtAED(kpis.vat), s: "Output âˆ’ Input VAT", c: "#7C3AED" },
+            { l: "Net VAT Payable", v: fmtAED(kpis.vat), s: "Output − Input VAT", c: "#7C3AED" },
             { l: "Revenue YTD", v: fmtAED(kpis.rev), s: "This year", c: "#059669" },
             { l: "Expenses YTD", v: fmtAED(kpis.exp), s: "This year", c: "#D97706" },
-            { l: "Net Income YTD", v: fmtAED(kpis.rev - kpis.exp), s: "Revenue âˆ’ Expenses", c: NAVY },
+            { l: "Net Income YTD", v: fmtAED(kpis.rev - kpis.exp), s: "Revenue − Expenses", c: NAVY },
             { l: "Active Deals", v: deals.length, s: "Pipeline", c: GOLD },
           ].map((k, i) => <div key={i} style={{ ...C.card, padding: "15px 18px", borderTop: `3px solid ${k.c}` }}>
             <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "#6B7280", fontWeight: 600, marginBottom: 5 }}>{k.l}</div>
@@ -234,8 +234,8 @@
           {/* Deal Pipeline */}
           <div style={C.card}>
             <div style={{ padding: "13px 18px", borderBottom: "1px solid #E5E7EB", fontWeight: 600, fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>ðŸ¤ Deal Pipeline</span>
-              <button style={C.btn("ghost", true)} onClick={() => setPage("deals")}>View All â†’</button>
+              <span>🤝 Deal Pipeline</span>
+              <button style={C.btn("ghost", true)} onClick={() => setPage("deals")}>View All →</button>
             </div>
             <div style={{ padding: "8px 18px" }}>
               {DEAL_STAGES.map((s, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: i < DEAL_STAGES.length - 1 ? "1px solid #F3F4F6" : "none", fontSize: 13 }}>
@@ -248,15 +248,15 @@
           {/* Recent Transactions */}
           <div style={C.card}>
             <div style={{ padding: "13px 18px", borderBottom: "1px solid #E5E7EB", fontWeight: 600, fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>ðŸ“’ Recent Transactions</span>
-              <button style={C.btn("ghost", true)} onClick={() => setPage("journal")}>View All â†’</button>
+              <span>📒 Recent Transactions</span>
+              <button style={C.btn("ghost", true)} onClick={() => setPage("journal")}>View All →</button>
             </div>
             <div style={{ padding: "4px 18px" }}>
               {recentTxns.length === 0 && <div style={{ textAlign: "center", padding: 30, color: "#9CA3AF", fontSize: 13 }}>No transactions yet. Start by recording a sale receipt or payment.</div>}
               {recentTxns.map((t, i) => {
                 const typeInfo = TXN_TYPES[t.txnType] || { label: t.txnType || "JV" };
                 return <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < recentTxns.length - 1 ? "1px solid #F3F4F6" : "none", fontSize: 13 }}>
-                  <div><div style={{ fontWeight: 500 }}>{t.description?.substring(0, 40)}{t.description?.length > 40 ? "â€¦" : ""}</div><div style={{ fontSize: 11, color: "#9CA3AF" }}>{fmtDate(t.date)} Â· {typeInfo.label}</div></div>
+                  <div><div style={{ fontWeight: 500 }}>{t.description?.substring(0, 40)}{t.description?.length > 40 ? "…" : ""}</div><div style={{ fontSize: 11, color: "#9CA3AF" }}>{fmtDate(t.date)} · {typeInfo.label}</div></div>
                   <span style={C.badge(t.txnType === "SR" ? "success" : t.txnType === "PV" || t.txnType === "BP" ? "warning" : "info")}>{t.ref}</span>
                 </div>;
               })}
@@ -266,7 +266,7 @@
 
         {/* Cash Position */}
         <div style={C.card}>
-          <div style={{ padding: "13px 18px", borderBottom: "1px solid #E5E7EB", fontWeight: 600, fontSize: 14 }}>ðŸ’° Cash Position</div>
+          <div style={{ padding: "13px 18px", borderBottom: "1px solid #E5E7EB", fontWeight: 600, fontSize: 14 }}>💰 Cash Position</div>
           <div style={{ padding: "8px 18px" }}>
             {accounts.filter(a => a.isBank || a.code === "1001").map((a, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #F3F4F6", fontSize: 13 }}>
               <span style={{ color: "#374151" }}>{a.name}</span>
@@ -281,15 +281,15 @@
       </div>;
     }
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+    // ╔══════════════════════════════════════════════════╗
     //  USER MANUAL PAGE
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╚══════════════════════════════════════════════════╝
     function ManualPage() {
       return <div>
         <PageHeader title="User Manual" sub="Complete guide to using the accounting system" />
         <div style={{ ...C.card, padding: 24, maxWidth: 800 }}>
           <div style={{ marginBottom: 32 }}>
-            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 16, color: GOLD }}>ðŸ“ How to Enter Sales (Receipts)</h3>
+            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 16, color: GOLD }}>📝 How to Enter Sales (Receipts)</h3>
             <ol style={{ paddingLeft: 24, lineHeight: 1.6 }}>
               <li>Navigate to the <strong>Receipts</strong> page from the sidebar.</li>
               <li>Click <strong>+ Add New</strong> to create a new sale receipt.</li>
@@ -304,7 +304,7 @@
           </div>
 
           <div style={{ marginBottom: 32 }}>
-            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 16, color: GOLD }}>ðŸ’³ How to Enter Expenses (Payments)</h3>
+            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 16, color: GOLD }}>💳 How to Enter Expenses (Payments)</h3>
             <ol style={{ paddingLeft: 24, lineHeight: 1.6 }}>
               <li>Navigate to the <strong>Payments</strong> page from the sidebar.</li>
               <li>Click <strong>+ Add New</strong> to create a new payment voucher.</li>
@@ -320,7 +320,7 @@
           </div>
 
           <div>
-            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, color: GOLD }}>ðŸ—‚ï¸ Chart of Accounts Definitions</h3>
+            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, color: GOLD }}>🗂️ Chart of Accounts Definitions</h3>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 24 }}>
               <div>
                 <h4 style={{ fontSize: 14, fontWeight: 700, marginBottom: 12, color: "#2563EB" }}>Assets (1000s)</h4>
@@ -385,9 +385,9 @@
       </div>;
     }
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+    // ╔══════════════════════════════════════════════════╗
     //  DEALS PAGE
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╚══════════════════════════════════════════════════╝
     function DealsPage({ deals, setDeals, customers, brokers, developers, txns, userRole, userEmail, writeMeta }) {
       const [show, setShow] = useState(false);
       const [edit, setEdit] = useState(null);
@@ -569,7 +569,7 @@
           return sortDir === "asc" ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
         });
       }, [filtered, sortKey, sortDir]);
-      const sortLabel = key => sortKey === key ? (sortDir === "asc" ? " â–²" : " â–¼") : " â†•";
+      const sortLabel = key => sortKey === key ? (sortDir === "asc" ? " ▲" : " ▼") : " ↕";
       const SortTh = ({ sortBy, align = "left", children }) => <th style={{ ...C.th, textAlign: align }}>
         <button onClick={() => toggleSort(sortBy)} style={{ background: "none", border: "none", padding: 0, margin: 0, font: "inherit", color: "inherit", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, textTransform: "inherit", letterSpacing: "inherit" }}>
           <span>{children}</span>
@@ -578,7 +578,7 @@
       </th>;
 
       return <div>
-        <PageHeader title="Deals / Pipeline" sub={`${deals.length} deals total${duplicateDealCount ? ` â€¢ ${duplicateDealCount} suspected duplicates` : ""}`}>
+        <PageHeader title="Deals / Pipeline" sub={`${deals.length} deals total${duplicateDealCount ? ` • ${duplicateDealCount} suspected duplicates` : ""}`}>
           <Sel value={filter} onChange={e => setFilter(e.target.value)}>
             <option value="All">All Deals</option>
             {DEAL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
@@ -626,11 +626,11 @@
               {filtered.length === 0 && <tr><td colSpan={9} style={{ ...C.td, textAlign: "center", padding: 40, color: "#9CA3AF" }}>No deals found. Click "+ New Deal" to create one.</td></tr>}
               {sortedDeals.map(d => <tr key={d.id} style={{ cursor: hasPermission(userRole, 'sales.edit') ? "pointer" : "default" }} onClick={() => { if (hasPermission(userRole, 'sales.edit')) { setEdit(d); setShow(true); } }}>
                 <td style={C.td}>{d.created_at ? fmtDate(d.created_at) : "--"}</td>
-                <td style={C.td}><div style={{ fontWeight: 500 }}>{d.property_name || "â€”"}</div><div style={{ fontSize: 11, color: "#9CA3AF" }}>{d.unit_no && `Unit ${d.unit_no}`}</div></td>
+                <td style={C.td}><div style={{ fontWeight: 500 }}>{d.property_name || "—"}</div><div style={{ fontSize: 11, color: "#9CA3AF" }}>{d.unit_no && `Unit ${d.unit_no}`}</div></td>
                 <td style={C.td}><span style={C.badge(d.type === "Off-Plan" ? "info" : d.type === "Secondary" ? "gold" : "success")}>{d.type}</span></td>
                 <td style={C.td}><span style={C.badge(d.stage?.includes("Collected") ? "success" : d.stage?.includes("Earned") ? "gold" : "neutral")}>{d.stage}</span></td>
-                <td style={C.td}>{d.client_name || "â€”"}</td>
-                <td style={C.td}>{d.broker_name || "â€”"}</td>
+                <td style={C.td}>{d.client_name || "—"}</td>
+                <td style={C.td}>{d.broker_name || "—"}</td>
                 <td style={{ ...C.td, textAlign: "right" }}>{d.transaction_value ? fmtAED(d.transaction_value) : "--"}</td>
                 <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(d.expected_commission_net || 0)}</td>
                 <td style={C.td}>
@@ -647,7 +647,7 @@
         {/* Deal Modal */}
         {show && <div style={C.modal} onClick={() => setShow(false)}>
           <div style={C.mbox(700)} onClick={e => e.stopPropagation()}>
-            <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>{edit?.id ? "Edit Deal" : "New Deal"}</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>âœ•</button></div>
+            <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>{edit?.id ? "Edit Deal" : "New Deal"}</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
             <DealForm initial={normalizeLinkedDealRefs(edit || empty)} onSave={save} onCancel={() => setShow(false)} customers={customers} brokers={brokers} developers={developers} />
           </div>
         </div>}
@@ -675,15 +675,15 @@
             <div><label style={C.label}>Property Name</label><Inp value={d.property_name} onChange={e => up("property_name", e.target.value)} /></div>
             <div><label style={C.label}>Unit No.</label><Inp value={d.unit_no} onChange={e => up("unit_no", e.target.value)} /></div>
             <div><label style={C.label}>Developer</label><Sel value={d.developer_id} onChange={e => { const dev = developers.find(x => x.id === e.target.value); up("developer_id", e.target.value); up("developer", dev ? dev.name : ""); }}>
-              <option value="">â€” Select â€”</option>
+              <option value="">— Select —</option>
               {developers.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
             </Sel></div>
             <div><label style={C.label}>Broker</label><Sel value={d.broker_id} onChange={e => { const br = brokers.find(x => x.id === e.target.value); up("broker_id", e.target.value); up("broker_name", br ? br.name : ""); }}>
-              <option value="">â€” Select â€”</option>
+              <option value="">— Select —</option>
               {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
             </Sel></div>
             <div><label style={C.label}>Client</label><Sel value={d.customer_id} onChange={e => { const c = customers.find(x => x.id === e.target.value); up("customer_id", e.target.value); up("client_name", c ? c.name : ""); }}>
-              <option value="">â€” Select â€”</option>
+              <option value="">— Select —</option>
               {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Sel></div>
             <div><label style={C.label}>Transaction Value (AED)</label><Inp type="number" step="0.01" value={d.transaction_value ? fromCents(d.transaction_value) : ""} onChange={e => up("transaction_value", toCents(e.target.value))} placeholder="Optional if you only know the commission amount" /></div>
@@ -694,13 +694,13 @@
           </div>
           <div style={{ marginTop: 14 }}><label style={C.label}>Notes</label><textarea style={{ ...C.input, minHeight: 60, resize: "vertical" }} value={d.notes || ""} onChange={e => up("notes", e.target.value)} /></div>
         </div>
-        <div style={C.mftr}><button style={C.btn("secondary")} onClick={onCancel}>Cancel</button><button style={C.btn()} onClick={() => onSave(d)}>ðŸ’¾ Save Deal</button></div>
+        <div style={C.mftr}><button style={C.btn("secondary")} onClick={onCancel}>Cancel</button><button style={C.btn()} onClick={() => onSave(d)}>💾 Save Deal</button></div>
       </div>;
     }
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-    //  SALE RECEIPTS (replaces Invoices â€” cash-settled)
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╔══════════════════════════════════════════════════╗
+    //  SALE RECEIPTS (replaces Invoices — cash-settled)
+    // ╚══════════════════════════════════════════════════╝
     function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, userRole, setPage }) {
       const [show, setShow] = useState(false);
       const [preview, setPreview] = useState(null);
@@ -739,7 +739,7 @@
       const bankAccounts = accounts.filter(a => a.isBank || a.code === "1001");
 
       return <div>
-        <PageHeader title="Sale Receipts" sub={`Cash-settled commission collections â€” ${saleReceipts.length} receipts`}>
+        <PageHeader title="Sale Receipts" sub={`Cash-settled commission collections — ${saleReceipts.length} receipts`}>
           {hasPermission(userRole, 'sales.create') && <button style={C.btn()} onClick={() => setShow(true)}>+ New Receipt</button>}
         </PageHeader>
 
@@ -759,12 +759,12 @@
         {/* New Receipt Modal */}
         {show && <div style={C.modal} onClick={() => setShow(false)}>
           <div style={C.mbox(560)} onClick={e => e.stopPropagation()}>
-            <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>ðŸ’° New Sale Receipt</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>âœ•</button></div>
+            <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>💰 New Sale Receipt</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
             <div style={C.mbdy}>
               <p style={{ fontSize: 13, color: "#6B7280", marginBottom: 16 }}>Record a commission collected. This posts a single journal entry: DR Bank / CR Revenue / CR Output VAT.</p>
               <div style={C.fg}>
                 <div><label style={C.label}>Deal</label><Sel value={form.deal_id} onChange={e => setForm(p => ({ ...p, deal_id: e.target.value }))}>
-                  <option value="">â€” Select Deal â€”</option>
+                  <option value="">— Select Deal —</option>
                   {deals.map(d => <option key={d.id} value={d.id}>{d.property_name} ({d.type})</option>)}
                 </Sel></div>
                 <div><label style={C.label}>Date</label><Inp type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} /></div>
@@ -782,7 +782,7 @@
                 <div style={{ display: "flex", justifyContent: "space-between", color: "#6B7280" }}><span>VAT ({form.vatRate}%):</span><span>AED {(parseFloat(form.grossAmount) - parseFloat(form.grossAmount) / (1 + form.vatRate / 100)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div></>}
               </div>}
             </div>
-            <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn()} onClick={handlePreview}>Preview Journal â†’</button></div>
+            <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn()} onClick={handlePreview}>Preview Journal →</button></div>
           </div>
         </div>}
 
@@ -790,9 +790,9 @@
       </div>;
     }
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-    //  PAYMENTS PAGE (replaces Expenses & Bills â€” cash-settled)
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╔══════════════════════════════════════════════════╗
+    //  PAYMENTS PAGE (replaces Expenses & Bills — cash-settled)
+    // ╚══════════════════════════════════════════════════╝
     function PaymentsPage({ accounts, txns, saveTxn, persistTxn, journal, vendors, userRole }) {
       const [show, setShow] = useState(false);
       const [preview, setPreview] = useState(null);
@@ -828,7 +828,7 @@
       };
 
       return <div>
-        <PageHeader title="Payments" sub={`Cash-settled expense payments â€” ${payments.length} payments`}>
+        <PageHeader title="Payments" sub={`Cash-settled expense payments — ${payments.length} payments`}>
           {hasPermission(userRole, 'expenses.create') && <button style={C.btn()} onClick={() => setShow(true)}>+ New Payment</button>}
         </PageHeader>
 
@@ -839,7 +839,7 @@
               {payments.length === 0 && <tr><td colSpan={6} style={{ ...C.td, textAlign: "center", padding: 40, color: "#9CA3AF" }}>No payments yet.</td></tr>}
               {payments.sort((a, b) => b.date?.localeCompare(a.date)).map(t => {
                 const gross = t.lines.reduce((s, l) => s + (l.credit || 0), 0);
-                return <tr key={t.id}><td style={C.td}>{fmtDate(t.date)}</td><td style={C.td}><span style={C.badge("warning")}>{t.ref}</span></td><td style={C.td}>{t.description}</td><td style={C.td}>{t.counterparty || "â€”"}</td><td style={C.td}><span style={C.badge(t.txnType === "BP" ? "gold" : "neutral")}>{TXN_TYPES[t.txnType]?.label || t.txnType}</span></td><td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(gross)}</td></tr>;
+                return <tr key={t.id}><td style={C.td}>{fmtDate(t.date)}</td><td style={C.td}><span style={C.badge("warning")}>{t.ref}</span></td><td style={C.td}>{t.description}</td><td style={C.td}>{t.counterparty || "—"}</td><td style={C.td}><span style={C.badge(t.txnType === "BP" ? "gold" : "neutral")}>{TXN_TYPES[t.txnType]?.label || t.txnType}</span></td><td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(gross)}</td></tr>;
               })}
             </tbody>
           </table>
@@ -847,14 +847,14 @@
 
         {show && <div style={C.modal} onClick={() => setShow(false)}>
           <div style={C.mbox(560)} onClick={e => e.stopPropagation()}>
-            <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>ðŸ’³ New Payment</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>âœ•</button></div>
+            <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>💳 New Payment</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
             <div style={C.mbdy}>
               <p style={{ fontSize: 13, color: "#6B7280", marginBottom: 16 }}>Record an expense paid. Posts: DR Expense / DR Input VAT / CR Bank.</p>
               <div style={C.fg}>
                 <div><label style={C.label}>Date</label><Inp type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} /></div>
                 <div><label style={C.label}>Expense Account</label><Sel value={form.expenseCode} onChange={e => setForm(p => ({ ...p, expenseCode: e.target.value }))}>
-                  <option value="">â€” Select â€”</option>
-                  {expenseAccounts.map(a => <option key={a.code} value={a.code}>{a.code} â€” {a.name}</option>)}
+                  <option value="">— Select —</option>
+                  {expenseAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
                 </Sel></div>
                 <div><label style={C.label}>Description</label><Inp value={form.memo} onChange={e => setForm(p => ({ ...p, memo: e.target.value }))} placeholder="e.g. Office rent March 2026" /></div>
                 <div><label style={C.label}>Gross Amount (AED)</label><Inp type="number" value={form.gross} onChange={e => setForm(p => ({ ...p, gross: e.target.value }))} /></div>
@@ -865,12 +865,12 @@
                   {bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}
                 </Sel></div>
                 <div><label style={C.label}>Vendor / Payee</label><Sel value={form.counterparty} onChange={e => setForm(p => ({ ...p, counterparty: e.target.value }))}>
-                  <option value="">â€” Optional â€”</option>
+                  <option value="">— Optional —</option>
                   {vendors.map(v => <option key={v.id} value={v.name}>{v.name}</option>)}
                 </Sel></div>
               </div>
             </div>
-            <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn()} onClick={handlePreview}>Preview Journal â†’</button></div>
+            <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn()} onClick={handlePreview}>Preview Journal →</button></div>
           </div>
         </div>}
 
@@ -878,9 +878,9 @@
       </div>;
     }
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+    // ╔══════════════════════════════════════════════════╗
     //  CUSTOMERS / BROKERS / DEVELOPERS / VENDORS
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╚══════════════════════════════════════════════════╝
     function CRUDPage({ title, icon, items, setItems, fields, eventName, userRole, createPerm, editPerm }) {
       const [show, setShow] = useState(false);
       const [edit, setEdit] = useState(null);
@@ -907,7 +907,7 @@
 
       return <div>
         <PageHeader title={`${icon} ${title}`} sub={`${items.length} records`}>
-          <Inp value={search} onChange={e => setSearch(e.target.value)} placeholder="Searchâ€¦" style={{ maxWidth: 200 }} />
+          <Inp value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…" style={{ maxWidth: 200 }} />
           {hasPermission(userRole, createPerm) && <button style={C.btn()} onClick={() => { setEdit(null); setShow(true); }}>+ Add</button>}
         </PageHeader>
 
@@ -917,7 +917,7 @@
             <tbody>
               {filtered.length === 0 && <tr><td colSpan={fields.filter(f => f.showInTable !== false).length + 1} style={{ ...C.td, textAlign: "center", padding: 40, color: "#9CA3AF" }}>No records found.</td></tr>}
               {filtered.map(item => <tr key={item.id}>
-                {fields.filter(f => f.showInTable !== false).map(f => <td key={f.key} style={C.td}>{String(item[f.key] || "â€”")}</td>)}
+                {fields.filter(f => f.showInTable !== false).map(f => <td key={f.key} style={C.td}>{String(item[f.key] || "—")}</td>)}
                 <td style={C.td}>{hasPermission(userRole, editPerm) && <button style={C.btn("secondary", true)} onClick={() => { setEdit(item); setShow(true); }}>Edit</button>}</td>
               </tr>)}
             </tbody>
@@ -926,43 +926,43 @@
 
         {show && <div style={C.modal} onClick={() => setShow(false)}>
           <div style={C.mbox(560)} onClick={e => e.stopPropagation()}>
-            <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>{edit?.id ? "Edit" : "New"} {title.replace(/s$/, "")}</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>âœ•</button></div>
+            <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>{edit?.id ? "Edit" : "New"} {title.replace(/s$/, "")}</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
             <div style={C.mbdy}>
               <div style={C.fg}>
                 {fields.map(f => <div key={f.key}><label style={C.label}>{f.label}</label><Inp value={(edit || {})[f.key] || ""} onChange={e => setEdit(p => ({ ...(p || {}), [f.key]: e.target.value }))} placeholder={f.placeholder || ""} /></div>)}
               </div>
             </div>
-            <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn()} onClick={() => save(edit || {})}>ðŸ’¾ Save</button></div>
+            <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn()} onClick={() => save(edit || {})}>💾 Save</button></div>
           </div>
         </div>}
       </div>;
     }
 
-    function CustomersPage(p) { return <CRUDPage title="Customers" icon="ðŸ‘¥" items={p.customers} setItems={p.setCustomers} eventName="add-customer" userRole={p.userRole} createPerm="sales.create" editPerm="sales.edit" fields={[
+    function CustomersPage(p) { return <CRUDPage title="Customers" icon="👥" items={p.customers} setItems={p.setCustomers} eventName="add-customer" userRole={p.userRole} createPerm="sales.create" editPerm="sales.edit" fields={[
       { key: "name", label: "Full Name" }, { key: "nationality", label: "Nationality" },
       { key: "phone", label: "Phone" }, { key: "email", label: "Email" },
       { key: "trn", label: "TRN", showInTable: false }, { key: "address", label: "Address", showInTable: false }
     ]} />; }
 
-    function BrokersPage(p) { return <CRUDPage title="Brokers" icon="ðŸ‘”" items={p.brokers} setItems={p.setBrokers} eventName="add-broker" userRole={p.userRole} createPerm="sales.create" editPerm="sales.edit" fields={[
+    function BrokersPage(p) { return <CRUDPage title="Brokers" icon="👔" items={p.brokers} setItems={p.setBrokers} eventName="add-broker" userRole={p.userRole} createPerm="sales.create" editPerm="sales.edit" fields={[
       { key: "name", label: "Name" }, { key: "nationality", label: "Nationality" },
       { key: "phone", label: "Phone" }, { key: "rera_no", label: "RERA No." }, { key: "rera_exp", label: "RERA Expiry" }
     ]} />; }
 
-    function DevelopersPage(p) { return <CRUDPage title="Developers" icon="ðŸ—ï¸" items={p.developers} setItems={p.setDevelopers} eventName="add-developer" userRole={p.userRole} createPerm="sales.create" editPerm="sales.edit" fields={[
+    function DevelopersPage(p) { return <CRUDPage title="Developers" icon="🏗️" items={p.developers} setItems={p.setDevelopers} eventName="add-developer" userRole={p.userRole} createPerm="sales.create" editPerm="sales.edit" fields={[
       { key: "name", label: "Name" }, { key: "contact_person", label: "Contact Person" },
       { key: "email", label: "Email" }, { key: "phone", label: "Phone" },
       { key: "expiry_date", label: "Agreement Expiry" }
     ]} />; }
 
-    function VendorsPage(p) { return <CRUDPage title="Vendors" icon="ðŸ­" items={p.vendors} setItems={p.setVendors} eventName="add-vendor" userRole={p.userRole} createPerm="expenses.create" editPerm="expenses.edit" fields={[
+    function VendorsPage(p) { return <CRUDPage title="Vendors" icon="🏭" items={p.vendors} setItems={p.setVendors} eventName="add-vendor" userRole={p.userRole} createPerm="expenses.create" editPerm="expenses.edit" fields={[
       { key: "name", label: "Name" }, { key: "category", label: "Category" },
       { key: "email", label: "Email" }, { key: "phone", label: "Phone" }, { key: "trn", label: "TRN" }
     ]} />; }
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+    // ╔══════════════════════════════════════════════════╗
     //  BANKING PAGE
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╚══════════════════════════════════════════════════╝
     function BankingPage({ accounts, txns, ledger, persistTxn, journal, userRole }) {
       const [showTransfer, setShowTransfer] = useState(false);
       const [tf, setTf] = useState({ date: todayStr(), fromCode: "", toCode: "", amount: "", memo: "Bank transfer" });
@@ -983,7 +983,7 @@
       // Bank transactions grouped by account
       return <div>
         <PageHeader title="Banking" sub="Bank account balances and transfers">
-          {hasPermission(userRole, 'canCreateTxns') && <button style={C.btn()} onClick={() => setShowTransfer(true)}>â†” Transfer</button>}
+          {hasPermission(userRole, 'canCreateTxns') && <button style={C.btn()} onClick={() => setShowTransfer(true)}>↔ Transfer</button>}
         </PageHeader>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 14, marginBottom: 22 }}>
@@ -999,7 +999,7 @@
 
         {/* Recent bank transactions */}
         <div style={C.card}>
-          <div style={{ padding: "13px 18px", borderBottom: "1px solid #E5E7EB", fontWeight: 600, fontSize: 14 }}>ðŸ“‹ Recent Bank Activity</div>
+          <div style={{ padding: "13px 18px", borderBottom: "1px solid #E5E7EB", fontWeight: 600, fontSize: 14 }}>📋 Recent Bank Activity</div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead><tr><th style={C.th}>Date</th><th style={C.th}>Ref</th><th style={C.th}>Description</th><th style={{ ...C.th, textAlign: "right" }}>In</th><th style={{ ...C.th, textAlign: "right" }}>Out</th></tr></thead>
             <tbody>
@@ -1009,8 +1009,8 @@
                 const inAmt = bankLines.reduce((s, l) => s + (l.debit || 0), 0);
                 const outAmt = bankLines.reduce((s, l) => s + (l.credit || 0), 0);
                 return <tr key={t.id}><td style={C.td}>{fmtDate(t.date)}</td><td style={C.td}>{t.ref}</td><td style={C.td}>{t.description}</td>
-                  <td style={{ ...C.td, textAlign: "right", color: inAmt > 0 ? "#059669" : "#9CA3AF" }}>{inAmt > 0 ? fmtAED(inAmt) : "ï¿½"}</td>
-                  <td style={{ ...C.td, textAlign: "right", color: outAmt > 0 ? "#DC2626" : "#9CA3AF" }}>{outAmt > 0 ? fmtAED(outAmt) : "ï¿½"}</td></tr>;
+                  <td style={{ ...C.td, textAlign: "right", color: inAmt > 0 ? "#059669" : "#9CA3AF" }}>{inAmt > 0 ? fmtAED(inAmt) : "�"}</td>
+                  <td style={{ ...C.td, textAlign: "right", color: outAmt > 0 ? "#DC2626" : "#9CA3AF" }}>{outAmt > 0 ? fmtAED(outAmt) : "�"}</td></tr>;
               })}
             </tbody>
           </table>
@@ -1018,12 +1018,12 @@
 
         {showTransfer && <div style={C.modal} onClick={() => setShowTransfer(false)}>
           <div style={C.mbox(460)} onClick={e => e.stopPropagation()}>
-            <div style={C.mhdr}><span style={{ fontWeight: 700 }}>â†” Bank Transfer</span><button onClick={() => setShowTransfer(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>âœ•</button></div>
+            <div style={C.mhdr}><span style={{ fontWeight: 700 }}>↔ Bank Transfer</span><button onClick={() => setShowTransfer(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
             <div style={C.mbdy}>
               <div style={C.fg}>
                 <div><label style={C.label}>Date</label><Inp type="date" value={tf.date} onChange={e => setTf(p => ({ ...p, date: e.target.value }))} /></div>
-                <div><label style={C.label}>From</label><Sel value={tf.fromCode} onChange={e => setTf(p => ({ ...p, fromCode: e.target.value }))}><option value="">â€” Select â€”</option>{bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</Sel></div>
-                <div><label style={C.label}>To</label><Sel value={tf.toCode} onChange={e => setTf(p => ({ ...p, toCode: e.target.value }))}><option value="">â€” Select â€”</option>{bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</Sel></div>
+                <div><label style={C.label}>From</label><Sel value={tf.fromCode} onChange={e => setTf(p => ({ ...p, fromCode: e.target.value }))}><option value="">— Select —</option>{bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</Sel></div>
+                <div><label style={C.label}>To</label><Sel value={tf.toCode} onChange={e => setTf(p => ({ ...p, toCode: e.target.value }))}><option value="">— Select —</option>{bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</Sel></div>
                 <div><label style={C.label}>Amount (AED)</label><Inp type="number" value={tf.amount} onChange={e => setTf(p => ({ ...p, amount: e.target.value }))} /></div>
               </div>
               <div style={{ marginTop: 12 }}><label style={C.label}>Memo</label><Inp value={tf.memo} onChange={e => setTf(p => ({ ...p, memo: e.target.value }))} /></div>
@@ -1034,9 +1034,9 @@
       </div>;
     }
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+    // ╔══════════════════════════════════════════════════╗
     //  CHART OF ACCOUNTS
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╚══════════════════════════════════════════════════╝
     function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTxn, journal, userRole }) {
       const [showTransfer, setShowTransfer] = useState(false);
       const [showImport, setShowImport] = useState(false);
@@ -1235,8 +1235,8 @@
               <tbody>
                 {bankRows.length === 0 && <tr><td colSpan={6} style={{ ...C.td, textAlign: "center", padding: 40, color: "#9CA3AF" }}>No bank transactions found.</td></tr>}
                 {bankRows.map(row => <tr key={row.id}><td style={C.td}>{fmtDate(row.date)}</td><td style={C.td}>{row.ref}</td><td style={C.td}>{row.description}</td>
-                  <td style={{ ...C.td, textAlign: "right", color: row.inAmt > 0 ? "#059669" : "#9CA3AF" }}>{row.inAmt > 0 ? fmtAED(row.inAmt) : "â€”"}</td>
-                  <td style={{ ...C.td, textAlign: "right", color: row.outAmt > 0 ? "#DC2626" : "#9CA3AF" }}>{row.outAmt > 0 ? fmtAED(row.outAmt) : "â€”"}</td>
+                  <td style={{ ...C.td, textAlign: "right", color: row.inAmt > 0 ? "#059669" : "#9CA3AF" }}>{row.inAmt > 0 ? fmtAED(row.inAmt) : "—"}</td>
+                  <td style={{ ...C.td, textAlign: "right", color: row.outAmt > 0 ? "#DC2626" : "#9CA3AF" }}>{row.outAmt > 0 ? fmtAED(row.outAmt) : "—"}</td>
                   <td style={C.td}>{hasPermission(userRole, 'canEditTxns') && <button style={C.btn("secondary", true)} onClick={() => setEditTxnId(row.id)}>Edit</button>}</td></tr>)}
               </tbody>
             </table>
@@ -1245,7 +1245,7 @@
 
         {showImport && <div style={C.modal} onClick={() => setShowImport(false)}>
           <div style={C.mbox(980)} onClick={e => e.stopPropagation()}>
-            <div style={C.mhdr}><span style={{ fontWeight: 700 }}>Import Bank CSV</span><button onClick={() => setShowImport(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>Ã—</button></div>
+            <div style={C.mhdr}><span style={{ fontWeight: 700 }}>Import Bank CSV</span><button onClick={() => setShowImport(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>×</button></div>
             <div style={C.mbdy}>
               <div style={{ ...C.card, padding: 16, marginBottom: 16, background: "#FFFBEB", borderColor: "#FDE68A" }}>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Recommended file</div>
@@ -1277,8 +1277,8 @@
                           <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{cat.count}</td>
                           <td style={C.td}>
                             <Sel value={narrationMap[cat.narration] || ""} onChange={e => setNarrationMap(prev => ({ ...prev, [cat.narration]: e.target.value }))}>
-                              <option value="">â€” Select account â€”</option>
-                              {importAccounts.filter(a => !a.isBank).map(a => <option key={a.id} value={a.code}>{a.code} â€” {a.name}</option>)}
+                              <option value="">— Select account —</option>
+                              {importAccounts.filter(a => !a.isBank).map(a => <option key={a.id} value={a.code}>{a.code} — {a.name}</option>)}
                             </Sel>
                           </td>
                         </tr>)}
@@ -1297,7 +1297,7 @@
                           <td style={C.td}>{fmtDate(item.date)}</td>
                           <td style={C.td}>{item.row.reference}</td>
                           <td style={C.td}>{item.row.narration}</td>
-                          <td style={C.td}>{item.offsetAccount ? `${item.offsetAccount.code} â€” ${item.offsetAccount.name}` : "â€”"}</td>
+                          <td style={C.td}>{item.offsetAccount ? `${item.offsetAccount.code} — ${item.offsetAccount.name}` : "—"}</td>
                           <td style={{ ...C.td, textAlign: "right", fontWeight: 600, color: item.amountC >= 0 ? "#059669" : "#DC2626" }}>{fmtAED(Math.abs(item.amountC))}</td>
                           <td style={C.td}>
                             {item.issue ? <span style={C.badge("danger")}>{item.issue}</span> : item.duplicate ? <span style={C.badge("warning")}>Duplicate</span> : <span style={C.badge("success")}>Ready</span>}
@@ -1318,12 +1318,12 @@
 
         {showTransfer && <div style={C.modal} onClick={() => setShowTransfer(false)}>
           <div style={C.mbox(460)} onClick={e => e.stopPropagation()}>
-            <div style={C.mhdr}><span style={{ fontWeight: 700 }}>Bank Transfer</span><button onClick={() => setShowTransfer(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>Ã—</button></div>
+            <div style={C.mhdr}><span style={{ fontWeight: 700 }}>Bank Transfer</span><button onClick={() => setShowTransfer(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>×</button></div>
             <div style={C.mbdy}>
               <div style={C.fg}>
                 <div><label style={C.label}>Date</label><Inp type="date" value={tf.date} onChange={e => setTf(p => ({ ...p, date: e.target.value }))} /></div>
-                <div><label style={C.label}>From</label><Sel value={tf.fromCode} onChange={e => setTf(p => ({ ...p, fromCode: e.target.value }))}><option value="">â€” Select â€”</option>{bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</Sel></div>
-                <div><label style={C.label}>To</label><Sel value={tf.toCode} onChange={e => setTf(p => ({ ...p, toCode: e.target.value }))}><option value="">â€” Select â€”</option>{bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</Sel></div>
+                <div><label style={C.label}>From</label><Sel value={tf.fromCode} onChange={e => setTf(p => ({ ...p, fromCode: e.target.value }))}><option value="">— Select —</option>{bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</Sel></div>
+                <div><label style={C.label}>To</label><Sel value={tf.toCode} onChange={e => setTf(p => ({ ...p, toCode: e.target.value }))}><option value="">— Select —</option>{bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</Sel></div>
                 <div><label style={C.label}>Amount (AED)</label><Inp type="number" value={tf.amount} onChange={e => setTf(p => ({ ...p, amount: e.target.value }))} /></div>
               </div>
               <div style={{ marginTop: 12 }}><label style={C.label}>Memo</label><Inp value={tf.memo} onChange={e => setTf(p => ({ ...p, memo: e.target.value }))} /></div>
@@ -1360,7 +1360,7 @@
       const filtered = filter === "All" ? sorted : sorted.filter(a => a.type === filter);
 
       return <div>
-        <PageHeader title="Chart of Accounts" sub={`${accounts.length} accounts â€” Clean COA (no AR/AP)`}>
+        <PageHeader title="Chart of Accounts" sub={`${accounts.length} accounts — Clean COA (no AR/AP)`}>
           <Sel value={filter} onChange={e => setFilter(e.target.value)}>
             <option value="All">All Types</option>
             {ACCT_TYPES.map(t => <option key={t}>{t}</option>)}
@@ -1379,7 +1379,7 @@
                   <td style={{ ...C.td, fontFamily: "monospace", fontWeight: 600 }}>{a.code}</td>
                   <td style={C.td}>{a.name}</td>
                   <td style={C.td}><span style={C.badge(a.type === "Asset" || a.type === "Revenue" ? "success" : a.type === "Liability" ? "danger" : a.type === "Expense" ? "warning" : "info")}>{a.type}</span></td>
-                  <td style={C.td}>{flags.length > 0 ? flags.map((f, i) => <span key={i} style={{ ...C.badge("gold"), marginRight: 4 }}>{f}</span>) : "â€”"}</td>
+                  <td style={C.td}>{flags.length > 0 ? flags.map((f, i) => <span key={i} style={{ ...C.badge("gold"), marginRight: 4 }}>{f}</span>) : "—"}</td>
                   <td style={{ ...C.td, textAlign: "right", fontWeight: 600, color: bal !== 0 ? (bal > 0 ? "#059669" : "#DC2626") : "#9CA3AF" }}>{fmtAED(bal)}</td>
                   <td style={C.td}>{hasPermission(userRole, 'canManageAccounts') && <button style={C.btn("secondary", true)} onClick={() => { setEdit(a); setShow(true); }}>Edit</button>}</td>
                 </tr>;
@@ -1390,7 +1390,7 @@
 
         {show && <div style={C.modal} onClick={() => setShow(false)}>
           <div style={C.mbox(460)} onClick={e => e.stopPropagation()}>
-            <div style={C.mhdr}><span style={{ fontWeight: 700 }}>{edit?.id ? "Edit" : "New"} Account</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>âœ•</button></div>
+            <div style={C.mhdr}><span style={{ fontWeight: 700 }}>{edit?.id ? "Edit" : "New"} Account</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
             <div style={C.mbdy}>
               <div style={C.fg}>
                 <div><label style={C.label}>Account Code</label><Inp value={(edit || empty).code} onChange={e => setEdit(p => ({ ...(p || empty), code: e.target.value }))} /></div>
@@ -1399,15 +1399,15 @@
                 <div><label style={C.label}>Bank Account?</label><Sel value={(edit || empty).isBank ? "yes" : "no"} onChange={e => setEdit(p => ({ ...(p || empty), isBank: e.target.value === "yes" }))}><option value="no">No</option><option value="yes">Yes</option></Sel></div>
               </div>
             </div>
-            <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn()} onClick={() => save(edit || empty)}>ðŸ’¾ Save</button></div>
+            <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn()} onClick={() => save(edit || empty)}>💾 Save</button></div>
           </div>
         </div>}
       </div>;
     }
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+    // ╔══════════════════════════════════════════════════╗
     //  JOURNAL ENTRIES
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╚══════════════════════════════════════════════════╝
     function JournalPage({ accounts, txns, setTxns, saveTxn, persistTxn, journal, userRole }) {
       const [show, setShow] = useState(false);
       const [filter, setFilter] = useState("All");
@@ -1485,7 +1485,7 @@
       };
 
       return <div>
-        <PageHeader title="Journal Entries" sub={`${txns.length} entries â€” General Ledger`}>
+        <PageHeader title="Journal Entries" sub={`${txns.length} entries — General Ledger`}>
           <Sel value={filter} onChange={e => setFilter(e.target.value)}>
             <option value="All">All Types</option>
             {Object.entries(TXN_TYPES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
@@ -1505,8 +1505,8 @@
                   <td style={C.td}>{fmtDate(t.date)}</td>
                   <td style={C.td}><span style={C.badge("info")}>{t.ref}</span></td>
                   <td style={C.td}><span style={C.badge(t.txnType === "SR" ? "success" : t.txnType === "PV" || t.txnType === "BP" ? "warning" : "neutral")}>{typeInfo.label}</span></td>
-                  <td style={C.td}>{t.description?.substring(0, 50)}{t.description?.length > 50 ? "â€¦" : ""}</td>
-                  <td style={C.td}>{t.counterparty || "â€”"}</td>
+                  <td style={C.td}>{t.description?.substring(0, 50)}{t.description?.length > 50 ? "…" : ""}</td>
+                  <td style={C.td}>{t.counterparty || "—"}</td>
                   <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(totalDr)}</td>
                   <td style={C.td}>{t.isVoid ? <span style={C.badge("danger")}>VOID</span> : <span style={C.badge("success")}>Posted</span>}</td>
                   <td style={C.td}>{!t.isVoid && hasPermission(userRole, 'canVoidTxns') && <button style={C.btn("danger", true)} onClick={() => handleVoid(t.id)}>Void</button>}</td>
@@ -1519,7 +1519,7 @@
         {/* Manual Journal Entry Modal */}
         {show && <div style={C.modal} onClick={() => setShow(false)}>
           <div style={C.mbox(760)} onClick={e => e.stopPropagation()}>
-            <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>ðŸ“’ Manual Journal Entry</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>âœ•</button></div>
+            <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>📒 Manual Journal Entry</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
             <div style={C.mbdy}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
                 <div><label style={C.label}>Date</label><Inp type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} /></div>
@@ -1531,13 +1531,13 @@
                 <tbody>
                   {form.lines.map((l, i) => <tr key={i}>
                     <td style={C.td}><Sel value={l.accountId} onChange={e => { const lines = [...form.lines]; lines[i] = { ...lines[i], accountId: e.target.value }; setForm(p => ({ ...p, lines })); }}>
-                      <option value="">â€” Select â€”</option>
-                      {accounts.sort((a, b) => a.code.localeCompare(b.code)).map(a => <option key={a.id} value={a.id}>{a.code} â€” {a.name}</option>)}
+                      <option value="">— Select —</option>
+                      {accounts.sort((a, b) => a.code.localeCompare(b.code)).map(a => <option key={a.id} value={a.id}>{a.code} — {a.name}</option>)}
                     </Sel></td>
                     <td style={C.td}><Inp type="number" value={l.debit || ""} onChange={e => { const lines = [...form.lines]; lines[i] = { ...lines[i], debit: parseFloat(e.target.value) || 0 }; setForm(p => ({ ...p, lines })); }} /></td>
                     <td style={C.td}><Inp type="number" value={l.credit || ""} onChange={e => { const lines = [...form.lines]; lines[i] = { ...lines[i], credit: parseFloat(e.target.value) || 0 }; setForm(p => ({ ...p, lines })); }} /></td>
                     <td style={C.td}><Inp value={l.memo || ""} onChange={e => { const lines = [...form.lines]; lines[i] = { ...lines[i], memo: e.target.value }; setForm(p => ({ ...p, lines })); }} /></td>
-                    <td style={C.td}>{form.lines.length > 2 && <button style={C.btn("ghost", true)} onClick={() => setForm(p => ({ ...p, lines: p.lines.filter((_, j) => j !== i) }))}>âœ•</button>}</td>
+                    <td style={C.td}>{form.lines.length > 2 && <button style={C.btn("ghost", true)} onClick={() => setForm(p => ({ ...p, lines: p.lines.filter((_, j) => j !== i) }))}>✕</button>}</td>
                   </tr>)}
                 </tbody>
               </table>
@@ -1546,19 +1546,19 @@
                 <span>Total Debit: {form.lines.reduce((s, l) => s + (parseFloat(l.debit) || 0), 0).toFixed(2)}</span>
                 <span>Total Credit: {form.lines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0).toFixed(2)}</span>
                 <span style={{ color: Math.abs(form.lines.reduce((s, l) => s + (parseFloat(l.debit) || 0), 0) - form.lines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0)) < 0.01 ? "#059669" : "#DC2626" }}>
-                  {Math.abs(form.lines.reduce((s, l) => s + (parseFloat(l.debit) || 0), 0) - form.lines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0)) < 0.01 ? "âœ… Balanced" : "âŒ Unbalanced"}
+                  {Math.abs(form.lines.reduce((s, l) => s + (parseFloat(l.debit) || 0), 0) - form.lines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0)) < 0.01 ? "✅ Balanced" : "❌ Unbalanced"}
                 </span>
               </div>
             </div>
-            <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn("success")} onClick={handlePost}>âœ… Post Journal</button></div>
+            <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn("success")} onClick={handlePost}>✅ Post Journal</button></div>
           </div>
         </div>}
       </div>;
     }
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+    // ╔══════════════════════════════════════════════════╗
     //  REPORTS PAGE
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╚══════════════════════════════════════════════════╝
     function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, journal, userRole }) {
       const [show, setShow] = useState(false);
       const [editTxnId, setEditTxnId] = useState("");
@@ -1644,7 +1644,7 @@
       };
 
       return <div>
-        <PageHeader title="Journal Entries" sub={`${txns.length} entries â€” General Ledger`}>
+        <PageHeader title="Journal Entries" sub={`${txns.length} entries — General Ledger`}>
           <Sel value={filter} onChange={e => setFilter(e.target.value)}>
             <option value="All">All Types</option>
             {Object.entries(TXN_TYPES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
@@ -1674,7 +1674,7 @@
                     <td style={C.td}><span style={C.badge("info")}>{t.ref}</span></td>
                     <td style={C.td}><span style={C.badge(t.txnType === "SR" ? "success" : t.txnType === "PV" || t.txnType === "BP" ? "warning" : "neutral")}>{typeInfo.label}</span></td>
                     <td style={C.td}>{t.description?.substring(0, 50)}{t.description?.length > 50 ? "..." : ""}</td>
-                    <td style={C.td}>{t.counterparty || "â€”"}</td>
+                    <td style={C.td}>{t.counterparty || "—"}</td>
                     <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(t.totalDr)}</td>
                     <td style={C.td}>{t.isVoid ? <span style={C.badge("danger")}>VOID</span> : <span style={C.badge("success")}>Posted</span>}</td>
                     <td style={C.td}>
@@ -1703,8 +1703,8 @@
                   <tbody>
                     {form.lines.map((l, i) => <tr key={i}>
                       <td style={C.td}><Sel value={l.accountId} onChange={e => { const lines = [...form.lines]; lines[i] = { ...lines[i], accountId: e.target.value }; setForm(p => ({ ...p, lines })); }}>
-                        <option value="">â€” Select â€”</option>
-                        {accounts.slice().sort((a, b) => a.code.localeCompare(b.code)).map(a => <option key={a.id} value={a.id}>{a.code} â€” {a.name}</option>)}
+                        <option value="">— Select —</option>
+                        {accounts.slice().sort((a, b) => a.code.localeCompare(b.code)).map(a => <option key={a.id} value={a.id}>{a.code} — {a.name}</option>)}
                       </Sel></td>
                       <td style={C.td}><Inp type="number" value={l.debit || ""} onChange={e => { const lines = [...form.lines]; lines[i] = { ...lines[i], debit: parseFloat(e.target.value) || 0 }; setForm(p => ({ ...p, lines })); }} /></td>
                       <td style={C.td}><Inp type="number" value={l.credit || ""} onChange={e => { const lines = [...form.lines]; lines[i] = { ...lines[i], credit: parseFloat(e.target.value) || 0 }; setForm(p => ({ ...p, lines })); }} /></td>
@@ -1763,14 +1763,14 @@
         </div>
 
         {tab === "pnl" && <div style={C.card}>
-          <div style={{ padding: "16px 22px", borderBottom: "1px solid #E5E7EB", fontWeight: 700, fontSize: 16 }}>Profit & Loss Statement â€” YTD {new Date().getFullYear()}</div>
+          <div style={{ padding: "16px 22px", borderBottom: "1px solid #E5E7EB", fontWeight: 700, fontSize: 16 }}>Profit & Loss Statement — YTD {new Date().getFullYear()}</div>
           <div style={{ padding: 22 }}>
             <div style={{ fontWeight: 700, fontSize: 14, color: "#059669", marginBottom: 10 }}>REVENUE</div>
-            {revenues.filter(a => accountBalance(a, ledger) !== 0).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} â€” {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, ledger))}</span></div>)}
+            {revenues.filter(a => accountBalance(a, ledger) !== 0).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} — {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, ledger))}</span></div>)}
             <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderTop: "2px solid #E5E7EB", marginTop: 8, fontWeight: 700 }}><span>Total Revenue</span><span style={{ color: "#059669" }}>{fmtAED(totalRev)}</span></div>
 
             <div style={{ fontWeight: 700, fontSize: 14, color: "#D97706", marginTop: 20, marginBottom: 10 }}>EXPENSES</div>
-            {expenses.filter(a => accountBalance(a, ledger) !== 0).sort((a, b) => accountBalance(b, ledger) - accountBalance(a, ledger)).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} â€” {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, ledger))}</span></div>)}
+            {expenses.filter(a => accountBalance(a, ledger) !== 0).sort((a, b) => accountBalance(b, ledger) - accountBalance(a, ledger)).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} — {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, ledger))}</span></div>)}
             <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderTop: "2px solid #E5E7EB", marginTop: 8, fontWeight: 700 }}><span>Total Expenses</span><span style={{ color: "#D97706" }}>{fmtAED(totalExp)}</span></div>
 
             <div style={{ display: "flex", justifyContent: "space-between", padding: "14px 0", borderTop: "3px double #1C1C2E", marginTop: 16, fontWeight: 700, fontSize: 16 }}><span>NET INCOME</span><span style={{ color: netIncome >= 0 ? "#059669" : "#DC2626" }}>{fmtAED(netIncome)}</span></div>
@@ -1778,24 +1778,24 @@
         </div>}
 
         {tab === "bs" && <div style={C.card}>
-          <div style={{ padding: "16px 22px", borderBottom: "1px solid #E5E7EB", fontWeight: 700, fontSize: 16 }}>Balance Sheet â€” as of {fmtDate(todayStr())}</div>
+          <div style={{ padding: "16px 22px", borderBottom: "1px solid #E5E7EB", fontWeight: 700, fontSize: 16 }}>Balance Sheet — as of {fmtDate(todayStr())}</div>
           <div style={{ padding: 22 }}>
             <div style={{ fontWeight: 700, fontSize: 14, color: "#2563EB", marginBottom: 10 }}>ASSETS</div>
-            {assets.filter(a => accountBalance(a, ledger) !== 0).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} â€” {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, ledger))}</span></div>)}
+            {assets.filter(a => accountBalance(a, ledger) !== 0).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} — {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, ledger))}</span></div>)}
             <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderTop: "2px solid #E5E7EB", marginTop: 8, fontWeight: 700 }}><span>Total Assets</span><span style={{ color: "#2563EB" }}>{fmtAED(totalAssets)}</span></div>
 
             <div style={{ fontWeight: 700, fontSize: 14, color: "#DC2626", marginTop: 20, marginBottom: 10 }}>LIABILITIES</div>
-            {liabilities.filter(a => accountBalance(a, ledger) !== 0).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} â€” {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, ledger))}</span></div>)}
+            {liabilities.filter(a => accountBalance(a, ledger) !== 0).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} — {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, ledger))}</span></div>)}
             <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderTop: "2px solid #E5E7EB", marginTop: 8, fontWeight: 700 }}><span>Total Liabilities</span><span style={{ color: "#DC2626" }}>{fmtAED(totalLiabilities)}</span></div>
 
             <div style={{ fontWeight: 700, fontSize: 14, color: "#7C3AED", marginTop: 20, marginBottom: 10 }}>EQUITY</div>
-            {equity.filter(a => accountBalance(a, ledger) !== 0).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} â€” {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, ledger))}</span></div>)}
+            {equity.filter(a => accountBalance(a, ledger) !== 0).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} — {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, ledger))}</span></div>)}
             <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span style={{ fontStyle: "italic" }}>Current Period Net Income</span><span style={{ fontWeight: 600 }}>{fmtAED(netIncome)}</span></div>
             <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderTop: "2px solid #E5E7EB", marginTop: 8, fontWeight: 700 }}><span>Total Equity + Net Income</span><span style={{ color: "#7C3AED" }}>{fmtAED(totalEquity + netIncome)}</span></div>
 
             <div style={{ display: "flex", justifyContent: "space-between", padding: "14px 0", borderTop: "3px double #1C1C2E", marginTop: 16, fontWeight: 700, fontSize: 16 }}><span>L + E</span><span>{fmtAED(totalLiabilities + totalEquity + netIncome)}</span></div>
             <div style={{ marginTop: 8, fontSize: 12, color: Math.abs(totalAssets - (totalLiabilities + totalEquity + netIncome)) <= 1 ? "#059669" : "#DC2626", fontWeight: 600 }}>
-              {Math.abs(totalAssets - (totalLiabilities + totalEquity + netIncome)) <= 1 ? "âœ… Balance sheet is balanced" : "âŒ Balance sheet is NOT balanced â€” investigate"}
+              {Math.abs(totalAssets - (totalLiabilities + totalEquity + netIncome)) <= 1 ? "✅ Balance sheet is balanced" : "❌ Balance sheet is NOT balanced — investigate"}
             </div>
           </div>
         </div>}
@@ -1810,8 +1810,8 @@
                 const nb = NORMAL_BAL[a.type];
                 const bal = nb === "debit" ? (e.debit - e.credit) : (e.credit - e.debit);
                 return <tr key={a.id}><td style={{ ...C.td, fontFamily: "monospace" }}>{a.code}</td><td style={C.td}>{a.name}</td><td style={C.td}>{a.type}</td>
-                  <td style={{ ...C.td, textAlign: "right" }}>{nb === "debit" && bal !== 0 ? fmtAED(bal) : "â€”"}</td>
-                  <td style={{ ...C.td, textAlign: "right" }}>{nb === "credit" && bal !== 0 ? fmtAED(bal) : "â€”"}</td></tr>;
+                  <td style={{ ...C.td, textAlign: "right" }}>{nb === "debit" && bal !== 0 ? fmtAED(bal) : "—"}</td>
+                  <td style={{ ...C.td, textAlign: "right" }}>{nb === "credit" && bal !== 0 ? fmtAED(bal) : "—"}</td></tr>;
               })}
             </tbody>
             <tfoot><tr style={{ background: "#F9FAFB" }}><td colSpan={3} style={{ ...C.td, fontWeight: 700 }}>TOTALS</td>
@@ -1829,16 +1829,16 @@
               {txns.filter(t => !t.isVoid).sort((a, b) => (a.date || "").localeCompare(b.date || "")).flatMap(t => (t.lines || []).map(l => {
                 const a = accounts.find(x => x.id === l.accountId);
                 return { date: t.date, ref: t.ref, account: a ? `${a.code} ${a.name}` : l.accountId, desc: l.memo || t.description, debit: l.debit, credit: l.credit, key: `${t.id}-${l.id}` };
-              })).map(row => <tr key={row.key}><td style={C.td}>{fmtDate(row.date)}</td><td style={C.td}>{row.ref}</td><td style={C.td}>{row.account}</td><td style={C.td}>{row.desc}</td><td style={{ ...C.td, textAlign: "right" }}>{row.debit ? fmtAED(row.debit) : "â€”"}</td><td style={{ ...C.td, textAlign: "right" }}>{row.credit ? fmtAED(row.credit) : "â€”"}</td></tr>)}
+              })).map(row => <tr key={row.key}><td style={C.td}>{fmtDate(row.date)}</td><td style={C.td}>{row.ref}</td><td style={C.td}>{row.account}</td><td style={C.td}>{row.desc}</td><td style={{ ...C.td, textAlign: "right" }}>{row.debit ? fmtAED(row.debit) : "—"}</td><td style={{ ...C.td, textAlign: "right" }}>{row.credit ? fmtAED(row.credit) : "—"}</td></tr>)}
             </tbody>
           </table>
         </div>}
       </div>;
     }
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+    // ╔══════════════════════════════════════════════════╗
     //  VAT PAGE
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╚══════════════════════════════════════════════════╝
     function VATPage({ accounts, txns, ledger, settings }) {
       const outputVATA = accounts.find(a => a.isOutputVAT);
       const inputVATA = accounts.find(a => a.isInputVAT);
@@ -1864,7 +1864,7 @@
       const netVatLabel = netVAT > 0 ? "Payable" : netVAT < 0 ? "Refundable" : "Settled";
 
       return <div>
-        <PageHeader title="VAT / Taxes" sub={`TRN: ${settings.trn || "Not set"} Â· UAE VAT 5%`} />
+        <PageHeader title="VAT / Taxes" sub={`TRN: ${settings.trn || "Not set"} · UAE VAT 5%`} />
         {settlementRows.length > 0 && <div style={{ ...C.card, padding: "12px 16px", marginBottom: 14, borderLeft: "4px solid #D97706", background: "#FFF7ED", color: "#9A3412", fontSize: 13 }}>
           {settlementRows.length} VAT settlement {settlementRows.length === 1 ? "entry is" : "entries are"} excluded from Output VAT, Input VAT, and Net VAT totals because {settlementRows.length === 1 ? "it settles" : "they settle"} previously reported VAT balances.
         </div>}
@@ -1890,16 +1890,16 @@
             <thead><tr><th style={C.th}>Date</th><th style={C.th}>Ref</th><th style={C.th}>Description</th><th style={{ ...C.th, textAlign: "right" }}>Output VAT</th><th style={{ ...C.th, textAlign: "right" }}>Input VAT</th></tr></thead>
             <tbody>
               {!vatRows.length && <tr><td style={{ ...C.td, textAlign: "center", color: "#6B7280" }} colSpan="5">No VAT transactions found.</td></tr>}
-              {vatRows.map(t => <tr key={t.id}><td style={C.td}>{fmtDate(t.date)}</td><td style={C.td}>{t.ref}</td><td style={C.td}>{t.description}</td><td style={{ ...C.td, textAlign: "right", color: t.outAmt > 0 ? "#DC2626" : t.outAmt < 0 ? "#059669" : "#9CA3AF" }}>{t.outAmt !== 0 ? fmtAED(t.outAmt) : "â€”"}</td><td style={{ ...C.td, textAlign: "right", color: t.inAmt > 0 ? "#059669" : t.inAmt < 0 ? "#DC2626" : "#9CA3AF" }}>{t.inAmt !== 0 ? fmtAED(t.inAmt) : "â€”"}</td></tr>)}
+              {vatRows.map(t => <tr key={t.id}><td style={C.td}>{fmtDate(t.date)}</td><td style={C.td}>{t.ref}</td><td style={C.td}>{t.description}</td><td style={{ ...C.td, textAlign: "right", color: t.outAmt > 0 ? "#DC2626" : t.outAmt < 0 ? "#059669" : "#9CA3AF" }}>{t.outAmt !== 0 ? fmtAED(t.outAmt) : "—"}</td><td style={{ ...C.td, textAlign: "right", color: t.inAmt > 0 ? "#059669" : t.inAmt < 0 ? "#DC2626" : "#9CA3AF" }}>{t.inAmt !== 0 ? fmtAED(t.inAmt) : "—"}</td></tr>)}
             </tbody>
           </table>
         </div>
       </div>;
     }
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+    // ╔══════════════════════════════════════════════════╗
     //  SETTINGS PAGE
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╚══════════════════════════════════════════════════╝
     function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn, persistTxn }) {
       const [s, setS] = useState({ ...settings });
       const save = () => {
@@ -1913,8 +1913,8 @@
             if (!existingOB) {
               const amountCents = toCents(s.openingBalance);
               const lines = [
-                { id: uid(), accountId: bankA.id, debit: amountCents, credit: 0, memo: `Opening Balance â€” Bank deposit`, deal_id: null, broker_id: null, developer_id: null },
-                { id: uid(), accountId: capitalA.id, debit: 0, credit: amountCents, memo: `Opening Balance â€” Capital Injection`, deal_id: null, broker_id: null, developer_id: null }
+                { id: uid(), accountId: bankA.id, debit: amountCents, credit: 0, memo: `Opening Balance — Bank deposit`, deal_id: null, broker_id: null, developer_id: null },
+                { id: uid(), accountId: capitalA.id, debit: 0, credit: amountCents, memo: `Opening Balance — Capital Injection`, deal_id: null, broker_id: null, developer_id: null }
               ];
               const txn = { id: uid(), date: s.openingBalanceDate || todayStr(), description: "Opening Balance", ref: `OB-${Date.now().toString(36).toUpperCase()}`, counterparty: "Opening Balance", tags: "opening-balance", txnType: "JV", isVoid: false, lines, createdAt: new Date().toISOString() };
               saveTxn(txn);
@@ -1934,26 +1934,26 @@
             <div><label style={C.label}>Currency</label><Inp value={s.currency || "AED"} onChange={e => setS(p => ({ ...p, currency: e.target.value }))} /></div>
           </div>
           <div style={{ borderTop: "1px solid #E5E7EB", marginTop: 20, paddingTop: 20 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>ðŸ¦ Opening Balance</div>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>🏦 Opening Balance</div>
             <div style={C.fg}>
               <div><label style={C.label}>Opening Balance (AED)</label><Inp type="number" step="0.01" value={s.openingBalance || 0} onChange={e => setS(p => ({ ...p, openingBalance: parseFloat(e.target.value) || 0 }))} placeholder="e.g., 95548.02" /></div>
               <div><label style={C.label}>As of Date</label><Inp type="date" value={s.openingBalanceDate || todayStr()} onChange={e => setS(p => ({ ...p, openingBalanceDate: e.target.value }))} /></div>
             </div>
             <div style={{ fontSize: 12, color: "#6B7280", marginTop: 8 }}>This will create an opening balance journal entry (OB) debiting Bank and crediting Capital Injection on save.</div>
           </div>
-          <div style={{ marginTop: 20 }}><button style={C.btn()} onClick={save}>ðŸ’¾ Save Settings</button></div>
+          <div style={{ marginTop: 20 }}><button style={C.btn()} onClick={save}>💾 Save Settings</button></div>
 
           <div style={{ marginTop: 30, padding: 16, background: "#FEF2F2", borderRadius: 8, border: "1px solid #FECACA" }}>
-            <div style={{ fontWeight: 700, fontSize: 14, color: "#DC2626", marginBottom: 6 }}>ðŸ—‘ï¸ Architecture Note</div>
+            <div style={{ fontWeight: 700, fontSize: 14, color: "#DC2626", marginBottom: 6 }}>🗑️ Architecture Note</div>
             <div style={{ fontSize: 13, color: "#7F1D1D" }}>This system uses a <strong>cash-settled</strong> model. There are no Accounts Receivable, no Accounts Payable, no invoices, and no bills. Every transaction is settled immediately at the point of recording.</div>
           </div>
         </div>
       </div>;
     }
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+    // ╔══════════════════════════════════════════════════╗
     //  USER MANAGEMENT
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╚══════════════════════════════════════════════════╝
     function UsersPage({ userRole, userEmail }) {
       const [users, setUsers] = useState([]);
       const [show, setShow] = useState(false);
@@ -1983,14 +1983,14 @@
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead><tr><th style={C.th}>Email</th><th style={C.th}>Role</th><th style={C.th}>Added By</th></tr></thead>
             <tbody>
-              {users.map(u => <tr key={u.id}><td style={C.td}>{u.email}</td><td style={C.td}><span style={C.badge(u.role === "admin" ? "danger" : u.role === "accountant" ? "info" : "neutral")}>{u.role}</span></td><td style={C.td}>{u.addedBy || "â€”"}</td></tr>)}
+              {users.map(u => <tr key={u.id}><td style={C.td}>{u.email}</td><td style={C.td}><span style={C.badge(u.role === "admin" ? "danger" : u.role === "accountant" ? "info" : "neutral")}>{u.role}</span></td><td style={C.td}>{u.addedBy || "—"}</td></tr>)}
             </tbody>
           </table>
         </div>
 
         {show && <div style={C.modal} onClick={() => setShow(false)}>
           <div style={C.mbox(420)} onClick={e => e.stopPropagation()}>
-            <div style={C.mhdr}><span style={{ fontWeight: 700 }}>Add User</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>âœ•</button></div>
+            <div style={C.mhdr}><span style={{ fontWeight: 700 }}>Add User</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
             <div style={C.mbdy}>
               <div><label style={C.label}>Email</label><Inp value={newUser.email} onChange={e => setNewUser(p => ({ ...p, email: e.target.value }))} /></div>
               <div style={{ marginTop: 12 }}><label style={C.label}>Role</label><Sel value={newUser.role} onChange={e => setNewUser(p => ({ ...p, role: e.target.value }))}>
@@ -2003,9 +2003,9 @@
       </div>;
     }
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+    // ╔══════════════════════════════════════════════════╗
     //  AUTH GATE
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╚══════════════════════════════════════════════════╝
     function SecurityAdminPage({ userRole, userEmail, settings }) {
       const [tab, setTab] = useState("users");
       const [users, setUsers] = useState([]);
@@ -2306,7 +2306,7 @@
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                   <thead><tr><th style={C.th}>Section</th><th style={C.th}>Allowed Actions</th></tr></thead>
                   <tbody>
-                    {SECURITY_MODULES.map(module => <tr key={module.id}><td style={C.td}><div style={{ fontWeight: 600 }}>{module.label}</div><div style={{ fontSize: 12, color: "#6B7280" }}>{module.pages.join(" Â· ")}</div></td><td style={C.td}><div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>{module.actions.map(action => { const inputId = `perm-${module.id}-${action}`; return <label key={action} htmlFor={inputId} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, padding: "4px 8px", border: "1px solid #E5E7EB", borderRadius: 999 }}><input id={inputId} type="checkbox" checked={!!roleForm.permissions?.[`${module.id}.${action}`]} onChange={e => setRoleForm(prev => ({ ...prev, permissions: { ...(prev?.permissions || {}), [`${module.id}.${action}`]: e.target.checked } }))} /><span>{action}</span></label>; })}</div></td></tr>)}
+                    {SECURITY_MODULES.map(module => <tr key={module.id}><td style={C.td}><div style={{ fontWeight: 600 }}>{module.label}</div><div style={{ fontSize: 12, color: "#6B7280" }}>{module.pages.join(" · ")}</div></td><td style={C.td}><div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>{module.actions.map(action => { const inputId = `perm-${module.id}-${action}`; return <label key={action} htmlFor={inputId} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, padding: "4px 8px", border: "1px solid #E5E7EB", borderRadius: 999 }}><input id={inputId} type="checkbox" checked={!!roleForm.permissions?.[`${module.id}.${action}`]} onChange={e => setRoleForm(prev => ({ ...prev, permissions: { ...(prev?.permissions || {}), [`${module.id}.${action}`]: e.target.checked } }))} /><span>{action}</span></label>; })}</div></td></tr>)}
                   </tbody>
                 </table>
               </div>
@@ -2545,16 +2545,16 @@
 
       if (loading) return <div style={{ position: "fixed", inset: 0, background: NAVY, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20 }}>
         <Logo size={64} /><div style={{ color: GOLD, fontSize: 18, fontWeight: 700 }}>NASAMA PROPERTIES</div>
-        <div style={{ color: "#8B8BA8", fontSize: 13 }}>Loadingâ€¦</div>
+        <div style={{ color: "#8B8BA8", fontSize: 13 }}>Loading…</div>
       </div>;
 
       if (!user) return <div style={{ position: "fixed", inset: 0, background: `linear-gradient(135deg, ${NAVY} 0%, #2D2D45 100%)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div style={{ background: "#fff", borderRadius: 16, padding: 40, width: "100%", maxWidth: 400, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
-          <div style={{ textAlign: "center", marginBottom: 24 }}><Logo size={48} /><div style={{ fontWeight: 700, fontSize: 18, color: NAVY, marginTop: 8 }}>Nasama Properties</div><div style={{ fontSize: 13, color: "#6B7280" }}>Accounting System v2 Â· Clean Backend</div></div>
+          <div style={{ textAlign: "center", marginBottom: 24 }}><Logo size={48} /><div style={{ fontWeight: 700, fontSize: 18, color: NAVY, marginTop: 8 }}>Nasama Properties</div><div style={{ fontSize: 13, color: "#6B7280" }}>Accounting System v2 · Clean Backend</div></div>
           {error && <div style={C.err}>{error}</div>}
           <div style={{ marginBottom: 12 }}><label style={C.label}>Email</label><Inp value={loginEmail} onChange={e => setLoginEmail(e.target.value)} placeholder="your@email.com" /></div>
           <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 12 }}>Use the access code set by the admin. If this is the very first login, this screen creates the first admin user.</div>
-          <div style={{ marginBottom: 16 }}><label style={C.label}>Password</label><input type="password" style={C.input} value={loginPass} onChange={e => setLoginPass(e.target.value)} placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢" onKeyDown={e => e.key === "Enter" && handleLogin()} /></div>
+          <div style={{ marginBottom: 16 }}><label style={C.label}>Password</label><input type="password" style={C.input} value={loginPass} onChange={e => setLoginPass(e.target.value)} placeholder="••••••••" onKeyDown={e => e.key === "Enter" && handleLogin()} /></div>
           <button style={{ ...C.btn(), width: "100%", justifyContent: "center", padding: "12px 0" }} onClick={handleLogin}>{authBusy ? "Signing In..." : "Sign In"}</button>
           <div style={{ marginTop: 12, fontSize: 12, color: "#6B7280", textAlign: "center" }}>If someone forgets the code, an admin can reset it from User Management.</div>
         </div>
@@ -2563,9 +2563,9 @@
       return React.Children.map(children, child => React.cloneElement(child, { userRole, userAccess, userEmail: user.email, signOut }));
     }
 
-    // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+    // ╔══════════════════════════════════════════════════╗
     //  MAIN APP
-    // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ╚══════════════════════════════════════════════════╝
     function App({ userRole, userAccess, userEmail, signOut }) {
       ACTIVE_USER_ACCESS = userAccess || null;
       const accessSubject = userAccess || userRole;
@@ -2636,7 +2636,7 @@
         unsubs.push(listen('brokers', setBrokers, 'brokers', SEED_BROKERS));
         unsubs.push(listen('developers', setDevelopers, 'developers', SEED_DEVELOPERS));
 
-        // Settings (single doc) â€” always counts toward done()
+        // Settings (single doc) — always counts toward done()
         const u8 = db.collection('settings').doc('company').onSnapshot(snap => {
           setConnected(true); // Connected
           if (!mounted) return;
@@ -2659,7 +2659,7 @@
       const fsUpdate = (col, setter, cacheKey) => (updater) => {
         setter(prev => {
           const next = typeof updater === 'function' ? updater(prev) : updater;
-          if (!navigator.onLine) { toast("Offline â€” changes not saved", "error"); return prev; }
+          if (!navigator.onLine) { toast("Offline — changes not saved", "error"); return prev; }
           const startedAt = new Date().toISOString();
           setWriteMeta(meta => ({ ...meta, [col]: { status: "saving", startedAt, completedAt: meta[col]?.completedAt || "", error: "" } }));
           ls_set(cacheKey, next); showSync();
@@ -2688,7 +2688,7 @@
       const ledger = useMemo(() => buildLedger(txns, accounts), [txns, accounts]);
       const persistTxn = useCallback(async (txn) => {
         if (!txn?.id) throw new Error("Transaction id is required");
-        if (!navigator.onLine) throw new Error("Offline â€” changes not saved");
+        if (!navigator.onLine) throw new Error("Offline — changes not saved");
         const cleanTxn = JSON.parse(JSON.stringify(txn));
 
         const startedAt = new Date().toISOString();
@@ -2863,7 +2863,7 @@
       // Loading
       if (!fbLoaded || !userRole) return <div style={{ position: "fixed", inset: 0, background: NAVY, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20 }}>
         <Logo size={64} /><div style={{ color: GOLD, fontSize: 18, fontWeight: 700, letterSpacing: "0.05em" }}>NASAMA PROPERTIES</div>
-        <div style={{ color: "#8B8BA8", fontSize: 13 }}>{!fbLoaded ? 'Connecting to Firebaseâ€¦' : 'Loading permissionsâ€¦'}</div>
+        <div style={{ color: "#8B8BA8", fontSize: 13 }}>{!fbLoaded ? 'Connecting to Firebase…' : 'Loading permissions…'}</div>
         <div style={{ width: 200, height: 3, background: "#2D2D45", borderRadius: 3, overflow: "hidden", marginTop: 8 }}><div style={{ height: "100%", background: GOLD, borderRadius: 3, animation: "npLoad 1.4s ease-in-out infinite" }} /></div>
         <style>{`@keyframes npLoad{0%{width:0%}60%{width:90%}100%{width:100%}}`}</style>
       </div>;
@@ -2896,7 +2896,7 @@
           case "manual": return <ManualPage />;
           case "settings": return <SettingsPage {...shared} />;
           case "users": return <SecurityAdminPage userRole={userRole} userEmail={userEmail} settings={settings} />;
-          default: return <div style={{ textAlign: "center", padding: 60, color: "#6B7280" }}>ðŸš§ Coming soon</div>;
+          default: return <div style={{ textAlign: "center", padding: 60, color: "#6B7280" }}>🚧 Coming soon</div>;
         }
       };
 
@@ -2916,7 +2916,7 @@
         <div style={{ display: "flex", height: "100vh", minHeight: 0, background: mainBg, overflow: "hidden" }}>
           {/* Connection Status Banner */}
         {!connected && <div style={{ position: "fixed", top: 0, left: 0, right: 0, background: "#DC2626", color: "#FFFFFF", padding: "8px 16px", fontSize: 13, fontWeight: 600, zIndex: 1000, textAlign: "center", boxShadow: "0 2px 8px rgba(220,38,38,.3)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span>âš ï¸ DATABASE CONNECTION LOST â€” Working offline. Changes will sync when connection returns.</span>
+          <span>⚠️ DATABASE CONNECTION LOST — Working offline. Changes will sync when connection returns.</span>
           <button style={{ background: "#FFFFFF", color: "#DC2626", border: "none", padding: "4px 12px", borderRadius: 4, fontSize: 12, fontWeight: 600, cursor: "pointer" }} onClick={() => window.location.reload()}>Retry</button>
         </div>}
 
@@ -2960,10 +2960,10 @@
             <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 10, flexShrink: 0 }}>
               {!isMobile && <button style={C.btn()} onClick={() => (addMap[page] || (() => toast("Navigate to a module first", "info")))()}>+ Add New</button>}
               {isMobile && <button style={{ ...C.btn(), padding: '8px 12px', fontSize: 13 }} onClick={() => (addMap[page] || (() => toast("Navigate first", "info")))()}>+</button>}
-              <button style={{ ...C.btn("secondary"), padding: isMobile ? '8px 10px' : undefined }} onClick={() => setDark(d => !d)}>{dark ? "â˜€ï¸" : "ðŸŒ™"}</button>
-              {syncing && !isMobile && <span style={{ fontSize: 11, background: "#ECFDF5", color: "#059669", border: "1px solid #A7F3D0", borderRadius: 20, padding: "3px 10px" }}>â˜ï¸ Savingâ€¦</span>}
-              {!syncing && syncError && <span style={{ fontSize: 11, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FECACA", borderRadius: 20, padding: "3px 10px" }}>âš ï¸ Sync Error</span>}
-              {!syncing && !syncError && !isMobile && <span style={{ fontSize: 11, color: "#059669" }}>âœ… Synced</span>}
+              <button style={{ ...C.btn("secondary"), padding: isMobile ? '8px 10px' : undefined }} onClick={() => setDark(d => !d)}>{dark ? "☀️" : "🌙"}</button>
+              {syncing && !isMobile && <span style={{ fontSize: 11, background: "#ECFDF5", color: "#059669", border: "1px solid #A7F3D0", borderRadius: 20, padding: "3px 10px" }}>☁️ Saving…</span>}
+              {!syncing && syncError && <span style={{ fontSize: 11, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FECACA", borderRadius: 20, padding: "3px 10px" }}>⚠️ Sync Error</span>}
+              {!syncing && !syncError && !isMobile && <span style={{ fontSize: 11, color: "#059669" }}>✅ Synced</span>}
             </div>
           </div>
 
@@ -2976,11 +2976,11 @@
         {/* Mobile bottom nav */}
         {isMobile && <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, height: 60, background: dark ? "#0A0A14" : "#fff", borderTop: `1px solid ${borderClr}`, display: "flex", justifyContent: "space-around", alignItems: "center", zIndex: 1000, boxShadow: "0 -2px 10px rgba(0,0,0,.1)" }}>
           {[
-            { id: "dashboard", icon: "ðŸ ", label: "Home" },
-            { id: "deals", icon: "ðŸ¤", label: "Deals" },
-            { id: "banking", icon: "ðŸ¦", label: "Bank" },
-            { id: "reports", icon: "ðŸ“Š", label: "Reports" },
-            { id: "more", icon: "â‹¯", label: "More" }
+            { id: "dashboard", icon: "🏠", label: "Home" },
+            { id: "deals", icon: "🤝", label: "Deals" },
+            { id: "banking", icon: "🏦", label: "Bank" },
+            { id: "reports", icon: "📊", label: "Reports" },
+            { id: "more", icon: "⋯", label: "More" }
           ].map(item => {
             const isActive = item.id === "more" ? false : page === item.id;
             return <div key={item.id} onClick={() => item.id === "more" ? setMobileMenuOpen(true) : setPage(item.id)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, cursor: "pointer", padding: "8px 4px", color: isActive ? GOLD : "#6B7280" }}>
@@ -2995,7 +2995,7 @@
     );
     }
 
-    // â”€â”€ RENDER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── RENDER ─────────────────────────────────────────
     if (typeof React !== 'undefined' && typeof ReactDOM !== 'undefined' && typeof firebase !== 'undefined') {
       ReactDOM.createRoot(document.getElementById("root")).render(<AuthGate><App /></AuthGate>);
     } else {

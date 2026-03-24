@@ -1,15 +1,15 @@
-const { useState, useEffect, useMemo, useCallback, useRef } = React;
+﻿const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
-    /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-       NASAMA PROPERTIES â€” ACCOUNTING SYSTEM v2.0
-       Clean Backend Â· Cash-Settled Â· No AR/AP
-       Double-Entry Â· UAE VAT 5% Â· Firebase Backend
-       â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+    /* ══════════════════════════════════════════════════
+       NASAMA PROPERTIES — ACCOUNTING SYSTEM v2.0
+       Clean Backend · Cash-Settled · No AR/AP
+       Double-Entry · UAE VAT 5% · Firebase Backend
+       ══════════════════════════════════════════════════ */
 
-    // â”€â”€ BRAND â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── BRAND ─────────────────────────────────────────
     const GOLD = "#B8960C", GOLD_D = "#9A7D0A", NAVY = "#1C1C2E", NAVY2 = "#2D2D45";
 
-    // â”€â”€ CONSTANTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── CONSTANTS ─────────────────────────────────────
     const DEAL_STAGES = ["Lead", "EOI", "Booking Form Signed", "First Payment Paid", "MOU Signed", "SPA Signed", "Handover", "Commission Earned", "Commission Collected"];
     const DEAL_TYPES = ["Off-Plan", "Secondary", "Rental"];
     const ACCT_TYPES = ["Asset", "Liability", "Equity", "Revenue", "Expense"];
@@ -27,7 +27,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       OD: { label: "Owner Drawing", desc: "Profit release / owner withdrawal" },
     };
 
-    // â”€â”€ RBAC â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── RBAC ──────────────────────────────────────────
     const USER_ROLES = { ADMIN: 'admin', ACCOUNTANT: 'accountant', SECRETARY: 'secretary' };
     const AUTH_SESSION_KEY = "auth_session";
     const PERMISSIONS = {
@@ -184,7 +184,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       return map[pg]?.includes(role) || false;
     };
 
-    // â”€â”€ UTILS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── UTILS ─────────────────────────────────────────
     const fmtAED = c => "AED " + ((c || 0) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const toCents = v => {
       if (typeof v === 'string') v = v.replace(/,/g, '');
@@ -195,14 +195,14 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     const fromCents = c => ((c || 0) / 100).toFixed(2);
     const uid = () => "_" + Math.random().toString(36).substr(2, 9);
     const todayStr = () => new Date().toISOString().split("T")[0];
-    const fmtDate = d => { if (!d) return "â€”"; try { return new Date(d + "T12:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); } catch { return d; } };
+    const fmtDate = d => { if (!d) return "—"; try { return new Date(d + "T12:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); } catch { return d; } };
     const ls_get = (k, fb) => { try { const v = localStorage.getItem("na2_" + k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
     const ls_set = (k, v) => { try { localStorage.setItem("na2_" + k, JSON.stringify(v)); } catch { } };
     const ls_remove = (k) => { try { localStorage.removeItem("na2_" + k); } catch { } };
     const normalizeUserEmail = value => (value || "").toLowerCase().trim();
     const normalizeAccessCode = value => (value || "").trim();
     const generateAccessCode = () => String(Math.floor(100000 + Math.random() * 900000));
-    const normDealText = v => (v || "").toString().toLowerCase().replace(/[â€”â€“-]/g, "-").replace(/\s+/g, " ").trim();
+    const normDealText = v => (v || "").toString().toLowerCase().replace(/[—–-]/g, "-").replace(/\s+/g, " ").trim();
     const dealImportKey = d => [normDealText(d.created_at), normDealText(d.type), normDealText(d.property_name), normDealText(d.unit_no)].join("|");
     const findMissingPipelineDeals = (existingDeals, candidateDeals) => {
       const existingKeys = new Set((existingDeals || []).map(dealImportKey));
@@ -478,11 +478,11 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       await batch.commit();
     };
 
-    // â”€â”€ CLEAN CHART OF ACCOUNTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // NO Accounts Receivable, NO Accounts Payable â€” cash-settled only
+    // ── CLEAN CHART OF ACCOUNTS ───────────────────────
+    // NO Accounts Receivable, NO Accounts Payable — cash-settled only
     const SEED_ACCOUNTS = [
       { id: "a1001", code: "1001", name: "Cash", type: "Asset", isBank: false, isOutputVAT: false, isInputVAT: false },
-      { id: "a1002", code: "1002", name: "Bank â€” Mashreq Bank", type: "Asset", isBank: true, isOutputVAT: false, isInputVAT: false },
+      { id: "a1002", code: "1002", name: "Bank — Mashreq Bank", type: "Asset", isBank: true, isOutputVAT: false, isInputVAT: false },
       { id: "a1004", code: "1004", name: "Prepaid Expenses", type: "Asset", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a1201", code: "1201", name: "Input VAT Recoverable", type: "Asset", isBank: false, isOutputVAT: false, isInputVAT: true },
       { id: "a1500", code: "1500", name: "Furniture & Fixtures", type: "Asset", isBank: false, isOutputVAT: false, isInputVAT: false },
@@ -501,8 +501,8 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       { id: "a5020", code: "5020", name: "Manager Salary", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a5030", code: "5030", name: "Broker Incentive", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a5100", code: "5100", name: "Office Rent", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
-      { id: "a5110", code: "5110", name: "DEWA â€” Electricity & Water", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
-      { id: "a5120", code: "5120", name: "Empower â€” Cooling", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
+      { id: "a5110", code: "5110", name: "DEWA — Electricity & Water", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
+      { id: "a5120", code: "5120", name: "Empower — Cooling", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a5130", code: "5130", name: "Internet", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a5140", code: "5140", name: "Communication", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a5150", code: "5150", name: "Cleaning Fees", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
@@ -523,12 +523,12 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       { id: "a6000", code: "6000", name: "Legal Services", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
     ];
 
-    // Empty seeds â€” clean start
+    // Empty seeds — clean start
     const SEED_TXNS = [];
     const SEED_DEALS = [
       {
         id: "d001", type: "Off-Plan", stage: "Commission Collected",
-        property_name: "Verden1a 4 â€” Unit 1402", developer: "Object 1", developer_id: "dev005",
+        property_name: "Verden1a 4 — Unit 1402", developer: "Object 1", developer_id: "dev005",
         broker_id: "BR014", broker_name: "Tarek Salhani",
         customer_id: "c011", client_name: "Ghassan Mahmoud Badran",
         transaction_value: 69382600, commission_pct: "6", expected_commission_net: 4162956,
@@ -538,7 +538,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d002", type: "Off-Plan", stage: "Booking Form Signed",
-        property_name: "Reywan Hay Al Badee â€” Unit R1-6561", developer: "Al Marwan Real Estate", developer_id: "dev001",
+        property_name: "Reywan Hay Al Badee — Unit R1-6561", developer: "Al Marwan Real Estate", developer_id: "dev001",
         broker_id: "BR001", broker_name: "Faoud Dada",
         customer_id: "c001", client_name: "Humam Atik",
         transaction_value: 86607700, commission_pct: "5", expected_commission_net: 4330385,
@@ -548,7 +548,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d003", type: "Off-Plan", stage: "Booking Form Signed",
-        property_name: "Reywan Hay Al Badee â€” Unit R1-6560", developer: "Al Marwan Real Estate", developer_id: "dev001",
+        property_name: "Reywan Hay Al Badee — Unit R1-6560", developer: "Al Marwan Real Estate", developer_id: "dev001",
         broker_id: "BR001", broker_name: "Faoud Dada",
         customer_id: "c001", client_name: "Humam Atik",
         transaction_value: 86608800, commission_pct: "5", expected_commission_net: 4330440,
@@ -558,7 +558,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d004", type: "Off-Plan", stage: "Booking Form Signed",
-        property_name: "Ali Marwan Real Estate â€” Unit 6215", developer: "Al Marwan Real Estate", developer_id: "dev001",
+        property_name: "Ali Marwan Real Estate — Unit 6215", developer: "Al Marwan Real Estate", developer_id: "dev001",
         broker_id: "BR001", broker_name: "Faoud Dada",
         customer_id: "c031", client_name: "Mohammed Juma Salem Juma Alkaabi",
         transaction_value: 103460000, commission_pct: "5", expected_commission_net: 5173000,
@@ -568,7 +568,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d005", type: "Off-Plan", stage: "First Payment Paid",
-        property_name: "Maybach Ultimate Luxury â€” Unit MBUL-B710", developer: "Binghatti Developers", developer_id: "dev002",
+        property_name: "Maybach Ultimate Luxury — Unit MBUL-B710", developer: "Binghatti Developers", developer_id: "dev002",
         broker_id: "BR013", broker_name: "Rajab Zahrawy",
         customer_id: "c009", client_name: "Habiba Juma Abdulrahmana Alashram Alfalasi",
         transaction_value: 135000000, commission_pct: "5", expected_commission_net: 6750000,
@@ -578,7 +578,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d006", type: "Off-Plan", stage: "Commission Collected",
-        property_name: "South Hills 3 â€” Unit 515", developer: "Samana Developers", developer_id: "dev004",
+        property_name: "South Hills 3 — Unit 515", developer: "Samana Developers", developer_id: "dev004",
         broker_id: "BR002", broker_name: "Ahmad Ibrahim",
         customer_id: "c031", client_name: "Baraa Eskef",
         transaction_value: 104040000, commission_pct: "5", expected_commission_net: 5202000,
@@ -588,7 +588,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d007", type: "Off-Plan", stage: "Commission Collected",
-        property_name: "Samana Developers â€” 512", developer: "Samana Developers", developer_id: "dev004",
+        property_name: "Samana Developers — 512", developer: "Samana Developers", developer_id: "dev004",
         broker_id: "BR011", broker_name: "Tarek Momenh",
         customer_id: "c022", client_name: "Sharmeen Danish Navodia",
         transaction_value: 96750000, commission_pct: "5", expected_commission_net: 4837500,
@@ -598,7 +598,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d008", type: "Off-Plan", stage: "Commission Collected",
-        property_name: "Celesto 3 â€” Unit 1006", developer: "Tarrad Developers", developer_id: "dev006",
+        property_name: "Celesto 3 — Unit 1006", developer: "Tarrad Developers", developer_id: "dev006",
         broker_id: "BR006", broker_name: "Tarek Momenh",
         customer_id: "c008", client_name: "Muhammadkhon Numonjonov",
         transaction_value: 34875000, commission_pct: "5", expected_commission_net: 1743750,
@@ -608,7 +608,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d009", type: "Off-Plan", stage: "Commission Collected",
-        property_name: "Seempm Properties â€” 302", developer: "Seempm Properties", developer_id: "dev007",
+        property_name: "Seempm Properties — 302", developer: "Seempm Properties", developer_id: "dev007",
         broker_id: "BR007", broker_name: "Tarek Momenh",
         customer_id: "c023", client_name: "Elias Silva Costa",
         transaction_value: 95200000, commission_pct: "5", expected_commission_net: 4760000,
@@ -618,7 +618,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d010", type: "Off-Plan", stage: "Commission Collected",
-        property_name: "Samana Boulevard Heights â€” Unit 612", developer: "Samana Developers", developer_id: "dev004",
+        property_name: "Samana Boulevard Heights — Unit 612", developer: "Samana Developers", developer_id: "dev004",
         broker_id: "BR003", broker_name: "Mohamad Teryaki",
         customer_id: "c025", client_name: "Elisa Silva Costa",
         transaction_value: 95400000, commission_pct: "5", expected_commission_net: 4770000,
@@ -628,7 +628,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d011", type: "Off-Plan", stage: "Commission Collected",
-        property_name: "Samana Boulevard Heights â€” Unit 1411", developer: "Samana Developers", developer_id: "dev004",
+        property_name: "Samana Boulevard Heights — Unit 1411", developer: "Samana Developers", developer_id: "dev004",
         broker_id: "BR003", broker_name: "Mohamad Teryaki",
         customer_id: "c015", client_name: "Kshitiz Arun Solomon",
         transaction_value: 96100000, commission_pct: "5", expected_commission_net: 4805000,
@@ -638,7 +638,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d012", type: "Secondary", stage: "Pending",
-        property_name: "Viridis B â€” Unit 1301", developer: "Viridis", developer_id: "dev008",
+        property_name: "Viridis B — Unit 1301", developer: "Viridis", developer_id: "dev008",
         broker_id: "BR012", broker_name: "Faoud Dada",
         customer_id: "c004", client_name: "Saeed Mir Manzoor Ul Haq",
         transaction_value: 40000000, commission_pct: "2", expected_commission_net: 800000,
@@ -648,7 +648,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d013", type: "Secondary", stage: "Pending",
-        property_name: "Skycourts Tower A â€” Unit P304", developer: "Dubai Properties", developer_id: "dev009",
+        property_name: "Skycourts Tower A — Unit P304", developer: "Dubai Properties", developer_id: "dev009",
         broker_id: "BR005", broker_name: "Tarek Mohmneh",
         customer_id: "c008", client_name: "Muhammadkhon Numonjonov",
         transaction_value: 23335000, commission_pct: "2", expected_commission_net: 466700,
@@ -658,7 +658,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d014", type: "Secondary", stage: "Pending",
-        property_name: "Skycourts Tower A â€” Unit 1308", developer: "Dubai Properties", developer_id: "dev009",
+        property_name: "Skycourts Tower A — Unit 1308", developer: "Dubai Properties", developer_id: "dev009",
         broker_id: "BR005", broker_name: "Tarek Mohmneh",
         customer_id: "c013", client_name: "Tarek Mohammed Ragab",
         transaction_value: 25128000, commission_pct: "2", expected_commission_net: 502560,
@@ -668,7 +668,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d015", type: "Secondary", stage: "Pending",
-        property_name: "Skycourts Tower C â€” Unit 1116", developer: "Dubai Properties", developer_id: "dev009",
+        property_name: "Skycourts Tower C — Unit 1116", developer: "Dubai Properties", developer_id: "dev009",
         broker_id: "BR005", broker_name: "Tarek Mohmneh",
         customer_id: "c015", client_name: "Kshitiz Arun Solomon",
         transaction_value: 21950000, commission_pct: "2", expected_commission_net: 439000,
@@ -678,7 +678,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d016", type: "Rental", stage: "Pending",
-        property_name: "Binghatti Tower â€” Unit 1002", developer: "Binghatti Developers", developer_id: "dev002",
+        property_name: "Binghatti Tower — Unit 1002", developer: "Binghatti Developers", developer_id: "dev002",
         broker_id: "BR010", broker_name: "Abdulsalam Alaihan",
         customer_id: "c006", client_name: "Joshua Ethan Taylor",
         transaction_value: 1485000, commission_pct: "5", expected_commission_net: 74250,
@@ -688,7 +688,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d017", type: "Off-Plan", stage: "Booked",
-        property_name: "Hayat Avenue â€” Unit 116", developer: "Hayat Avenue", developer_id: "dev010",
+        property_name: "Hayat Avenue — Unit 116", developer: "Hayat Avenue", developer_id: "dev010",
         broker_id: "BR009", broker_name: "Shuaib Thallichan",
         customer_id: "c017", client_name: "Saira Bano Noman Ahmed Lakhani",
         transaction_value: 11900000, commission_pct: "2.5", expected_commission_net: 297500,
@@ -698,7 +698,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d018", type: "Off-Plan", stage: "Booked",
-        property_name: "Aurora Real Estate Development â€” 116", developer: "Aurora Real Estate", developer_id: "dev011",
+        property_name: "Aurora Real Estate Development — 116", developer: "Aurora Real Estate", developer_id: "dev011",
         broker_id: "BR009", broker_name: "Shuaib Thallichan",
         customer_id: "c018", client_name: "Abdoul Ibrahim El Bazi",
         transaction_value: 10000000, commission_pct: "2.5", expected_commission_net: 250000,
@@ -708,7 +708,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d019", type: "Off-Plan", stage: "Booked",
-        property_name: "Skycourts Tower B â€” Unit 06", developer: "Skycourts", developer_id: "dev009",
+        property_name: "Skycourts Tower B — Unit 06", developer: "Skycourts", developer_id: "dev009",
         broker_id: "BR012", broker_name: "Monaf Hamza",
         customer_id: "c019", client_name: "Daleel Singh",
         transaction_value: 2000000, commission_pct: "5", expected_commission_net: 100000,
@@ -718,7 +718,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d020", type: "Rental", stage: "Booked",
-        property_name: "Binghatti Phoenix â€” Unit 419", developer: "Binghatti Developers", developer_id: "dev002",
+        property_name: "Binghatti Phoenix — Unit 419", developer: "Binghatti Developers", developer_id: "dev002",
         broker_id: "BR012", broker_name: "Monaf Hamza",
         customer_id: "c020", client_name: "Ola Alaa Hussein Hussein",
         transaction_value: 700000, commission_pct: "5", expected_commission_net: 35000,
@@ -728,7 +728,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d021", type: "Rental", stage: "Booked",
-        property_name: "Binghatti Onyx â€” Unit 1909", developer: "Binghatti Developers", developer_id: "dev002",
+        property_name: "Binghatti Onyx — Unit 1909", developer: "Binghatti Developers", developer_id: "dev002",
         broker_id: "BR012", broker_name: "Monaf Hamza",
         customer_id: "c006", client_name: "Joshua Ethan Taylor",
         transaction_value: 1200000, commission_pct: "5", expected_commission_net: 60000,
@@ -738,7 +738,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d022", type: "Off-Plan", stage: "Booked",
-        property_name: "Azizi Riviera 15 â€” Unit 728", developer: "Azizi Developments", developer_id: "dev012",
+        property_name: "Azizi Riviera 15 — Unit 728", developer: "Azizi Developments", developer_id: "dev012",
         broker_id: "BR012", broker_name: "Monaf Hamza",
         customer_id: "c010", client_name: "Sadaf Eftekhar Ahmad Kokar",
         transaction_value: 5000000, commission_pct: "5", expected_commission_net: 250000,
@@ -748,7 +748,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d023", type: "Off-Plan", stage: "Booked",
-        property_name: "Azizi Mirage 7 Tower 2 â€” Unit 332", developer: "Azizi Developments", developer_id: "dev012",
+        property_name: "Azizi Mirage 7 Tower 2 — Unit 332", developer: "Azizi Developments", developer_id: "dev012",
         broker_id: "BR012", broker_name: "Monaf Hamza",
         customer_id: "c019", client_name: "Roshan Mallepati Shrestha",
         transaction_value: 2338000, commission_pct: "5", expected_commission_net: 116900,
@@ -758,7 +758,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d024", type: "Off-Plan", stage: "Booked",
-        property_name: "Binghatti Lavender â€” Unit 1005", developer: "Binghatti Developers", developer_id: "dev002",
+        property_name: "Binghatti Lavender — Unit 1005", developer: "Binghatti Developers", developer_id: "dev002",
         broker_id: "BR012", broker_name: "Monaf Hamza",
         customer_id: "c020", client_name: "Holly Frances Godwin",
         transaction_value: 1200000, commission_pct: "5", expected_commission_net: 60000,
@@ -768,7 +768,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d025", type: "Off-Plan", stage: "Booked",
-        property_name: "Binghatti Onyx â€” Unit 510", developer: "Binghatti Developers", developer_id: "dev002",
+        property_name: "Binghatti Onyx — Unit 510", developer: "Binghatti Developers", developer_id: "dev002",
         broker_id: "BR012", broker_name: "Monaf Hamza",
         customer_id: "c010", client_name: "Sadaf Eftekhar Ahmad Kokar",
         transaction_value: 5000000, commission_pct: "5", expected_commission_net: 250000,
@@ -778,7 +778,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d026", type: "Off-Plan", stage: "Booked",
-        property_name: "Binghatti Onyx â€” Unit 304", developer: "Binghatti Developers", developer_id: "dev002",
+        property_name: "Binghatti Onyx — Unit 304", developer: "Binghatti Developers", developer_id: "dev002",
         broker_id: "BR012", broker_name: "Monaf Hamza",
         customer_id: "c020", client_name: "Face Off Vacation Homes Rental LLC",
         transaction_value: 5000000, commission_pct: "5", expected_commission_net: 250000,
@@ -788,7 +788,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d027", type: "Off-Plan", stage: "Booked",
-        property_name: "Binghatti Emerald â€” Unit 208", developer: "Binghatti Developers", developer_id: "dev002",
+        property_name: "Binghatti Emerald — Unit 208", developer: "Binghatti Developers", developer_id: "dev002",
         broker_id: "BR010", broker_name: "Faoud Dada",
         customer_id: "c024", client_name: "BMF Fashion Trading LLC",
         transaction_value: 1000000, commission_pct: "5", expected_commission_net: 50000,
@@ -798,7 +798,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d028", type: "Off-Plan", stage: "Booked",
-        property_name: "Royal Park â€” Unit F-217", developer: "Royal Park", developer_id: "dev013",
+        property_name: "Royal Park — Unit F-217", developer: "Royal Park", developer_id: "dev013",
         broker_id: "BR014", broker_name: "Faoud Relative",
         customer_id: "c025", client_name: "Hoda Al-Asrawi",
         transaction_value: 67079520, commission_pct: "5", expected_commission_net: 3353976,
@@ -808,7 +808,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d029", type: "Off-Plan", stage: "Booked",
-        property_name: "Samana Resorts â€” Unit A906", developer: "Samana Developers", developer_id: "dev004",
+        property_name: "Samana Resorts — Unit A906", developer: "Samana Developers", developer_id: "dev004",
         broker_id: "BR011", broker_name: "Monaf Hamza",
         customer_id: "c034", client_name: "Hoda Al-Asrawi",
         transaction_value: 53358427, commission_pct: "5", expected_commission_net: 2667921,
@@ -818,7 +818,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d030", type: "Off-Plan", stage: "Booked",
-        property_name: "Samana Portofino â€” Unit A908", developer: "Samana Developers", developer_id: "dev004",
+        property_name: "Samana Portofino — Unit A908", developer: "Samana Developers", developer_id: "dev004",
         broker_id: "BR011", broker_name: "Monaf Hamza",
         customer_id: "c035", client_name: "Monaf Hamza",
         transaction_value: 30318427, commission_pct: "5", expected_commission_net: 1515921,
@@ -828,7 +828,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d031", type: "Off-Plan", stage: "Booked",
-        property_name: "Vivanti Residences â€” Unit A901", developer: "Vivanti", developer_id: "dev014",
+        property_name: "Vivanti Residences — Unit A901", developer: "Vivanti", developer_id: "dev014",
         broker_id: "BR011", broker_name: "Aldel Momham",
         customer_id: "c036", client_name: "Aldel Momham",
         transaction_value: 30000000, commission_pct: "5", expected_commission_net: 1500000,
@@ -838,7 +838,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d032", type: "Off-Plan", stage: "Booked",
-        property_name: "Palace Residences Hillside A â€” Unit 16-1617", developer: "Palace Residences", developer_id: "dev015",
+        property_name: "Palace Residences Hillside A — Unit 16-1617", developer: "Palace Residences", developer_id: "dev015",
         broker_id: "BR012", broker_name: "Khalid Jamil M Alsadi",
         customer_id: "c037", client_name: "Khalid Jamil M Alsadi",
         transaction_value: 70995232, commission_pct: "5", expected_commission_net: 3549766,
@@ -848,7 +848,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d033", type: "Off-Plan", stage: "Booked",
-        property_name: "The Valley Business Park â€” Unit TH-316", developer: "The Valley", developer_id: "dev016",
+        property_name: "The Valley Business Park — Unit TH-316", developer: "The Valley", developer_id: "dev016",
         broker_id: "BR012", broker_name: "Khalid Jamil M Alsadi",
         customer_id: "c037", client_name: "Khalid Jamil M Alsadi",
         transaction_value: 16883552, commission_pct: "5", expected_commission_net: 844177,
@@ -858,7 +858,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d034", type: "Off-Plan", stage: "Booked",
-        property_name: "Emaar Properties (TV Vinder) â€” Unit TH-316", developer: "Emaar", developer_id: "dev017",
+        property_name: "Emaar Properties (TV Vinder) — Unit TH-316", developer: "Emaar", developer_id: "dev017",
         broker_id: "BR012", broker_name: "Faoud Dada",
         customer_id: "c037", client_name: "Faoud Dada",
         transaction_value: 16883552, commission_pct: "5", expected_commission_net: 844177,
@@ -868,7 +868,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       },
       {
         id: "d035", type: "Off-Plan", stage: "Booked",
-        property_name: "Vista by Vision â€” Unit 203", developer: "Vision", developer_id: "dev018",
+        property_name: "Vista by Vision — Unit 203", developer: "Vision", developer_id: "dev018",
         broker_id: "BR013", broker_name: "Marwa",
         customer_id: "c038", client_name: "Mansha Siddique",
         transaction_value: 3461400, commission_pct: "5", expected_commission_net: 173070,
@@ -966,7 +966,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       { id: "dev020", name: "Trillionaire Residence", signed_agreement: true, expiry_date: "2026-12-25", contact_person: "", email: "", phone: "" }
     ];
 
-    // â”€â”€ LEDGER ENGINE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── LEDGER ENGINE ─────────────────────────────────
     function buildLedger(transactions, accounts) {
       const ledger = {};
       accounts.forEach(a => { ledger[a.id] = { debit: 0, credit: 0 }; });
@@ -1013,7 +1013,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       return !hasOperationalLine;
     }
 
-    // â”€â”€ CASH-SETTLED JOURNAL ENGINE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── CASH-SETTLED JOURNAL ENGINE ───────────────────
     function createJournalEngine({ accounts, txns, saveTxn }) {
       const byCode = code => accounts.find(a => a.code === code);
       const outputVAT = accounts.find(a => a.isOutputVAT);
@@ -1056,7 +1056,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         return txn;
       };
 
-      // SALE RECEIPT â€” Commission collected immediately (no AR step)
+      // SALE RECEIPT — Commission collected immediately (no AR step)
       // DR Bank (gross) / CR Revenue (net) / CR Output VAT
       const postSaleReceipt = ({ date, deal, gross, vatRate = 5, bankCode = "1002", memo = "", commit = true }) => {
         if (!deal || !deal.id) throw new Error("deal_id is required for commission revenue tracking");
@@ -1075,8 +1075,8 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         const { netC, vatC, roundingAdjustment } = computeVATSplit(grossC, vatRate);
 
         const lines = [
-          makeLine({ accountId: bankA.id, debit: grossC, memo: `Receipt â€” ${deal?.property_name || memo}`, deal_id: deal?.id, broker_id: deal?.broker_id, developer_id: deal?.developer }),
-          makeLine({ accountId: revA.id, credit: netC, memo: `Revenue â€” ${deal?.property_name || memo}`, deal_id: deal?.id, broker_id: deal?.broker_id, developer_id: deal?.developer }),
+          makeLine({ accountId: bankA.id, debit: grossC, memo: `Receipt — ${deal?.property_name || memo}`, deal_id: deal?.id, broker_id: deal?.broker_id, developer_id: deal?.developer }),
+          makeLine({ accountId: revA.id, credit: netC, memo: `Revenue — ${deal?.property_name || memo}`, deal_id: deal?.id, broker_id: deal?.broker_id, developer_id: deal?.developer }),
         ];
         if (vatC > 0) {
           if (!outputVAT) throw new Error("Missing Output VAT account");
@@ -1102,7 +1102,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         return txn;
       };
 
-      // PAYMENT VOUCHER â€” Expense paid immediately (no AP step)
+      // PAYMENT VOUCHER — Expense paid immediately (no AP step)
       // DR Expense (net) / DR Input VAT / CR Bank (gross)
       const postPayment = ({ date, memo, gross, vatRate = 0, expenseCode, paidFromCode = "1002", counterparty = "", commit = true }) => {
         if (!expenseCode) throw new Error("expenseCode is mandatory for a payment voucher");
@@ -1120,7 +1120,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         const lines = [makeLine({ accountId: expenseA.id, debit: netC, memo })];
         if (vatC > 0) {
           if (!inputVAT) throw new Error("Missing Input VAT account");
-          lines.push(makeLine({ accountId: inputVAT.id, debit: vatC, memo: `VAT â€” ${memo}` }));
+          lines.push(makeLine({ accountId: inputVAT.id, debit: vatC, memo: `VAT — ${memo}` }));
         }
         if (roundingAdjustment !== 0) {
           if (!roundingA) throw new Error("Missing VAT Rounding Adjustment account");
@@ -1142,7 +1142,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         return txn;
       };
 
-      // BROKER PAYMENT â€” Paid directly from bank (no AP step)
+      // BROKER PAYMENT — Paid directly from bank (no AP step)
       const postBrokerPayment = ({ date, deal, brokerAmount, paidFromCode = "1002", memo = "", commit = true }) => {
         if (!deal || !deal.id) throw new Error("deal_id is required for broker payment tracking");
         const expenseA = byCode("5500") || byCode("5000");
@@ -1180,7 +1180,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         return txn;
       };
 
-      // REVERSAL â€” creates opposite entry, marks original as void
+      // REVERSAL — creates opposite entry, marks original as void
       const reverseTransaction = (txnId, reverseDate = todayStr(), reason = "Reversal", commit = true) => {
         const original = txns.find(t => t.id === txnId);
         if (!original) throw new Error("Transaction not found");
@@ -1283,7 +1283,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       return { post, postSaleReceipt, postPayment, postBrokerPayment, postBankTransfer, reverseTransaction, getVATReport, validateDealRevenueReceipt };
     }
 
-    // â”€â”€ STYLE HELPERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── STYLE HELPERS ─────────────────────────────────
     const C = {
       card: { background: "#fff", border: "1px solid #E5E7EB", borderRadius: 12, boxShadow: "0 1px 4px rgba(0,0,0,.07)" },
       input: { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 11px", fontSize: 13, color: NAVY, background: "#fff", outline: "none", width: "100%" },
@@ -1302,7 +1302,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       err: { background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 7, padding: "10px 14px", color: "#DC2626", fontSize: 13, marginBottom: 12 },
     };
 
-    // â”€â”€ TOAST â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── TOAST ──────────────────────────────────────────
     let _addToast = null;
     function ToastHost() {
       const [toasts, setToasts] = useState([]);
@@ -1310,20 +1310,20 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       const brd = { success: "#059669", error: "#DC2626", warning: "#D97706", info: GOLD };
       return <div style={{ position: "fixed", bottom: 20, right: 20, zIndex: 9999, display: "flex", flexDirection: "column", gap: 8, pointerEvents: "none" }}>
         {toasts.map(x => <div key={x.id} style={{ background: "#fff", border: "1px solid #E5E7EB", borderLeft: `4px solid ${brd[x.t] || GOLD}`, borderRadius: 10, padding: "11px 16px", boxShadow: "0 4px 16px rgba(0,0,0,.12)", fontSize: 13, display: "flex", alignItems: "center", gap: 10, minWidth: 260, maxWidth: 360, pointerEvents: "all" }}>
-          <span>{x.t === "success" ? "âœ…" : x.t === "error" ? "âŒ" : x.t === "warning" ? "âš ï¸" : "â„¹ï¸"}</span>
+          <span>{x.t === "success" ? "✅" : x.t === "error" ? "❌" : x.t === "warning" ? "⚠️" : "ℹ️"}</span>
           <span style={{ color: NAVY, flex: 1 }}>{x.msg}</span>
         </div>)}
       </div>;
     }
     const toast = (msg, t = "info") => _addToast && _addToast(msg, t);
 
-    // â”€â”€ SHARED COMPONENTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── SHARED COMPONENTS ──────────────────────────────
     function Inp({ value, onChange, type = "text", placeholder = "", disabled = false, step, style = {} }) { return <input style={{ ...C.input, ...style, opacity: disabled ? .6 : 1 }} type={type} value={value || ""} onChange={onChange} placeholder={placeholder} disabled={disabled} step={step} />; }
     function Sel({ value, onChange, children }) { return <select style={C.select} value={value || ""} onChange={onChange}>{children}</select>; }
     function PageHeader({ title, sub, children }) { return <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 10 }}><div><div style={{ fontSize: 20, fontWeight: 700, color: NAVY }}>{title}</div>{sub && <div style={{ fontSize: 13, color: "#6B7280", marginTop: 2 }}>{sub}</div>}</div>{children && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>{children}</div>}</div>; }
     function SortTh({ label, sortKey, activeKey, sortDir, onToggle, align = "left" }) {
       const active = sortKey === activeKey;
-      const arrow = active ? (sortDir === "asc" ? " â–²" : " â–¼") : "";
+      const arrow = active ? (sortDir === "asc" ? " ▲" : " ▼") : "";
       return <th style={{ ...C.th, textAlign: align }}>
         <button onClick={() => onToggle(activeKey)} style={{ background: "none", border: "none", padding: 0, margin: 0, font: "inherit", color: "inherit", cursor: "pointer", width: "100%", textAlign: align }}>
           {label}{arrow}
@@ -1628,7 +1628,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
       return <div style={C.modal} onClick={onClose}>
         <div style={C.mbox(860)} onClick={e => e.stopPropagation()}>
-          <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>Edit Transaction</span><button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>Ã—</button></div>
+          <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>Edit Transaction</span><button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>×</button></div>
           <div style={C.mbdy}>
             <div style={{ ...C.card, padding: 14, marginBottom: 16, background: "#F9FAFB" }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>{TXN_TYPES[txn.txnType]?.label || txn.txnType || "Transaction"}</div>
@@ -1675,13 +1675,13 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
                 <tbody>
                   {draft.lines.map((line, i) => <tr key={line.id || i}>
                     <td style={C.td}><Sel value={line.accountId} onChange={e => updateLine(i, { accountId: e.target.value })}>
-                      <option value="">â€” Select â€”</option>
-                      {accounts.slice().sort((a, b) => a.code.localeCompare(b.code)).map(a => <option key={a.id} value={a.id}>{a.code} â€” {a.name}</option>)}
+                      <option value="">— Select —</option>
+                      {accounts.slice().sort((a, b) => a.code.localeCompare(b.code)).map(a => <option key={a.id} value={a.id}>{a.code} — {a.name}</option>)}
                     </Sel></td>
                     <td style={C.td}><Inp type="number" step="0.01" value={line.debit} onChange={e => updateLine(i, { debit: e.target.value })} /></td>
                     <td style={C.td}><Inp type="number" step="0.01" value={line.credit} onChange={e => updateLine(i, { credit: e.target.value })} /></td>
                     <td style={C.td}><Inp value={line.memo || ""} onChange={e => updateLine(i, { memo: e.target.value })} /></td>
-                    <td style={C.td}>{draft.lines.length > 2 && <button style={C.btn("ghost", true)} onClick={() => removeLine(i)}>Ã—</button>}</td>
+                    <td style={C.td}>{draft.lines.length > 2 && <button style={C.btn("ghost", true)} onClick={() => removeLine(i)}>×</button>}</td>
                   </tr>)}
                 </tbody>
               </table>
@@ -1707,7 +1707,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       </svg>;
     }
 
-    // â”€â”€ POSTING PREVIEW â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── POSTING PREVIEW ────────────────────────────────
     function PostingPreview({ open, onClose, lines, accounts, onConfirm, header = {} }) {
       if (!open) return null;
       const tDr = lines.reduce((s, l) => s + (l.debit || 0), 0);
@@ -1716,31 +1716,31 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       const ga = id => accounts.find(a => a.id === id) || { name: id, code: "?", type: "?" };
       return <div style={C.modal} onClick={onClose}>
         <div style={C.mbox(700)} onClick={e => e.stopPropagation()}>
-          <div style={C.mhdr}><div style={{ fontWeight: 700, fontSize: 16 }}>ðŸ“‹ Posting Preview</div><button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>âœ•</button></div>
+          <div style={C.mhdr}><div style={{ fontWeight: 700, fontSize: 16 }}>📋 Posting Preview</div><button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
           <div style={C.mbdy}>
             {header.date && <div style={{ fontSize: 13, color: "#6B7280", marginBottom: 12 }}>Date: {fmtDate(header.date)} {header.ref && `| Ref: ${header.ref}`} {header.counterparty && `| ${header.counterparty}`}</div>}
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead><tr><th style={C.th}>Account</th><th style={C.th}>Type</th><th style={{ ...C.th, textAlign: "right" }}>Debit</th><th style={{ ...C.th, textAlign: "right" }}>Credit</th></tr></thead>
               <tbody>
-                {lines.map((l, i) => { const a = ga(l.accountId); return <tr key={i}><td style={C.td}>{a.code} â€” {a.name}</td><td style={C.td}><span style={C.badge(a.type === "Revenue" ? "success" : a.type === "Expense" ? "warning" : "info")}>{a.type}</span></td><td style={{ ...C.td, textAlign: "right", fontWeight: l.debit ? 600 : 400 }}>{l.debit ? fmtAED(l.debit) : "â€”"}</td><td style={{ ...C.td, textAlign: "right", fontWeight: l.credit ? 600 : 400 }}>{l.credit ? fmtAED(l.credit) : "â€”"}</td></tr>; })}
+                {lines.map((l, i) => { const a = ga(l.accountId); return <tr key={i}><td style={C.td}>{a.code} — {a.name}</td><td style={C.td}><span style={C.badge(a.type === "Revenue" ? "success" : a.type === "Expense" ? "warning" : "info")}>{a.type}</span></td><td style={{ ...C.td, textAlign: "right", fontWeight: l.debit ? 600 : 400 }}>{l.debit ? fmtAED(l.debit) : "—"}</td><td style={{ ...C.td, textAlign: "right", fontWeight: l.credit ? 600 : 400 }}>{l.credit ? fmtAED(l.credit) : "—"}</td></tr>; })}
               </tbody>
               <tfoot><tr style={{ background: "#F9FAFB" }}><td colSpan={2} style={{ ...C.td, fontWeight: 700 }}>TOTAL</td><td style={{ ...C.td, textAlign: "right", fontWeight: 700 }}>{fmtAED(tDr)}</td><td style={{ ...C.td, textAlign: "right", fontWeight: 700 }}>{fmtAED(tCr)}</td></tr></tfoot>
             </table>
             {!ok && <div style={C.err}>Journal entry is not balanced!</div>}
           </div>
-          <div style={C.mftr}><button style={C.btn("secondary")} onClick={onClose}>Cancel</button><button style={C.btn("success")} disabled={!ok} onClick={onConfirm}>âœ… Confirm & Post</button></div>
+          <div style={C.mftr}><button style={C.btn("secondary")} onClick={onClose}>Cancel</button><button style={C.btn("success")} disabled={!ok} onClick={onConfirm}>✅ Confirm & Post</button></div>
         </div>
       </div>;
     }
 
-    // â”€â”€ NAV â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── NAV ────────────────────────────────────────────
     const NAV = [
-      { s: "MAIN" }, { id: "dashboard", label: "Dashboard", icon: "ðŸ " },
-      { s: "SALES" }, { id: "deals", label: "Deals / Pipeline", icon: "ðŸ¤" }, { id: "receipts", label: "Sale Receipts", icon: "ðŸ’°" }, { id: "customers", label: "Customers", icon: "ðŸ‘¥" }, { id: "brokers", label: "Brokers", icon: "ðŸ‘”" }, { id: "developers", label: "Developers", icon: "ðŸ—ï¸" },
-      { s: "EXPENSES" }, { id: "payments", label: "Payments", icon: "ðŸ’³" }, { id: "vendors", label: "Vendors", icon: "ðŸ­" },
-      { s: "BANKING" }, { id: "banking", label: "Banking", icon: "ðŸ¦" },
-      { s: "ACCOUNTING" }, { id: "journal", label: "Journal Entries", icon: "ðŸ“’" }, { id: "coa", label: "Chart of Accounts", icon: "ðŸ—‚" },
-      { s: "REPORTS" }, { id: "reports", label: "Reports", icon: "ðŸ“Š" }, { id: "vat", label: "VAT / Taxes", icon: "ðŸ§¾" },
-      { s: "HELP" }, { id: "manual", label: "User Manual", icon: "ðŸ“–" },
-      { s: "SYSTEM" }, { id: "users", label: "User Management", icon: "ðŸ‘¥" }, { id: "settings", label: "Settings", icon: "âš™ï¸" },
+      { s: "MAIN" }, { id: "dashboard", label: "Dashboard", icon: "🏠" },
+      { s: "SALES" }, { id: "deals", label: "Deals / Pipeline", icon: "🤝" }, { id: "receipts", label: "Sale Receipts", icon: "💰" }, { id: "customers", label: "Customers", icon: "👥" }, { id: "brokers", label: "Brokers", icon: "👔" }, { id: "developers", label: "Developers", icon: "🏗️" },
+      { s: "EXPENSES" }, { id: "payments", label: "Payments", icon: "💳" }, { id: "vendors", label: "Vendors", icon: "🏭" },
+      { s: "BANKING" }, { id: "banking", label: "Banking", icon: "🏦" },
+      { s: "ACCOUNTING" }, { id: "journal", label: "Journal Entries", icon: "📒" }, { id: "coa", label: "Chart of Accounts", icon: "🗂" },
+      { s: "REPORTS" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "vat", label: "VAT / Taxes", icon: "🧾" },
+      { s: "HELP" }, { id: "manual", label: "User Manual", icon: "📖" },
+      { s: "SYSTEM" }, { id: "users", label: "User Management", icon: "👥" }, { id: "settings", label: "Settings", icon: "⚙️" },
     ];
