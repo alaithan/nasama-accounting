@@ -1,18 +1,47 @@
-﻿* { -webkit-tap-highlight-color: transparent; box-sizing: border-box; margin: 0; padding: 0 }
-    html, body, #root { height: 100%; overflow: hidden }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; -webkit-font-smoothing: antialiased }
-    ::-webkit-scrollbar { width: 6px; height: 6px }
-    ::-webkit-scrollbar-track { background: #f1f1f1 }
-    ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px }
-    ::-webkit-scrollbar-thumb:hover { background: #aaa }
-    input[type=number]::-webkit-inner-spin-button { opacity: 1 }
-    select option { background: #fff; color: #1C1C2E }
-    @media (max-width: 768px) {
-      button, input, select, textarea { font-size: 16px !important }
-      button { min-height: 44px }
-      * { max-width: 100% }
-      body, div, p, span, td, th { word-wrap: break-word; overflow-wrap: break-word }
-      table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap }
-      input, select, textarea { max-width: 100%; width: 100% }
-      html, body { overflow-x: hidden; width: 100% }
-    }
+@import url('https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700;14..32,800;14..32,900&display=swap');
+
+* { -webkit-tap-highlight-color: transparent; box-sizing: border-box; margin: 0; padding: 0 }
+html, body, #root { height: 100%; overflow: hidden }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv11' 1, 'ss01' 1, 'kern' 1;
+  letter-spacing: -0.011em;
+}
+/* Tabular numbers for financial figures — applied per element where needed */
+.tnum { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
+/* Refined scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px }
+::-webkit-scrollbar-track { background: transparent }
+::-webkit-scrollbar-thumb { background: #D0D5DD; border-radius: 10px }
+::-webkit-scrollbar-thumb:hover { background: #98A2B3 }
+/* Mobile scrollbar hidden */
+@media (max-width: 768px) { ::-webkit-scrollbar { display: none } }
+/* Input focus glow */
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: #C9A044 !important;
+  box-shadow: 0 0 0 3px rgba(201,160,68,.14) !important;
+}
+/* Button hover lift */
+button:not(:disabled):hover { opacity: 0.88; }
+button:not(:disabled):active { transform: scale(0.98); }
+/* Spin button visibility */
+input[type=number]::-webkit-inner-spin-button { opacity: 1 }
+/* Select option */
+select option { background: #fff; color: #0C0F1E }
+/* Card hover utility */
+.card-hover { transition: box-shadow .2s, transform .2s; }
+.card-hover:hover { box-shadow: 0 8px 24px rgba(16,24,40,.12), 0 0 0 1px rgba(16,24,40,.06) !important; transform: translateY(-1px); }
+/* Smooth transitions for nav */
+.nav-item { transition: background .15s, color .15s, border-color .15s; }
+@media (max-width: 768px) {
+  button, input, select, textarea { font-size: 16px !important }
+  button { min-height: 44px }
+  * { max-width: 100% }
+  body, div, p, span, td, th { word-wrap: break-word; overflow-wrap: break-word }
+  table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap }
+  input, select, textarea { max-width: 100%; width: 100% }
+  html, body { overflow-x: hidden; width: 100% }
+}

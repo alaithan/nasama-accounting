@@ -1,4 +1,4 @@
-﻿const { useState, useEffect, useMemo, useCallback, useRef } = React;
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
     /* ══════════════════════════════════════════════════
        NASAMA PROPERTIES — ACCOUNTING SYSTEM v2.0
@@ -7,7 +7,10 @@
        ══════════════════════════════════════════════════ */
 
     // ── BRAND ─────────────────────────────────────────
-    const GOLD = "#B8960C", GOLD_D = "#9A7D0A", NAVY = "#1C1C2E", NAVY2 = "#2D2D45";
+    const GOLD = "#C9A044", GOLD_D = "#A8853A", NAVY = "#0C0F1E", NAVY2 = "#161B35";
+    const NASAMA_WORDMARK_SRC = "./nasama_wordmark_transparent.png";
+    const NASAMA_ICON_SRC = "./IMG_4854.PNG";
+    const DEFAULT_REPORTING_START_DATE = "2026-01-01";
 
     // ── CONSTANTS ─────────────────────────────────────
     const DEAL_STAGES = ["Lead", "EOI", "Booking Form Signed", "First Payment Paid", "MOU Signed", "SPA Signed", "Handover", "Commission Earned", "Commission Collected"];
@@ -44,6 +47,7 @@
       { id: "reports", label: "REPORTS", pages: ["Reports", "VAT / Taxes"], actions: ["read", "export"] },
       { id: "help", label: "HELP", pages: ["User Manual"], actions: ["read"] },
       { id: "system", label: "SYSTEM", pages: ["User Management"], actions: ["read", "create", "edit", "approve"] },
+      { id: "planning", label: "PLANNING", pages: ["Future Expenses"], actions: ["read", "create", "edit"] },
       { id: "settings", label: "SETTINGS", pages: ["Settings"], actions: ["read", "edit"] },
     ];
     const SECURITY_PERMISSION_KEYS = SECURITY_MODULES.flatMap(module => module.actions.map(action => `${module.id}.${action}`));
@@ -145,7 +149,9 @@
       vat: "reports.read",
       manual: "help.read",
       users: "system.read",
-      settings: "settings.read"
+      settings: "settings.read",
+      futureExpenses: "planning.read",
+      banana2: "main.read"
     };
     const getDefaultSecurityTemplate = (roleId) => DEFAULT_SECURITY_ROLE_TEMPLATES.find(role => role.id === roleId) || null;
     const resolveLegacyRole = (subject) => typeof subject === "string" ? subject : subject?.legacyRole || subject?.role || "secretary";
@@ -178,7 +184,8 @@
         vendors: ['admin', 'accountant'], banking: ['admin', 'accountant'],
         reports: ['admin', 'accountant'], vat: ['admin', 'accountant'],
         manual: ['admin', 'accountant', 'secretary'],
-        settings: ['admin', 'accountant'], users: ['admin']
+        settings: ['admin', 'accountant'], users: ['admin'],
+        banana2: ['admin', 'accountant', 'secretary']
       };
       const role = resolveLegacyRole(subject);
       return map[pg]?.includes(role) || false;
@@ -199,6 +206,8 @@
     const ls_get = (k, fb) => { try { const v = localStorage.getItem("na2_" + k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
     const ls_set = (k, v) => { try { localStorage.setItem("na2_" + k, JSON.stringify(v)); } catch { } };
     const ls_remove = (k) => { try { localStorage.removeItem("na2_" + k); } catch { } };
+    const normalizeReportingStartDate = value => value && value >= DEFAULT_REPORTING_START_DATE ? value : DEFAULT_REPORTING_START_DATE;
+    const normalizeSettings = value => ({ ...(value || {}), openingBalanceDate: normalizeReportingStartDate(value?.openingBalanceDate) });
     const normalizeUserEmail = value => (value || "").toLowerCase().trim();
     const normalizeAccessCode = value => (value || "").trim();
     const generateAccessCode = () => String(Math.floor(100000 + Math.random() * 900000));
@@ -262,24 +271,30 @@
       "Bank Fees": "5600",
       "Bayut Advertising": "5210",
       "Employee Salaries": "5010",
-      "Bank Internal Adjustment": "2201",
+      "Admin Salary": "5000",
+      "Manager Salary": "5020",
+      "Broker Incentive": "5030",
+      "Office Rent": "5100",
+      "Bank Adjustment Clearing": "2201",
       "Recruitment Fees": "5420",
+      "Accountant Registration": "5400",
+      "Accountant Services": "5410",
       "Office Supplies": "5160",
       "Seller Commission": "4010",
       "Communication": "5140",
       "Developer Commission": "4000",
-      "Car Maintenance & Fuel": "5300",
-      "CRM Registration": "5230",
+      "Transportation": "5300",
+      "CRM & Software": "5230",
       "Commission Payment to Brokers": "5500",
       "Internet": "5130",
-      "DEWA - Electricity & Water": "5110",
-      "Empower - Cooling": "5120",
+      "DEWA — Electricity & Water": "5110",
+      "Empower — Cooling": "5120",
       "Property Finder": "5200",
       "Marketing": "5220",
-      "VAT Payable": "2101",
-      "Trakhessi": "5430",
+      "Output VAT Payable": "2101",
+      "Trakheesi & Licensing": "5430",
       "Cleaning Fees": "5150",
-      "Secondary Market Commission Agent Payment": "5510",
+      "Secondary Market Agent Payment": "5510",
       "Legal Services": "6000",
     };
     const parseDelimitedRows = (text, delimiter) => {
@@ -488,7 +503,7 @@
       { id: "a1500", code: "1500", name: "Furniture & Fixtures", type: "Asset", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a1510", code: "1510", name: "Computers & Laptops", type: "Asset", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a2101", code: "2101", name: "Output VAT Payable", type: "Liability", isBank: false, isOutputVAT: true, isInputVAT: false },
-      { id: "a2105", code: "2105", name: "VAT Rounding Adjustment", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
+      { id: "a2105", code: "2105", name: "VAT Rounding Adjustment", type: "Liability", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a2200", code: "2200", name: "Loan Payable", type: "Liability", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a3000", code: "3000", name: "Capital Injection", type: "Equity", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a3002", code: "3002", name: "Retained Earnings", type: "Equity", isBank: false, isOutputVAT: false, isInputVAT: false },
@@ -969,14 +984,20 @@
     // ── LEDGER ENGINE ─────────────────────────────────
     function buildLedger(transactions, accounts) {
       const ledger = {};
-      accounts.forEach(a => { ledger[a.id] = { debit: 0, credit: 0 }; });
-      transactions.filter(t => !t.isVoid).forEach(t => {
-        (t.lines || []).forEach(l => {
+      for (let i = 0; i < accounts.length; i++) {
+        ledger[accounts[i].id] = { debit: 0, credit: 0 };
+      }
+      for (let i = 0; i < transactions.length; i++) {
+        const t = transactions[i];
+        if (t.isVoid) continue;
+        const lines = t.lines || [];
+        for (let j = 0; j < lines.length; j++) {
+          const l = lines[j];
           if (!ledger[l.accountId]) ledger[l.accountId] = { debit: 0, credit: 0 };
           ledger[l.accountId].debit += (l.debit || 0);
           ledger[l.accountId].credit += (l.credit || 0);
-        });
-      });
+        }
+      }
       return ledger;
     }
     function accountBalance(acct, ledger) {
@@ -1285,21 +1306,21 @@
 
     // ── STYLE HELPERS ─────────────────────────────────
     const C = {
-      card: { background: "#fff", border: "1px solid #E5E7EB", borderRadius: 12, boxShadow: "0 1px 4px rgba(0,0,0,.07)" },
-      input: { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 11px", fontSize: 13, color: NAVY, background: "#fff", outline: "none", width: "100%" },
-      select: { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 11px", fontSize: 13, color: NAVY, background: "#fff", outline: "none", width: "100%" },
-      label: { fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4, display: "block" },
-      th: { textAlign: "left", padding: "9px 13px", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#6B7280", background: "#F9FAFB", borderBottom: "1px solid #E5E7EB", whiteSpace: "nowrap" },
-      td: { padding: "10px 13px", borderBottom: "1px solid #F3F4F6", color: "#374151", verticalAlign: "middle" },
-      badge(c) { const m = { success: { bg: "#ECFDF5", cl: "#059669" }, danger: { bg: "#FEF2F2", cl: "#DC2626" }, warning: { bg: "#FFFBEB", cl: "#D97706" }, info: { bg: "#EFF6FF", cl: "#2563EB" }, gold: { bg: "#FBF5DC", cl: GOLD_D }, neutral: { bg: "#F3F4F6", cl: "#6B7280" } }; const b = m[c] || m.neutral; return { display: "inline-flex", alignItems: "center", padding: "2px 8px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: b.bg, color: b.cl, whiteSpace: "nowrap" }; },
-      btn(v = "primary", sm = false) { const p = sm ? "4px 10px" : "8px 16px"; const fs = sm ? 12 : 13; const map = { primary: { background: GOLD, color: "#fff", border: "none" }, secondary: { background: "#fff", color: NAVY, border: "1px solid #D1D5DB" }, danger: { background: "#DC2626", color: "#fff", border: "none" }, success: { background: "#059669", color: "#fff", border: "none" }, ghost: { background: "transparent", color: "#6B7280", border: "none" } }; return { ...map[v] || map.primary, padding: p, borderRadius: 7, fontSize: fs, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", transition: "opacity .15s" }; },
-      modal: { position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, backdropFilter: "blur(2px)" },
-      mbox(w = 620) { return { background: "#fff", borderRadius: 12, boxShadow: "0 10px 30px rgba(0,0,0,.2)", width: "100%", maxWidth: w, maxHeight: "92vh", display: "flex", flexDirection: "column", overflow: "hidden" }; },
-      mhdr: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 22px", borderBottom: "1px solid #E5E7EB", flexShrink: 0 },
-      mbdy: { padding: 22, overflowY: "auto", flex: 1 },
-      mftr: { padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", gap: 10, justifyContent: "flex-end", flexShrink: 0 },
-      fg: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(210px,1fr))", gap: 14 },
-      err: { background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 7, padding: "10px 14px", color: "#DC2626", fontSize: 13, marginBottom: 12 },
+      card: { background: "#ffffff", border: "1px solid #EAECF0", borderRadius: 14, boxShadow: "0 1px 3px rgba(16,24,40,.06), 0 1px 2px rgba(16,24,40,.04)" },
+      input: { border: "1.5px solid #D0D5DD", borderRadius: 8, padding: "8px 12px", fontSize: 13, color: NAVY, background: "#fff", outline: "none", width: "100%", transition: "border-color .15s, box-shadow .15s" },
+      select: { border: "1.5px solid #D0D5DD", borderRadius: 8, padding: "8px 12px", fontSize: 13, color: NAVY, background: "#fff", outline: "none", width: "100%" },
+      label: { fontSize: 12, fontWeight: 600, color: "#344054", marginBottom: 4, display: "block" },
+      th: { textAlign: "left", padding: "10px 14px", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.07em", color: "#667085", background: "#F9FAFB", borderBottom: "1px solid #EAECF0", whiteSpace: "nowrap" },
+      td: { padding: "11px 14px", borderBottom: "1px solid #F2F4F7", color: "#344054", verticalAlign: "middle" },
+      badge(c) { const m = { success: { bg: "#ECFDF3", cl: "#027A48" }, danger: { bg: "#FEF3F2", cl: "#B42318" }, warning: { bg: "#FFFAEB", cl: "#B54708" }, info: { bg: "#EFF8FF", cl: "#175CD3" }, gold: { bg: "#FBF4E0", cl: GOLD_D }, neutral: { bg: "#F2F4F7", cl: "#344054" } }; const b = m[c] || m.neutral; return { display: "inline-flex", alignItems: "center", padding: "2px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: b.bg, color: b.cl, whiteSpace: "nowrap" }; },
+      btn(v = "primary", sm = false) { const p = sm ? "5px 12px" : "9px 18px"; const fs = sm ? 12 : 13; const map = { primary: { background: GOLD, color: "#fff", border: "none", boxShadow: "0 1px 2px rgba(0,0,0,.10)" }, secondary: { background: "#fff", color: "#344054", border: "1.5px solid #D0D5DD", boxShadow: "0 1px 2px rgba(16,24,40,.05)" }, danger: { background: "#D92D20", color: "#fff", border: "none" }, success: { background: "#039855", color: "#fff", border: "none" }, ghost: { background: "transparent", color: "#667085", border: "none" } }; return { ...map[v] || map.primary, padding: p, borderRadius: 8, fontSize: fs, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", transition: "opacity .15s, transform .1s" }; },
+      modal: { position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, backdropFilter: "blur(4px)" },
+      mbox(w = 620) { return { background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(16,24,40,.22), 0 0 0 1px rgba(16,24,40,.04)", width: "100%", maxWidth: w, maxHeight: "92vh", display: "flex", flexDirection: "column", overflow: "hidden" }; },
+      mhdr: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 24px", borderBottom: "1px solid #EAECF0", flexShrink: 0 },
+      mbdy: { padding: 24, overflowY: "auto", flex: 1 },
+      mftr: { padding: "16px 24px", borderTop: "1px solid #EAECF0", display: "flex", gap: 10, justifyContent: "flex-end", flexShrink: 0 },
+      fg: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(210px,1fr))", gap: 16 },
+      err: { background: "#FEF3F2", border: "1px solid #FECDCA", borderRadius: 8, padding: "10px 14px", color: "#B42318", fontSize: 13, marginBottom: 12 },
     };
 
     // ── TOAST ──────────────────────────────────────────
@@ -1309,7 +1330,7 @@
       useEffect(() => { _addToast = (msg, t = "info") => { const id = uid(); setToasts(p => [...p, { id, msg, t }]); setTimeout(() => setToasts(p => p.filter(x => x.id !== id)), 3600); }; }, []);
       const brd = { success: "#059669", error: "#DC2626", warning: "#D97706", info: GOLD };
       return <div style={{ position: "fixed", bottom: 20, right: 20, zIndex: 9999, display: "flex", flexDirection: "column", gap: 8, pointerEvents: "none" }}>
-        {toasts.map(x => <div key={x.id} style={{ background: "#fff", border: "1px solid #E5E7EB", borderLeft: `4px solid ${brd[x.t] || GOLD}`, borderRadius: 10, padding: "11px 16px", boxShadow: "0 4px 16px rgba(0,0,0,.12)", fontSize: 13, display: "flex", alignItems: "center", gap: 10, minWidth: 260, maxWidth: 360, pointerEvents: "all" }}>
+        {toasts.map(x => <div key={x.id} style={{ background: "#fff", border: "1px solid #EAECF0", borderLeft: `3px solid ${brd[x.t] || GOLD}`, borderRadius: 12, padding: "12px 16px", boxShadow: "0 8px 24px rgba(16,24,40,.14), 0 0 0 1px rgba(16,24,40,.04)", fontSize: 13, display: "flex", alignItems: "center", gap: 10, minWidth: 280, maxWidth: 380, pointerEvents: "all" }}>
           <span>{x.t === "success" ? "✅" : x.t === "error" ? "❌" : x.t === "warning" ? "⚠️" : "ℹ️"}</span>
           <span style={{ color: NAVY, flex: 1 }}>{x.msg}</span>
         </div>)}
@@ -1320,7 +1341,7 @@
     // ── SHARED COMPONENTS ──────────────────────────────
     function Inp({ value, onChange, type = "text", placeholder = "", disabled = false, step, style = {} }) { return <input style={{ ...C.input, ...style, opacity: disabled ? .6 : 1 }} type={type} value={value || ""} onChange={onChange} placeholder={placeholder} disabled={disabled} step={step} />; }
     function Sel({ value, onChange, children }) { return <select style={C.select} value={value || ""} onChange={onChange}>{children}</select>; }
-    function PageHeader({ title, sub, children }) { return <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 10 }}><div><div style={{ fontSize: 20, fontWeight: 700, color: NAVY }}>{title}</div>{sub && <div style={{ fontSize: 13, color: "#6B7280", marginTop: 2 }}>{sub}</div>}</div>{children && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>{children}</div>}</div>; }
+    function PageHeader({ title, sub, children }) { return <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22, flexWrap: "wrap", gap: 10 }}><div><div style={{ fontSize: 21, fontWeight: 700, color: NAVY, letterSpacing: "-0.02em" }}>{title}</div>{sub && <div style={{ fontSize: 13, color: "#667085", marginTop: 3 }}>{sub}</div>}</div>{children && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>{children}</div>}</div>; }
     function SortTh({ label, sortKey, activeKey, sortDir, onToggle, align = "left" }) {
       const active = sortKey === activeKey;
       const arrow = active ? (sortDir === "asc" ? " ▲" : " ▼") : "";
@@ -1700,11 +1721,14 @@
         </div>
       </div>;
     }
-    function Logo({ size = 32 }) {
-      return <svg width={size} height={size} viewBox="0 0 100 100" fill="none">
-        <path d="M50 6 L88 29 L88 74 Q88 90 72 90 L28 90 Q12 90 12 74 L12 29 Z" stroke={GOLD} strokeWidth="7" fill="none" strokeLinejoin="round" />
-        <text x="22" y="74" fontFamily="Georgia,serif" fontSize="52" fontWeight="bold" fill={GOLD}>N</text>
-      </svg>;
+    function Logo({ size = 32, style = {} }) {
+      return <img src={NASAMA_ICON_SRC} alt="Nasama logo" style={{ width: size, height: size, objectFit: "contain", display: "block", ...style }} />;
+    }
+    function BrandIcon({ size = 32, style = {} }) {
+      return <Logo size={size} style={style} />;
+    }
+    function BrandWordmark({ width = 180, style = {} }) {
+      return <img src={NASAMA_WORDMARK_SRC} alt="Nasama Properties" style={{ width, maxWidth: "100%", height: "auto", display: "block", ...style }} />;
     }
 
     // ── POSTING PREVIEW ────────────────────────────────
@@ -1738,9 +1762,11 @@
       { s: "MAIN" }, { id: "dashboard", label: "Dashboard", icon: "🏠" },
       { s: "SALES" }, { id: "deals", label: "Deals / Pipeline", icon: "🤝" }, { id: "receipts", label: "Sale Receipts", icon: "💰" }, { id: "customers", label: "Customers", icon: "👥" }, { id: "brokers", label: "Brokers", icon: "👔" }, { id: "developers", label: "Developers", icon: "🏗️" },
       { s: "EXPENSES" }, { id: "payments", label: "Payments", icon: "💳" }, { id: "vendors", label: "Vendors", icon: "🏭" },
+      { s: "PLANNING" }, { id: "futureExpenses", label: "Future Expenses", icon: "📅" },
       { s: "BANKING" }, { id: "banking", label: "Banking", icon: "🏦" },
       { s: "ACCOUNTING" }, { id: "journal", label: "Journal Entries", icon: "📒" }, { id: "coa", label: "Chart of Accounts", icon: "🗂" },
       { s: "REPORTS" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "vat", label: "VAT / Taxes", icon: "🧾" },
       { s: "HELP" }, { id: "manual", label: "User Manual", icon: "📖" },
       { s: "SYSTEM" }, { id: "users", label: "User Management", icon: "👥" }, { id: "settings", label: "Settings", icon: "⚙️" },
+      { id: "banana2", label: "Performance", icon: "📊" },
     ];
