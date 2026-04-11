@@ -5,20 +5,28 @@
 
 // ── PRINT TRIGGER ────────────────────────────────────────
 function rptPrint(landscape) {
+  // Remove any stale landscape override first
+  var old = document.getElementById('__rpt_landscape__');
+  if (old) old.remove();
+
   var styleEl = null;
   if (landscape) {
     styleEl = document.createElement('style');
     styleEl.id = '__rpt_landscape__';
-    styleEl.textContent = '@media print { @page { size: A4 landscape; } }';
+    styleEl.textContent = '@media print { @page { size: A4 landscape; margin: 12mm 15mm 22mm; } }';
     document.head.appendChild(styleEl);
   }
-  window.print();
-  if (styleEl) {
-    setTimeout(function () {
-      var el = document.getElementById('__rpt_landscape__');
-      if (el) el.remove();
-    }, 2000);
-  }
+
+  // Small delay so the injected @page rule is parsed before the print dialog opens
+  setTimeout(function () {
+    window.print();
+    if (styleEl) {
+      setTimeout(function () {
+        var el = document.getElementById('__rpt_landscape__');
+        if (el) el.remove();
+      }, 3000);
+    }
+  }, 120);
 }
 
 // ── DESIGN TOKENS ────────────────────────────────────────
