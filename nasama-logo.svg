@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 105">
+  <!-- House / pentagon outline -->
+  <path d="M50,6 L94,36 L94,96 L6,96 L6,36 Z"
+        fill="none" stroke="#C9A044" stroke-width="7"
+        stroke-linejoin="round" stroke-linecap="round"/>
+  <!-- Serif N -->
+  <text x="50" y="83"
+        font-family="Georgia, 'Times New Roman', serif"
+        font-size="54"
+        fill="#C9A044"
+        text-anchor="middle">N</text>
+</svg>

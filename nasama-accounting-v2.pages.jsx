@@ -1938,7 +1938,7 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, journal, 
   </div>;
 }
 
-function ReportsPage({ accounts, txns }) {
+function ReportsPage({ accounts, txns, settings }) {
   const [tab, setTab] = useState("pnl");
   const [dateFilter, setDateFilter] = useState(() => { const r = computeDateRange("this_month"); return { preset: "this_month", ...r }; });
   const tabs = [
@@ -1946,113 +1946,119 @@ function ReportsPage({ accounts, txns }) {
     { id: "tb", label: "Trial Balance" }, { id: "gl", label: "General Ledger" }
   ];
 
-  // Date-filtered transactions and ledger (for P&L, TB, GL) — within the from→to range
+  // Date-filtered transactions and ledger (P&L, TB, GL) — within the from→to range
   const filteredTxns = useMemo(() => txns.filter(t => (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to)), [txns, dateFilter]);
   const filteredLedger = useMemo(() => buildLedger(filteredTxns, accounts), [filteredTxns, accounts]);
 
-  // To-date ledger — all transactions UP TO the selected end date (for Balance Sheet).
-  // A balance sheet is a point-in-time snapshot: it must include all history up to the "as of" date,
-  // regardless of the from date, so 2025 liabilities still appear when viewing April 2026.
+  // To-date ledger — all transactions UP TO the selected end date (Balance Sheet)
   const toDateTxns = useMemo(() => txns.filter(t => !dateFilter.to || (t.date || "") <= dateFilter.to), [txns, dateFilter.to]);
   const toDateLedger = useMemo(() => buildLedger(toDateTxns, accounts), [toDateTxns, accounts]);
 
-  // P&L (date-filtered — activity within the selected period)
+  // P&L totals
   const revenues = accounts.filter(a => a.type === "Revenue");
   const expenses = accounts.filter(a => a.type === "Expense");
   const totalRev = revenues.reduce((s, a) => s + accountBalance(a, filteredLedger), 0);
   const totalExp = expenses.reduce((s, a) => s + accountBalance(a, filteredLedger), 0);
 
-  // Balance Sheet — cumulative balances as of the end date (toDateLedger)
-  // Net income also uses toDateLedger so Assets = L + E + NI always holds
-  const assets = accounts.filter(a => a.type === "Asset");
+  // Balance Sheet totals
+  const assets      = accounts.filter(a => a.type === "Asset");
   const liabilities = accounts.filter(a => a.type === "Liability");
-  const equity = accounts.filter(a => a.type === "Equity");
-  const totalAssets = assets.reduce((s, a) => s + accountBalance(a, toDateLedger), 0);
+  const equity      = accounts.filter(a => a.type === "Equity");
+  const totalAssets      = assets.reduce((s, a) => s + accountBalance(a, toDateLedger), 0);
   const totalLiabilities = liabilities.reduce((s, a) => s + accountBalance(a, toDateLedger), 0);
-  const totalEquity = equity.reduce((s, a) => s + accountBalance(a, toDateLedger), 0);
-  const bsNetRev = revenues.reduce((s, a) => s + accountBalance(a, toDateLedger), 0);
-  const bsNetExp = expenses.reduce((s, a) => s + accountBalance(a, toDateLedger), 0);
+  const totalEquity      = equity.reduce((s, a) => s + accountBalance(a, toDateLedger), 0);
+  const bsNetRev  = revenues.reduce((s, a) => s + accountBalance(a, toDateLedger), 0);
+  const bsNetExp  = expenses.reduce((s, a) => s + accountBalance(a, toDateLedger), 0);
   const netIncome = bsNetRev - bsNetExp;
+
+  // GL and TB look better in landscape (wider columns)
+  const isWide = tab === "gl" || tab === "tb";
+  const handlePrint = () => rptPrint(isWide);
+  const handlePDF   = () => rptPrint(isWide);
 
   return <div>
     <PageHeader title="Reports" sub="Financial statements" />
-    <DateFilterBar dateFilter={dateFilter} setDateFilter={setDateFilter} />
 
-    <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
-      {tabs.map(t => <button key={t.id} style={{ ...C.btn(tab === t.id ? "primary" : "secondary"), fontSize: 13 }} onClick={() => setTab(t.id)}>{t.label}</button>)}
+    {/* Controls — hidden during print */}
+    <div className="no-print">
+      <DateFilterBar dateFilter={dateFilter} setDateFilter={setDateFilter} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {tabs.map(t => <button key={t.id} style={{ ...C.btn(tab === t.id ? "primary" : "secondary"), fontSize: 13 }} onClick={() => setTab(t.id)}>{t.label}</button>)}
+        </div>
+        <RptActions onPrint={handlePrint} onPDF={handlePDF} />
+      </div>
     </div>
 
-    {tab === "pnl" && <div style={C.card}>
-      <div style={{ padding: "16px 22px", borderBottom: "1px solid #E5E7EB", fontWeight: 700, fontSize: 16 }}>Profit & Loss — {dateFilter.from && dateFilter.to ? `${dateFilter.from} → ${dateFilter.to}` : `YTD ${new Date().getFullYear()}`}</div>
-      <div style={{ padding: 22 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, color: "#059669", marginBottom: 10 }}>REVENUE</div>
-        {revenues.filter(a => accountBalance(a, filteredLedger) !== 0).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} — {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, filteredLedger))}</span></div>)}
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderTop: "2px solid #E5E7EB", marginTop: 8, fontWeight: 700 }}><span>Total Revenue</span><span style={{ color: "#059669" }}>{fmtAED(totalRev)}</span></div>
+    {/* ── Screen view — card/dashboard UI, hidden during print */}
+    <div className="no-print">
+      {tab === "pnl" && <PLReport
+        accounts={accounts}
+        filteredLedger={filteredLedger}
+        totalRev={totalRev}
+        totalExp={totalExp}
+        dateFilter={dateFilter}
+        settings={settings}
+      />}
+      {tab === "bs" && <BSReport
+        accounts={accounts}
+        toDateLedger={toDateLedger}
+        totalAssets={totalAssets}
+        totalLiabilities={totalLiabilities}
+        totalEquity={totalEquity}
+        netIncome={netIncome}
+        dateFilter={dateFilter}
+        settings={settings}
+      />}
+      {tab === "tb" && <TBReport
+        accounts={accounts}
+        filteredLedger={filteredLedger}
+        dateFilter={dateFilter}
+        settings={settings}
+      />}
+      {tab === "gl" && <GLReport
+        accounts={accounts}
+        txns={txns}
+        filteredTxns={filteredTxns}
+        dateFilter={dateFilter}
+        settings={settings}
+      />}
+    </div>
 
-        <div style={{ fontWeight: 700, fontSize: 14, color: "#D97706", marginTop: 20, marginBottom: 10 }}>EXPENSES</div>
-        {expenses.filter(a => accountBalance(a, filteredLedger) !== 0).sort((a, b) => accountBalance(b, filteredLedger) - accountBalance(a, filteredLedger)).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} — {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, filteredLedger))}</span></div>)}
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderTop: "2px solid #E5E7EB", marginTop: 8, fontWeight: 700 }}><span>Total Expenses</span><span style={{ color: "#D97706" }}>{fmtAED(totalExp)}</span></div>
-
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "14px 0", borderTop: "3px double #1C1C2E", marginTop: 16, fontWeight: 700, fontSize: 16 }}><span>NET INCOME</span><span style={{ color: (totalRev - totalExp) >= 0 ? "#059669" : "#DC2626" }}>{fmtAED(totalRev - totalExp)}</span></div>
-      </div>
-    </div>}
-
-    {tab === "bs" && <div style={C.card}>
-      <div style={{ padding: "16px 22px", borderBottom: "1px solid #E5E7EB", fontWeight: 700, fontSize: 16 }}>Balance Sheet — as of {dateFilter.to ? fmtDate(dateFilter.to) : fmtDate(todayStr())}</div>
-      <div style={{ padding: 22 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, color: "#2563EB", marginBottom: 10 }}>ASSETS</div>
-        {assets.filter(a => accountBalance(a, toDateLedger) !== 0).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} — {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, toDateLedger))}</span></div>)}
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderTop: "2px solid #E5E7EB", marginTop: 8, fontWeight: 700 }}><span>Total Assets</span><span style={{ color: "#2563EB" }}>{fmtAED(totalAssets)}</span></div>
-
-        <div style={{ fontWeight: 700, fontSize: 14, color: "#DC2626", marginTop: 20, marginBottom: 10 }}>LIABILITIES</div>
-        {liabilities.filter(a => accountBalance(a, toDateLedger) !== 0).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} — {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, toDateLedger))}</span></div>)}
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderTop: "2px solid #E5E7EB", marginTop: 8, fontWeight: 700 }}><span>Total Liabilities</span><span style={{ color: "#DC2626" }}>{fmtAED(totalLiabilities)}</span></div>
-
-        <div style={{ fontWeight: 700, fontSize: 14, color: "#7C3AED", marginTop: 20, marginBottom: 10 }}>EQUITY</div>
-        {equity.filter(a => accountBalance(a, toDateLedger) !== 0).map(a => <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span>{a.code} — {a.name}</span><span style={{ fontWeight: 600 }}>{fmtAED(accountBalance(a, toDateLedger))}</span></div>)}
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}><span style={{ fontStyle: "italic" }}>Retained Earnings (Net Income to date)</span><span style={{ fontWeight: 600 }}>{fmtAED(netIncome)}</span></div>
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderTop: "2px solid #E5E7EB", marginTop: 8, fontWeight: 700 }}><span>Total Equity + Retained Earnings</span><span style={{ color: "#7C3AED" }}>{fmtAED(totalEquity + netIncome)}</span></div>
-
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "14px 0", borderTop: "3px double #1C1C2E", marginTop: 16, fontWeight: 700, fontSize: 16 }}><span>Total L + E</span><span>{fmtAED(totalLiabilities + totalEquity + netIncome)}</span></div>
-        <div style={{ marginTop: 8, fontSize: 12, color: Math.abs(totalAssets - (totalLiabilities + totalEquity + netIncome)) <= 1 ? "#059669" : "#DC2626", fontWeight: 600 }}>
-          {Math.abs(totalAssets - (totalLiabilities + totalEquity + netIncome)) <= 1 ? "✅ Balance sheet is balanced" : "❌ Balance sheet is NOT balanced — investigate"}
-        </div>
-      </div>
-    </div>}
-
-    {tab === "tb" && <div style={C.card}>
-      <div style={{ padding: "16px 22px", borderBottom: "1px solid #E5E7EB", fontWeight: 700, fontSize: 16 }}>Trial Balance</div>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead><tr><th style={C.th}>Code</th><th style={C.th}>Account</th><th style={C.th}>Type</th><th style={{ ...C.th, textAlign: "right" }}>Debit</th><th style={{ ...C.th, textAlign: "right" }}>Credit</th></tr></thead>
-        <tbody>
-          {accounts.sort((a, b) => a.code.localeCompare(b.code)).filter(a => { const e = filteredLedger[a.id] || { debit: 0, credit: 0 }; return e.debit > 0 || e.credit > 0; }).map(a => {
-            const e = filteredLedger[a.id] || { debit: 0, credit: 0 };
-            const nb = NORMAL_BAL[a.type];
-            const bal = nb === "debit" ? (e.debit - e.credit) : (e.credit - e.debit);
-            return <tr key={a.id}><td style={{ ...C.td, fontFamily: "monospace" }}>{a.code}</td><td style={C.td}>{a.name}</td><td style={C.td}>{a.type}</td>
-              <td style={{ ...C.td, textAlign: "right" }}>{nb === "debit" && bal !== 0 ? fmtAED(bal) : "—"}</td>
-              <td style={{ ...C.td, textAlign: "right" }}>{nb === "credit" && bal !== 0 ? fmtAED(bal) : "—"}</td></tr>;
-          })}
-        </tbody>
-        <tfoot><tr style={{ background: "#F9FAFB" }}><td colSpan={3} style={{ ...C.td, fontWeight: 700 }}>TOTALS</td>
-          <td style={{ ...C.td, textAlign: "right", fontWeight: 700 }}>{fmtAED(accounts.reduce((s, a) => { const nb = NORMAL_BAL[a.type]; const bal = accountBalance(a, filteredLedger); return s + (nb === "debit" ? bal : 0); }, 0))}</td>
-          <td style={{ ...C.td, textAlign: "right", fontWeight: 700 }}>{fmtAED(accounts.reduce((s, a) => { const nb = NORMAL_BAL[a.type]; const bal = accountBalance(a, filteredLedger); return s + (nb === "credit" ? bal : 0); }, 0))}</td>
-        </tr></tfoot>
-      </table>
-    </div>}
-
-    {tab === "gl" && <div style={C.card}>
-      <div style={{ padding: "16px 22px", borderBottom: "1px solid #E5E7EB", fontWeight: 700, fontSize: 16 }}>General Ledger</div>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead><tr><th style={C.th}>Date</th><th style={C.th}>Ref</th><th style={C.th}>Account</th><th style={C.th}>Description</th><th style={{ ...C.th, textAlign: "right" }}>Debit</th><th style={{ ...C.th, textAlign: "right" }}>Credit</th></tr></thead>
-        <tbody>
-          {filteredTxns.filter(t => !t.isVoid).sort((a, b) => (a.date || "").localeCompare(b.date || "")).flatMap(t => (t.lines || []).map(l => {
-            const a = accounts.find(x => x.id === l.accountId);
-            return { date: t.date, ref: t.ref, account: a ? `${a.code} ${a.name}` : l.accountId, desc: l.memo || t.description, debit: l.debit, credit: l.credit, key: `${t.id}-${l.id}` };
-          })).map(row => <tr key={row.key}><td style={C.td}>{fmtDate(row.date)}</td><td style={C.td}>{row.ref}</td><td style={C.td}>{row.account}</td><td style={C.td}>{row.desc}</td><td style={{ ...C.td, textAlign: "right" }}>{row.debit ? fmtAED(row.debit) : "—"}</td><td style={{ ...C.td, textAlign: "right" }}>{row.credit ? fmtAED(row.credit) : "—"}</td></tr>)}
-        </tbody>
-      </table>
-    </div>}
+    {/* ── Print document — hidden on screen (display:none), shown only in @media print */}
+    <div id="rpt-print-area">
+      {tab === "pnl" && <PLPrintDoc
+        accounts={accounts}
+        filteredLedger={filteredLedger}
+        totalRev={totalRev}
+        totalExp={totalExp}
+        dateFilter={dateFilter}
+        settings={settings}
+      />}
+      {tab === "bs" && <BSPrintDoc
+        accounts={accounts}
+        toDateLedger={toDateLedger}
+        totalAssets={totalAssets}
+        totalLiabilities={totalLiabilities}
+        totalEquity={totalEquity}
+        netIncome={netIncome}
+        dateFilter={dateFilter}
+        settings={settings}
+      />}
+      {tab === "tb" && <TBPrintDoc
+        accounts={accounts}
+        filteredLedger={filteredLedger}
+        dateFilter={dateFilter}
+        settings={settings}
+      />}
+      {tab === "gl" && <GLPrintDoc
+        accounts={accounts}
+        txns={txns}
+        filteredTxns={filteredTxns}
+        dateFilter={dateFilter}
+        settings={settings}
+      />}
+    </div>
   </div>;
 }
 

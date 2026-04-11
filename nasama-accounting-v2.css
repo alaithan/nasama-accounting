@@ -45,3 +45,94 @@ select option { background: #fff; color: #0C0F1E }
   input, select, textarea { max-width: 100%; width: 100% }
   html, body { overflow-x: hidden; width: 100% }
 }
+
+/* ═══════════════════════════════════════════════════════
+   PRINT & REPORT STYLES  — Premium Corporate Layout
+   ═══════════════════════════════════════════════════════ */
+
+/* Print document hidden on screen — revealed only inside @media print */
+#rpt-print-area { display: none; }
+
+/* Force background colours + gradients to print accurately */
+#rpt-print-area,
+#rpt-print-area * {
+  -webkit-print-color-adjust: exact !important;
+  print-color-adjust:          exact !important;
+}
+
+/* ── Print page footer: hidden on screen, fixed on every print page */
+.rpt-page-footer { display: none; }
+
+@media print {
+  /* ── Reset SPA shell so the report flows freely */
+  html, body, #root { overflow: visible !important; height: auto !important; }
+
+  /* ── A4 portrait with generous margins; extra bottom for footer */
+  @page {
+    margin: 12mm 15mm 22mm;
+    size: A4 portrait;
+  }
+
+  /* ── Page-number via CSS counter (Chrome/Edge) */
+  @page { @bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 8pt; font-family: 'Inter', Arial, sans-serif; color: #9CA3AF; } }
+  @page { @bottom-left  { content: "Nasama Properties · Accounting System v2";  font-size: 8pt; font-family: 'Inter', Arial, sans-serif; color: #9CA3AF; } }
+
+  /* ── Visibility isolation: hide the whole app, show only the report */
+  body * { visibility: hidden !important; }
+
+  #rpt-print-area {
+    display:    block !important;
+    visibility: visible !important;
+    position:   absolute !important;
+    top:   0 !important;
+    left:  0 !important;
+    width: 100% !important;
+    background: #fff !important;
+    padding-bottom: 16mm !important; /* clear the footer zone */
+  }
+  #rpt-print-area * { visibility: visible !important; }
+
+  /* ── Running page footer (fallback, appears via fixed positioning) */
+  .rpt-page-footer {
+    display:    flex !important;
+    visibility: visible !important;
+    position:   fixed !important;
+    bottom:     0 !important;
+    left:   0 !important;
+    right:  0 !important;
+    padding:    5pt 15mm 4pt !important;
+    border-top: 0.75pt solid #E5E7EB !important;
+    background: #fff !important;
+    font-size:  8pt !important;
+    color:      #9CA3AF !important;
+    font-family: 'Inter', Arial, sans-serif !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust:          exact !important;
+  }
+
+  /* ── Utility classes */
+  .no-print   { display: none !important; }
+  .print-only { display: block !important; }
+
+  /* ── Table page-flow */
+  table { border-collapse: collapse !important; page-break-inside: auto; }
+  thead { display: table-header-group; }
+  tfoot { display: table-footer-group; }
+  tr    { page-break-inside: avoid; }
+
+  /* ── Section and block break control */
+  .rpt-section    { page-break-inside: avoid; }
+  .rpt-acct-block { page-break-inside: avoid; }
+  .page-break     { page-break-before: always !important; }
+
+  /* ── Typography tuning for print */
+  #rpt-print-area {
+    font-feature-settings: 'tnum' 1, 'kern' 1 !important;
+    -webkit-font-smoothing: antialiased !important;
+  }
+
+  /* ── Prevent orphaned section headings */
+  h2, h3, .rpt-section-label { page-break-after: avoid; }
+}

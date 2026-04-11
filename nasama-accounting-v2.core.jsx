@@ -9,7 +9,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     // ── BRAND ─────────────────────────────────────────
     const GOLD = "#C9A044", GOLD_D = "#A8853A", NAVY = "#0C0F1E", NAVY2 = "#161B35";
     const NASAMA_WORDMARK_SRC = "./nasama_wordmark_transparent.png";
-    const NASAMA_ICON_SRC = "./IMG_4854.PNG";
+    const NASAMA_ICON_SRC = "./nasama-logo.svg";
     const DEFAULT_REPORTING_START_DATE = "2026-01-01";
 
     // ── CONSTANTS ─────────────────────────────────────
