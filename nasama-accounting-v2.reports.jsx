@@ -17,7 +17,8 @@ function rptPrint(landscape) {
     document.head.appendChild(styleEl);
   }
 
-  // Small delay so the injected @page rule is parsed before the print dialog opens
+  // Delay so the injected @page rule is fully parsed before the print dialog opens.
+  // 400ms is more reliable than 120ms for Microsoft Print to PDF.
   setTimeout(function () {
     window.print();
     if (styleEl) {
@@ -26,7 +27,7 @@ function rptPrint(landscape) {
         if (el) el.remove();
       }, 3000);
     }
-  }, 120);
+  }, 400);
 }
 
 // ── DESIGN TOKENS ────────────────────────────────────────

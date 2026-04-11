@@ -794,15 +794,17 @@ function GLPrintDoc({ accounts, txns, filteredTxns, dateFilter, settings }) {
               </span>
             </div>
 
-            {/* clip — keeps all 6 cols inside the page regardless of content length */}
+            {/* 6-column table — tightly sized to fit A4 portrait (180mm ≈ 680px available)
+                Fixed cols total ≈ 362px; description takes the remaining ~318px.
+                Each number cell has explicit overflow:hidden so nothing bleeds right. */}
             <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
               <colgroup>
-                <col style={{ width: 72 }} />   {/* Date */}
-                <col style={{ width: 88 }} />   {/* Ref  */}
-                <col />                          {/* Description — flex */}
-                <col style={{ width: 100 }} />  {/* Debit   */}
-                <col style={{ width: 100 }} />  {/* Credit  */}
-                <col style={{ width: 108 }} />  {/* Balance */}
+                <col style={{ width: "54px"  }} />  {/* Date        */}
+                <col style={{ width: "66px"  }} />  {/* Ref         */}
+                <col />                              {/* Description */}
+                <col style={{ width: "82px"  }} />  {/* Debit       */}
+                <col style={{ width: "82px"  }} />  {/* Credit      */}
+                <col style={{ width: "90px"  }} />  {/* Balance     */}
               </colgroup>
               <thead>
                 <tr>
@@ -815,58 +817,85 @@ function GLPrintDoc({ accounts, txns, filteredTxns, dateFilter, settings }) {
                 </tr>
               </thead>
               <tbody>
-                {/* Opening balance */}
+                {/* Opening balance row */}
                 <tr style={{ pageBreakInside: "avoid" }}>
-                  <td style={tdGL({ color: PD.inkSub, whiteSpace: "nowrap", overflow: "hidden" })}>{dateFilter.from ? fmtDate(dateFilter.from) : "—"}</td>
-                  <td style={tdGL({ color: PD.inkSub })}>—</td>
-                  <td style={tdGL({ color: PD.inkSub, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" })}>Opening Balance</td>
-                  <td style={tdGL({ textAlign: "right", whiteSpace: "nowrap" })}>—</td>
-                  <td style={tdGL({ textAlign: "right", whiteSpace: "nowrap" })}>—</td>
-                  <td style={tdGL({ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 600, whiteSpace: "nowrap" })}>
+                  <td style={tdGL({ color: PD.inkSub, whiteSpace: "nowrap", overflow: "hidden" })}>
+                    {dateFilter.from ? fmtDate(dateFilter.from) : "—"}
+                  </td>
+                  <td style={tdGL({ color: PD.inkSub, overflow: "hidden" })}>—</td>
+                  <td style={tdGL({ color: PD.inkSub, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" })}>
+                    Opening Balance
+                  </td>
+                  <td style={tdGL({ textAlign: "right", color: PD.inkSub, whiteSpace: "nowrap", overflow: "hidden" })}>—</td>
+                  <td style={tdGL({ textAlign: "right", color: PD.inkSub, whiteSpace: "nowrap", overflow: "hidden" })}>—</td>
+                  <td style={tdGL({ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 600, color: PD.inkDk, whiteSpace: "nowrap", overflow: "hidden", ...PD.pca })}>
                     {pFmt(g.openingBal)}
                   </td>
                 </tr>
+
                 {/* Transaction rows */}
                 {g.rows.map(row => {
-                  /* Truncate long refs (bank IDs, hashes) — full value stored in title */
                   const refShort = row.ref
-                    ? (row.ref.length > 14 ? row.ref.slice(0, 12) + "…" : row.ref)
+                    ? (row.ref.length > 10 ? row.ref.slice(0, 9) + "…" : row.ref)
                     : "—";
                   return (
-                  <tr key={row.key} style={{ pageBreakInside: "avoid" }}>
-                    <td style={tdGL({ color: PD.inkSub, whiteSpace: "nowrap", overflow: "hidden" })}>{fmtDate(row.date)}</td>
-                    <td title={row.ref || ""} style={tdGL({ fontFamily: PD.mono, fontSize: PD.fXs, color: PD.inkSub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" })}>{refShort}</td>
-                    <td title={row.desc} style={tdGL({ color: PD.inkMd, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" })}>{row.desc}</td>
-                    <td style={tdGL({ textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", color: row.debit ? PD.inkDk : PD.inkSub })}>
-                      {row.debit  ? pFmt(row.debit)  : "—"}
-                    </td>
-                    <td style={tdGL({ textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", color: row.credit ? PD.inkDk : PD.inkSub })}>
-                      {row.credit ? pFmt(row.credit) : "—"}
-                    </td>
-                    <td style={tdGL({ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 600, whiteSpace: "nowrap", color: row.balance >= 0 ? PD.inkDk : PD.red, ...PD.pca })}>
-                      {pFmt(row.balance)}
-                    </td>
-                  </tr>
+                    <tr key={row.key} style={{ pageBreakInside: "avoid" }}>
+                      <td style={tdGL({ color: PD.inkSub, whiteSpace: "nowrap", overflow: "hidden" })}>
+                        {fmtDate(row.date)}
+                      </td>
+                      <td title={row.ref || ""} style={tdGL({ fontFamily: PD.mono, fontSize: PD.fXs, color: PD.inkSub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" })}>
+                        {refShort}
+                      </td>
+                      <td title={row.desc} style={tdGL({ color: PD.inkMd, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" })}>
+                        {row.desc}
+                      </td>
+                      {/* Debit — always dark when non-zero; show dash only in muted */}
+                      <td style={tdGL({ textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", overflow: "hidden", color: row.debit ? PD.inkDk : PD.ruleLt, ...PD.pca })}>
+                        {row.debit ? pFmt(row.debit) : "—"}
+                      </td>
+                      {/* Credit */}
+                      <td style={tdGL({ textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", overflow: "hidden", color: row.credit ? PD.inkDk : PD.ruleLt, ...PD.pca })}>
+                        {row.credit ? pFmt(row.credit) : "—"}
+                      </td>
+                      {/* Running balance */}
+                      <td style={tdGL({ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", color: row.balance >= 0 ? PD.inkDk : PD.red, ...PD.pca })}>
+                        {pFmt(row.balance)}
+                      </td>
+                    </tr>
                   );
                 })}
               </tbody>
+
               <tfoot>
                 <tr>
                   <td colSpan={3} style={{
-                    padding: "6px 8px 6px 0", fontWeight: 700, fontSize: PD.fMd, color: PD.navy,
-                    borderTop: "1.5px solid " + PD.navy, fontFamily: PD.sans,
+                    padding: "5px 8px 5px 0", fontWeight: 700, fontSize: PD.fSm,
+                    color: PD.navy, borderTop: "1.5px solid " + PD.navy, fontFamily: PD.sans,
                   }}>
                     Closing Balance
                   </td>
-                  <td style={{ padding: "6px 0", textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums", borderTop: "1.5px solid " + PD.navy }}>
+                  <td style={{
+                    padding: "5px 0", textAlign: "right", fontWeight: 700, fontSize: PD.fSm,
+                    fontVariantNumeric: "tabular-nums", color: PD.inkDk,
+                    borderTop: "1.5px solid " + PD.navy, whiteSpace: "nowrap", overflow: "hidden",
+                    ...PD.pca,
+                  }}>
                     {pFmt(totalDr)}
                   </td>
-                  <td style={{ padding: "6px 0", textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums", borderTop: "1.5px solid " + PD.navy }}>
+                  <td style={{
+                    padding: "5px 0", textAlign: "right", fontWeight: 700, fontSize: PD.fSm,
+                    fontVariantNumeric: "tabular-nums", color: PD.inkDk,
+                    borderTop: "1.5px solid " + PD.navy, whiteSpace: "nowrap", overflow: "hidden",
+                    ...PD.pca,
+                  }}>
                     {pFmt(totalCr)}
                   </td>
                   <td style={{
-                    padding: "6px 0", textAlign: "right", fontWeight: 800, fontVariantNumeric: "tabular-nums",
-                    color: g.closing >= 0 ? PD.navy : PD.red, borderTop: "1.5px solid " + PD.navy, ...PD.pca,
+                    padding: "5px 0", textAlign: "right", fontWeight: 800, fontSize: PD.fSm,
+                    fontVariantNumeric: "tabular-nums",
+                    color: g.closing >= 0 ? PD.navy : PD.red,
+                    borderTop: "1.5px solid " + PD.navy, whiteSpace: "nowrap", overflow: "hidden",
+                    ...PD.pca,
                   }}>
                     {pFmt(g.closing)}
                   </td>
