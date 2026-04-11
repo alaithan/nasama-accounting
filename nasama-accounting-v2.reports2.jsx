@@ -113,10 +113,13 @@ function CFReport(props) {
     }
     return lines.map(function(ln, i) {
       var color = ln.amount >= 0 ? RPT.green : RPT.red;
+      var refTxt = ln.ref ? (ln.ref.length > 16 ? ln.ref.slice(0, 14) + "…" : ln.ref) : "—";
+      // Full memo for tooltip; display truncated via CSS
+      var memo = ln.memo || "Transaction";
       return React.createElement("tr", { key: i },
         React.createElement("td", { style: { padding: "10px 16px", fontSize: 11, color: RPT.subtle, fontFamily: "ui-monospace,monospace", borderBottom: "1px solid " + RPT.rule, whiteSpace: "nowrap" } }, ln.date ? fmtDate(ln.date) : "—"),
-        React.createElement("td", { style: { padding: "10px 16px", fontSize: 11, color: RPT.muted, fontFamily: "ui-monospace,monospace", borderBottom: "1px solid " + RPT.rule, whiteSpace: "nowrap" } }, ln.ref || "—"),
-        React.createElement("td", { style: { padding: "10px 16px", fontSize: 13, color: RPT.textHeavy, borderBottom: "1px solid " + RPT.rule } }, ln.memo || "Transaction"),
+        React.createElement("td", { title: ln.ref || "", style: { padding: "10px 16px", fontSize: 11, color: RPT.muted, fontFamily: "ui-monospace,monospace", borderBottom: "1px solid " + RPT.rule, whiteSpace: "nowrap", overflow: "hidden" } }, refTxt),
+        React.createElement("td", { title: memo, style: { padding: "10px 16px", fontSize: 13, color: RPT.textHeavy, borderBottom: "1px solid " + RPT.rule, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 0 } }, memo),
         React.createElement("td", { style: { padding: "10px 16px", textAlign: "right", fontSize: 13, fontWeight: 600, color: color, borderBottom: "1px solid " + RPT.rule, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" } },
           (ln.amount >= 0 ? "+" : "") + fmtAED(ln.amount)
         )
@@ -129,10 +132,10 @@ function CFReport(props) {
       React.createElement(RptSectionLabel, { label: title, color: color }),
       React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", tableLayout: "fixed" } },
         React.createElement("colgroup", null,
-          React.createElement("col", { style: { width: 100 } }),
-          React.createElement("col", { style: { width: 100 } }),
+          React.createElement("col", { style: { width: 110 } }),
+          React.createElement("col", { style: { width: 120 } }),
           React.createElement("col", null),
-          React.createElement("col", { style: { width: 180 } })
+          React.createElement("col", { style: { width: 190 } })
         ),
         React.createElement("thead", null,
           React.createElement("tr", null,
