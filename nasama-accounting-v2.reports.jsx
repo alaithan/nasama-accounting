@@ -4,30 +4,89 @@
    ════════════════════════════════════════════════════════ */
 
 // ── PRINT TRIGGER ────────────────────────────────────────
+// Uses a hidden iframe instead of window.print() on the main SPA page.
+// This completely bypasses SPA layout isolation issues, @page injection timing,
+// and landscape override unreliability in Microsoft Print to PDF / Chrome.
 function rptPrint(landscape) {
-  // Remove any stale landscape override first
-  var old = document.getElementById('__rpt_landscape__');
+  var el = document.getElementById('rpt-print-area');
+  if (!el) { console.warn('rptPrint: #rpt-print-area not found'); return; }
+
+  // Snapshot the already-rendered React output as HTML
+  var content = el.innerHTML;
+
+  // Remove any stale iframe
+  var old = document.getElementById('__rpt_iframe__');
   if (old) old.remove();
 
-  var styleEl = null;
-  if (landscape) {
-    styleEl = document.createElement('style');
-    styleEl.id = '__rpt_landscape__';
-    styleEl.textContent = '@media print { @page { size: A4 landscape; margin: 12mm 15mm 22mm; } }';
-    document.head.appendChild(styleEl);
+  // Create a hidden iframe — must be in the DOM for contentWindow to work
+  var iframe = document.createElement('iframe');
+  iframe.id = '__rpt_iframe__';
+  iframe.style.cssText = [
+    'position:fixed',
+    'left:-9999px',
+    'top:-9999px',
+    'width:' + (landscape ? '297mm' : '210mm'),
+    'height:' + (landscape ? '210mm' : '297mm'),
+    'border:0',
+    'visibility:hidden',
+  ].join(';');
+  document.body.appendChild(iframe);
+
+  var pageSize = landscape ? 'A4 landscape' : 'A4 portrait';
+
+  // Build a complete standalone HTML document for the iframe.
+  // @page is set directly here — no injection timing issue.
+  var html = '<!DOCTYPE html>' +
+    '<html><head>' +
+    '<meta charset="UTF-8">' +
+    '<link rel="preconnect" href="https://fonts.googleapis.com">' +
+    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700;14..32,800;14..32,900&display=swap">' +
+    '<style>' +
+    '*, *::before, *::after {' +
+    '  -webkit-print-color-adjust: exact !important;' +
+    '  print-color-adjust: exact !important;' +
+    '  box-sizing: border-box; margin: 0; padding: 0;' +
+    '}' +
+    'html, body {' +
+    '  background: #ffffff; color: #000000;' +
+    '  font-family: "Inter", Arial, Helvetica, sans-serif;' +
+    '}' +
+    '@page {' +
+    '  margin: 12mm 15mm 22mm;' +
+    '  size: ' + pageSize + ';' +
+    '}' +
+    'table { border-collapse: collapse; width: 100%; }' +
+    'thead { display: table-header-group; }' +
+    'tfoot { display: table-footer-group; }' +
+    'tr    { page-break-inside: avoid; }' +
+    'h2, h3 { page-break-after: avoid; }' +
+    '</style>' +
+    '</head>' +
+    '<body style="padding:0;margin:0;">' + content + '</body>' +
+    '</html>';
+
+  var doc = iframe.contentDocument || iframe.contentWindow.document;
+  doc.open();
+  doc.write(html);
+  doc.close();
+
+  // Wait for fonts to load in the iframe, then print
+  function doprint() {
+    iframe.contentWindow.focus();
+    iframe.contentWindow.print();
+    // Clean up after the print dialog is dismissed
+    setTimeout(function () {
+      var f = document.getElementById('__rpt_iframe__');
+      if (f) f.remove();
+    }, 8000);
   }
 
-  // Delay so the injected @page rule is fully parsed before the print dialog opens.
-  // 400ms is more reliable than 120ms for Microsoft Print to PDF.
-  setTimeout(function () {
-    window.print();
-    if (styleEl) {
-      setTimeout(function () {
-        var el = document.getElementById('__rpt_landscape__');
-        if (el) el.remove();
-      }, 3000);
-    }
-  }, 400);
+  // Try the fonts-ready promise (Chrome/Edge); fall back to a fixed delay
+  try {
+    iframe.contentDocument.fonts.ready.then(function () { doprint(); });
+  } catch (e) {
+    setTimeout(doprint, 700);
+  }
 }
 
 // ── DESIGN TOKENS ────────────────────────────────────────
