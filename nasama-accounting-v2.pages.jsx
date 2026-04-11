@@ -1943,7 +1943,9 @@ function ReportsPage({ accounts, txns, settings }) {
   const [dateFilter, setDateFilter] = useState(() => { const r = computeDateRange("this_month"); return { preset: "this_month", ...r }; });
   const tabs = [
     { id: "pnl", label: "Profit & Loss" }, { id: "bs", label: "Balance Sheet" },
-    { id: "tb", label: "Trial Balance" }, { id: "gl", label: "General Ledger" }
+    { id: "tb", label: "Trial Balance" }, { id: "gl", label: "General Ledger" },
+    { id: "cf", label: "Cash Flow" }, { id: "equity", label: "Changes in Equity" },
+    { id: "notes", label: "Notes to FS" },
   ];
 
   // Date-filtered transactions and ledger (P&L, TB, GL) — within the from→to range
@@ -1953,6 +1955,10 @@ function ReportsPage({ accounts, txns, settings }) {
   // To-date ledger — all transactions UP TO the selected end date (Balance Sheet)
   const toDateTxns = useMemo(() => txns.filter(t => !dateFilter.to || (t.date || "") <= dateFilter.to), [txns, dateFilter.to]);
   const toDateLedger = useMemo(() => buildLedger(toDateTxns, accounts), [toDateTxns, accounts]);
+
+  // Opening ledger — all transactions BEFORE the start of the period (for CF, Equity opening balances)
+  const openingTxns = useMemo(() => txns.filter(t => !dateFilter.from || (t.date || "") < dateFilter.from), [txns, dateFilter.from]);
+  const openingLedger = useMemo(() => buildLedger(openingTxns, accounts), [openingTxns, accounts]);
 
   // P&L totals
   const revenues = accounts.filter(a => a.type === "Revenue");
@@ -2023,6 +2029,37 @@ function ReportsPage({ accounts, txns, settings }) {
         dateFilter={dateFilter}
         settings={settings}
       />}
+      {tab === "cf" && <CFReport
+        accounts={accounts}
+        filteredTxns={filteredTxns}
+        openingLedger={openingLedger}
+        toDateLedger={toDateLedger}
+        dateFilter={dateFilter}
+        settings={settings}
+      />}
+      {tab === "equity" && <EquityReport
+        accounts={accounts}
+        filteredLedger={filteredLedger}
+        openingLedger={openingLedger}
+        toDateLedger={toDateLedger}
+        totalRev={totalRev}
+        totalExp={totalExp}
+        dateFilter={dateFilter}
+        settings={settings}
+      />}
+      {tab === "notes" && <NotesReport
+        accounts={accounts}
+        filteredLedger={filteredLedger}
+        toDateLedger={toDateLedger}
+        filteredTxns={filteredTxns}
+        totalRev={totalRev}
+        totalExp={totalExp}
+        totalAssets={totalAssets}
+        totalLiabilities={totalLiabilities}
+        totalEquity={totalEquity}
+        dateFilter={dateFilter}
+        settings={settings}
+      />}
     </div>
 
     {/* ── Print document — hidden on screen (display:none), shown only in @media print */}
@@ -2055,6 +2092,37 @@ function ReportsPage({ accounts, txns, settings }) {
         accounts={accounts}
         txns={txns}
         filteredTxns={filteredTxns}
+        dateFilter={dateFilter}
+        settings={settings}
+      />}
+      {tab === "cf" && <CFPrintDoc
+        accounts={accounts}
+        filteredTxns={filteredTxns}
+        openingLedger={openingLedger}
+        toDateLedger={toDateLedger}
+        dateFilter={dateFilter}
+        settings={settings}
+      />}
+      {tab === "equity" && <EquityPrintDoc
+        accounts={accounts}
+        filteredLedger={filteredLedger}
+        openingLedger={openingLedger}
+        toDateLedger={toDateLedger}
+        totalRev={totalRev}
+        totalExp={totalExp}
+        dateFilter={dateFilter}
+        settings={settings}
+      />}
+      {tab === "notes" && <NotesPrintDoc
+        accounts={accounts}
+        filteredLedger={filteredLedger}
+        toDateLedger={toDateLedger}
+        filteredTxns={filteredTxns}
+        totalRev={totalRev}
+        totalExp={totalExp}
+        totalAssets={totalAssets}
+        totalLiabilities={totalLiabilities}
+        totalEquity={totalEquity}
         dateFilter={dateFilter}
         settings={settings}
       />}
