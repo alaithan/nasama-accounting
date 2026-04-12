@@ -241,13 +241,22 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     <span style={{ fontSize: 11, color: "#98A2B3", maxWidth: 340, textAlign: "right", lineHeight: 1.4, display: isTablet ? "none" : "block" }}>{sub}</span>
   </div>;
   const metricTile = ({ label, value, sub, accent, onClick, rawValue, prevValue, higherIsBetter, alertLevel, timeBasis }) => {
-    const hasComp = priorDateRange.from && prevValue !== null && prevValue !== undefined && rawValue !== null && rawValue !== undefined;
+    const COMPANY_START = "2025-01-01"; // company did not exist before this date
+    const priorRangeValid = priorDateRange.from && priorDateRange.to &&
+      priorDateRange.to >= COMPANY_START; // hide comparator if prior period is entirely before company start
+    const hasComp = priorRangeValid && prevValue !== null && prevValue !== undefined && rawValue !== null && rawValue !== undefined;
     const variance = hasComp ? rawValue - prevValue : 0;
     const pct = hasComp && prevValue !== 0 ? (variance / Math.abs(prevValue)) * 100 : null;
     const varGood = higherIsBetter !== undefined ? (higherIsBetter ? variance >= 0 : variance <= 0) : variance >= 0;
     const varColor = variance === 0 ? "#98A2B3" : (varGood ? "#059669" : "#DC2626");
     const varArrow = variance > 0 ? "▲" : variance < 0 ? "▼" : "●";
-    const priorYear = priorDateRange.from ? priorDateRange.from.slice(0, 4) : "Prior";
+    // Show full prior date range so user knows exactly what dates are being compared
+    const shortDate = d => { if (!d) return ""; const p = d.split("-"); return `${p[2] || ""}/${p[1] || ""}/${(p[0] || "").slice(2)}`; };
+    const priorFromY = priorDateRange.from ? priorDateRange.from.slice(0, 4) : "";
+    const priorToY = priorDateRange.to ? priorDateRange.to.slice(0, 4) : "";
+    const priorLabel = priorFromY === priorToY
+      ? `${shortDate(priorDateRange.from)} – ${shortDate(priorDateRange.to)}`
+      : `${shortDate(priorDateRange.from)} – ${shortDate(priorDateRange.to)}`;
     // Alert-level overrides
     const isCritical = alertLevel === "critical";
     const isWarning = alertLevel === "warning";
@@ -265,7 +274,7 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
       <div style={{ fontSize: 25, fontWeight: 700, color: valueColor, lineHeight: 1.1, letterSpacing: "-0.02em", fontVariantNumeric: "tabular-nums" }}>{value}</div>
       {hasComp && <div style={{ marginTop: 10, paddingTop: 9, borderTop: `1px dashed ${isCritical ? "#FECACA" : "#EAECF0"}` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10.5, color: "#98A2B3", fontVariantNumeric: "tabular-nums" }}>{priorYear}: {fmtAED(prevValue)}</span>
+          <span style={{ fontSize: 10.5, color: "#98A2B3", fontVariantNumeric: "tabular-nums" }}>Prior ({priorLabel}): {fmtAED(prevValue)}</span>
           <span style={{ fontSize: 10.5, fontWeight: 700, color: varColor, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
             {varArrow} {variance >= 0 ? "+" : ""}{fmtAED(variance)}
             {pct !== null && <span style={{ fontSize: 9.5, marginLeft: 4, opacity: 0.85 }}>({pct >= 0 ? "+" : ""}{pct.toFixed(1)}%)</span>}
