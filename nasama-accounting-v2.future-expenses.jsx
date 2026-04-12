@@ -303,7 +303,43 @@ function FutureExpensesPage({ accounts, ledger, plannedExpenses, setPlannedExpen
     setPayItem(null);
   };
 
+  // ── COA-based expense accounts (live, sorted by code) ──
+  const expenseAccounts = useMemo(() =>
+    (accounts || [])
+      .filter(a => a.type === "Expense")
+      .sort((a, b) => (a.code || "").localeCompare(b.code || "")),
+    [accounts]
+  );
+
+  // Group expense accounts by code prefix for optgroup display
+  const expenseAccountGroups = useMemo(() => {
+    const groups = new Map();
+    expenseAccounts.forEach(a => {
+      const prefix = (a.code || "").slice(0, 2);
+      const groupName =
+        prefix === "50" ? "Cost of Sales" :
+        prefix === "51" ? "Office & Operations" :
+        prefix === "52" ? "Marketing & Technology" :
+        prefix === "53" ? "Salaries & HR" :
+        prefix === "54" ? "Professional & Government" :
+        prefix === "55" ? "Commission & Agency" :
+        prefix === "56" ? "Banking & Finance" :
+        prefix === "57" ? "Transportation" :
+        prefix === "60" ? "Legal" :
+        prefix === "61" ? "Entertainment" :
+        prefix === "62" ? "Miscellaneous" :
+        "Other Expenses";
+      if (!groups.has(groupName)) groups.set(groupName, []);
+      groups.get(groupName).push(a);
+    });
+    return [...groups.entries()];
+  }, [expenseAccounts]);
+
   const getCategoryLabel = (code) => {
+    // First check live COA accounts
+    const acct = expenseAccounts.find(a => a.code === code);
+    if (acct) return `${acct.code} — ${acct.name}`;
+    // Fallback to static FE_CATEGORIES for backward compatibility
     const cat = FE_CATEGORIES.find(c => c.code === code);
     return cat ? cat.label : code;
   };
@@ -445,7 +481,37 @@ function FutureExpensesPage({ accounts, ledger, plannedExpenses, setPlannedExpen
 
 // ── ADD/EDIT MODAL ──────────────────────────────────
 function FutureExpenseModal({ item, accounts, onSave, onClose }) {
-  const [form, setForm] = useState(() => item ? { ...item } : feEmpty());
+  // Live COA expense accounts for the category selector
+  const expenseAccounts = (accounts || [])
+    .filter(a => a.type === "Expense")
+    .sort((a, b) => (a.code || "").localeCompare(b.code || ""));
+
+  const expenseAccountGroups = (() => {
+    const groups = new Map();
+    expenseAccounts.forEach(a => {
+      const prefix = (a.code || "").slice(0, 2);
+      const groupName =
+        prefix === "50" ? "Cost of Sales" :
+        prefix === "51" ? "Office & Operations" :
+        prefix === "52" ? "Marketing & Technology" :
+        prefix === "53" ? "Salaries & HR" :
+        prefix === "54" ? "Professional & Government" :
+        prefix === "55" ? "Commission & Agency" :
+        prefix === "56" ? "Banking & Finance" :
+        prefix === "57" ? "Transportation" :
+        prefix === "60" ? "Legal" :
+        prefix === "61" ? "Entertainment" :
+        prefix === "62" ? "Miscellaneous" :
+        "Other Expenses";
+      if (!groups.has(groupName)) groups.set(groupName, []);
+      groups.get(groupName).push(a);
+    });
+    return [...groups.entries()];
+  })();
+
+  // Default category = first COA expense account code, or "5100" fallback
+  const defaultCategory = expenseAccounts.length > 0 ? expenseAccounts[0].code : "5100";
+  const [form, setForm] = useState(() => item ? { ...item } : { ...feEmpty(), category: defaultCategory });
   const up = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
 
   const bankAccounts = accounts.filter(a => a.isBank || a.code === "1001");
@@ -472,9 +538,16 @@ function FutureExpenseModal({ item, accounts, onSave, onClose }) {
         <div style={C.fg}>
           <div style={{ gridColumn: "span 2" }}><label style={C.label}>Title *</label><Inp value={form.title} onChange={e => up("title", e.target.value)} placeholder="e.g. Office Rent — March 2026" /></div>
 
-          <div><label style={C.label}>Category</label>
+          <div><label style={C.label}>Category (Chart of Accounts)</label>
             <Sel value={form.category} onChange={e => up("category", e.target.value)}>
-              {[...FE_CATEGORIES].sort((a, b) => a.code === "OTHER" ? 1 : b.code === "OTHER" ? -1 : a.label.localeCompare(b.label)).map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+              {expenseAccounts.length === 0
+                ? FE_CATEGORIES.map(c => <option key={c.code} value={c.code}>{c.code} — {c.label}</option>)
+                : expenseAccountGroups.map(([groupName, accts]) =>
+                    <optgroup key={groupName} label={groupName}>
+                      {accts.map(a => <option key={a.id} value={a.code}>{a.code} — {a.name}</option>)}
+                    </optgroup>
+                  )
+              }
             </Sel>
           </div>
 
