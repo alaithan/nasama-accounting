@@ -249,7 +249,7 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     const pct = hasComp && prevValue !== 0 ? (variance / Math.abs(prevValue)) * 100 : null;
     const varGood = higherIsBetter !== undefined ? (higherIsBetter ? variance >= 0 : variance <= 0) : variance >= 0;
     const varColor = variance === 0 ? "#98A2B3" : (varGood ? "#059669" : "#DC2626");
-    const varArrow = variance > 0 ? "▲" : variance < 0 ? "▼" : "●";
+    const varArrow = variance === 0 ? "●" : (varGood ? "▲" : "▼");
     // Show full prior date range so user knows exactly what dates are being compared
     const shortDate = d => { if (!d) return ""; const p = d.split("-"); return `${p[2] || ""}/${p[1] || ""}/${(p[0] || "").slice(2)}`; };
     const priorFromY = priorDateRange.from ? priorDateRange.from.slice(0, 4) : "";
