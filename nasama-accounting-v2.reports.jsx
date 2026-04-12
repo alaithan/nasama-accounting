@@ -1080,6 +1080,14 @@ function GLReport(props) {
   var dateFilter   = props.dateFilter   || {};
   var settings     = props.settings     || {};
 
+  // ── Account filter state (screen-only, not printed)
+  var _sf = React.useState("All");
+  var typeFilter = _sf[0], setTypeFilter = _sf[1];
+  var _ss = React.useState("");
+  var searchText = _ss[0], setSearchText = _ss[1];
+  var _sa = React.useState(null);
+  var selectedId = _sa[0], setSelectedId = _sa[1];
+
   var groups = React.useMemo(function () {
     var acctIds = new Set(
       filteredTxns
@@ -1131,6 +1139,19 @@ function GLReport(props) {
       });
   }, [accounts, txns, filteredTxns, dateFilter.from]);
 
+  // ── Apply account filters (screen only)
+  var filteredGroups = React.useMemo(function () {
+    return groups.filter(function (g) {
+      if (selectedId && g.acct.id !== selectedId) return false;
+      if (typeFilter !== "All" && g.acct.type !== typeFilter) return false;
+      if (searchText.trim()) {
+        var q = searchText.trim().toLowerCase();
+        if (!g.acct.code.toLowerCase().includes(q) && !g.acct.name.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+  }, [groups, typeFilter, searchText, selectedId]);
+
   var td = function (extra) {
     return Object.assign({ padding: "9px 14px", fontSize: 12, borderBottom: "1px solid " + RPT.rule, verticalAlign: "middle" }, extra || {});
   };
@@ -1146,12 +1167,112 @@ function GLReport(props) {
       currency: settings.currency || "AED", trn: settings.trn,
     }),
 
-    groups.length === 0 &&
+    /* ── Account filter bar (screen only, not printed) ── */
+    React.createElement("div", {
+      className: "no-print",
+      style: {
+        background: "#F8F9FB", border: "1px solid " + RPT.rule, borderTop: "none",
+        padding: "12px 16px", display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center",
+      }
+    },
+      /* Search input */
+      React.createElement("div", { style: { position: "relative", flex: "1 1 180px", minWidth: 150 } },
+        React.createElement("span", {
+          style: { position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: RPT.subtle, fontSize: 14, pointerEvents: "none" }
+        }, "\uD83D\uDD0D"),
+        React.createElement("input", {
+          type: "text",
+          placeholder: "Search code or name\u2026",
+          value: searchText,
+          onChange: function (e) { setSearchText(e.target.value); setSelectedId(null); },
+          style: {
+            width: "100%", boxSizing: "border-box",
+            padding: "7px 10px 7px 30px", fontSize: 12.5,
+            border: "1px solid " + RPT.rule, borderRadius: 6,
+            outline: "none", background: "#fff",
+            fontFamily: "Inter, Arial, sans-serif",
+          }
+        })
+      ),
+
+      /* Type filter buttons */
+      React.createElement("div", { style: { display: "flex", gap: 4, flexWrap: "wrap" } },
+        ["All", "Asset", "Liability", "Equity", "Revenue", "Expense"].map(function (t) {
+          var active = typeFilter === t;
+          var colors = {
+            All:       ["#1E3A5F", "#fff"],
+            Asset:     ["#1D4ED8", "#EFF6FF"],
+            Liability: ["#DC2626", "#FEF2F2"],
+            Equity:    ["#7C3AED", "#F5F3FF"],
+            Revenue:   ["#059669", "#ECFDF5"],
+            Expense:   ["#D97706", "#FFFBEB"],
+          };
+          var col = colors[t] || ["#555", "#f0f0f0"];
+          return React.createElement("button", {
+            key: t,
+            onClick: function () { setTypeFilter(t); setSelectedId(null); },
+            style: {
+              padding: "5px 11px", fontSize: 11.5, fontWeight: active ? 700 : 500,
+              borderRadius: 5, cursor: "pointer", border: "1.5px solid " + (active ? col[0] : RPT.rule),
+              background: active ? col[0] : "#fff",
+              color: active ? (t === "All" ? "#fff" : col[1] === "#fff" ? "#fff" : col[0]) : RPT.subtle,
+              transition: "all 0.15s",
+              fontFamily: "Inter, Arial, sans-serif",
+            }
+          }, t);
+        })
+      ),
+
+      /* Account jump dropdown */
+      React.createElement("select", {
+        value: selectedId || "",
+        onChange: function (e) {
+          var val = e.target.value;
+          setSelectedId(val || null);
+          setSearchText("");
+          setTypeFilter("All");
+        },
+        style: {
+          padding: "6px 10px", fontSize: 12, border: "1px solid " + RPT.rule,
+          borderRadius: 6, background: "#fff", color: RPT.textHeavy,
+          flex: "0 1 200px", minWidth: 140, fontFamily: "Inter, Arial, sans-serif",
+        }
+      },
+        React.createElement("option", { value: "" }, "Jump to account\u2026"),
+        groups.map(function (g) {
+          return React.createElement("option", { key: g.acct.id, value: g.acct.id },
+            g.acct.code + " \u2014 " + g.acct.name
+          );
+        })
+      ),
+
+      /* Counter */
+      React.createElement("span", {
+        style: { fontSize: 11.5, color: RPT.subtle, whiteSpace: "nowrap", marginLeft: "auto" }
+      },
+        filteredGroups.length === groups.length
+          ? groups.length + " accounts"
+          : filteredGroups.length + " of " + groups.length + " accounts"
+      ),
+
+      /* Clear filters button (shown only when filters are active) */
+      (selectedId || typeFilter !== "All" || searchText.trim()) &&
+        React.createElement("button", {
+          onClick: function () { setSelectedId(null); setTypeFilter("All"); setSearchText(""); },
+          style: {
+            padding: "5px 10px", fontSize: 11.5, border: "1px solid " + RPT.rule,
+            borderRadius: 5, background: "#fff", color: RPT.subtle, cursor: "pointer",
+            fontFamily: "Inter, Arial, sans-serif",
+          }
+        }, "\u00D7 Clear")
+    ),
+
+    filteredGroups.length === 0 &&
       React.createElement("div", {
         style: { padding: 40, textAlign: "center", color: RPT.subtle, fontStyle: "italic", border: "1px solid " + RPT.rule, borderTop: "none", borderRadius: "0 0 10px 10px" }
-      }, "No transactions found for the selected period."),
+      }, groups.length === 0 ? "No transactions found for the selected period." : "No accounts match the current filter."),
 
-    groups.map(function (g, gi) {
+    filteredGroups.map(function (g, gi) {
       var totalDr = g.rows.reduce(function (s, r) { return s + r.debit;  }, 0);
       var totalCr = g.rows.reduce(function (s, r) { return s + r.credit; }, 0);
 
