@@ -903,7 +903,9 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
     } catch (err) { toast(err.message, "error"); }
   };
 
-  const bankAccounts = accounts.filter(a => a.isBank || a.code === "1001");
+  const bankAccounts  = accounts.filter(a => a.isBank);
+  const cashAccounts  = accounts.filter(a => a.isCash || (!a.isBank && a.type === "Asset" && a.code === "1001"));
+  const allLiquidAccts = [...bankAccounts, ...cashAccounts];
 
   return <div>
     <PageHeader title="Sale Receipts" sub={`Cash-settled commission collections — ${saleReceipts.length} receipts`}>
@@ -940,7 +942,8 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
               <option value={5}>5% (Standard)</option><option value={0}>0% (Exempt)</option>
             </Sel></div>
             <div><label style={C.label}>Receive Into</label><Sel value={form.bankCode} onChange={e => setForm(p => ({ ...p, bankCode: e.target.value }))}>
-              {bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}
+              {bankAccounts.length > 0 && <optgroup label="Bank Accounts">{bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
+              {cashAccounts.length  > 0 && <optgroup label="Cash Accounts">{cashAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
             </Sel></div>
           </div>
           {form.grossAmount && parseFloat(form.grossAmount) > 0 && <div style={{ marginTop: 16, padding: 14, background: "#F9FAFB", borderRadius: 8, fontSize: 13 }}>
@@ -972,8 +975,9 @@ function PaymentsPage({ accounts, txns, saveTxn, persistTxn, journal, vendors, u
   }, []);
 
   const payments = txns.filter(t => (t.txnType === "PV" || t.txnType === "BP") && !t.isVoid);
-  const expenseAccounts = accounts.filter(a => a.type === "Expense").sort((a, b) => a.code.localeCompare(b.code));
-  const bankAccounts = accounts.filter(a => a.isBank || a.code === "1001");
+  const expenseAccounts  = accounts.filter(a => a.type === "Expense").sort((a, b) => a.code.localeCompare(b.code));
+  const bankAccounts     = accounts.filter(a => a.isBank);
+  const cashAccountsPmt  = accounts.filter(a => a.isCash || (!a.isBank && a.type === "Asset" && a.code === "1001"));
 
   const handlePreview = () => {
     if (!form.expenseCode) { toast("Select an expense account", "warning"); return; }
@@ -1029,7 +1033,8 @@ function PaymentsPage({ accounts, txns, saveTxn, persistTxn, journal, vendors, u
               <option value={0}>0% (No VAT)</option><option value={5}>5% (Standard)</option>
             </Sel></div>
             <div><label style={C.label}>Paid From</label><Sel value={form.paidFromCode} onChange={e => setForm(p => ({ ...p, paidFromCode: e.target.value }))}>
-              {bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}
+              {bankAccounts.length    > 0 && <optgroup label="Bank Accounts">{bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
+              {cashAccountsPmt.length > 0 && <optgroup label="Cash Accounts">{cashAccountsPmt.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
             </Sel></div>
             <div><label style={C.label}>Vendor / Payee</label><Sel value={form.counterparty} onChange={e => setForm(p => ({ ...p, counterparty: e.target.value }))}>
               <option value="">— Optional —</option>
@@ -1223,53 +1228,55 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
   const [importFileName, setImportFileName] = useState("");
   const [importCsvText, setImportCsvText] = useState("");
   const [narrationMap, setNarrationMap] = useState(() => ({ ...BANK_IMPORT_DEFAULT_MAP }));
-  const bankAccounts = accounts.filter(a => a.isBank || a.code === "1001");
+  // Separate bank accounts (isBank:true) from cash accounts (isCash or code 1001)
+  const bankOnlyAccts = accounts.filter(a => a.isBank);
+  const cashOnlyAccts = accounts.filter(a => a.isCash || (!a.isBank && a.type === "Asset" && a.code === "1001"));
+  const allLiquidAccts = [...bankOnlyAccts, ...cashOnlyAccts];
+
   const editTxn = useMemo(() => txns.find(t => t.id === editTxnId) || null, [txns, editTxnId]);
   const importAccounts = useMemo(() => mergeImportAccounts(accounts || []), [accounts]);
   const importAnalysis = useMemo(() => importCsvText ? analyzeBankImport({ csvText: importCsvText, accounts: importAccounts, txns, narrationMap }) : null, [importCsvText, importAccounts, txns, narrationMap]);
   const escapeExcel = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
-  const bankRows = useMemo(() => {
+
+  // Build activity rows for a given set of target accounts
+  const buildRows = (targetAccts) => {
     const rows = txns
       .filter(t => !t.isVoid && (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to))
       .map(t => {
-        const bankLines = (t.lines || []).filter(l => bankAccounts.some(ba => ba.id === l.accountId));
-        if (bankLines.length === 0) return null;
+        const lines = (t.lines || []).filter(l => targetAccts.some(a => a.id === l.accountId));
+        if (lines.length === 0) return null;
         return {
-          id: t.id,
-          date: t.date || "",
-          ref: t.ref || "",
-          description: t.description || "",
-          counterparty: t.counterparty || "",
+          id: t.id, date: t.date || "", ref: t.ref || "",
+          description: t.description || "", counterparty: t.counterparty || "",
           txnType: TXN_TYPES[t.txnType]?.label || t.txnType || "",
-          bankAccounts: bankLines.map(l => bankAccounts.find(ba => ba.id === l.accountId)?.name || l.accountId).join(", "),
-          inAmt: bankLines.reduce((s, l) => s + (l.debit || 0), 0),
-          outAmt: bankLines.reduce((s, l) => s + (l.credit || 0), 0),
+          acctName: lines.map(l => targetAccts.find(a => a.id === l.accountId)?.name || "").join(", "),
+          inAmt: lines.reduce((s, l) => s + (l.debit || 0), 0),
+          outAmt: lines.reduce((s, l) => s + (l.credit || 0), 0),
         };
       })
       .filter(Boolean);
     const getVal = (row) => {
       switch (sortKey) {
-        case "date": return row.date || "";
-        case "ref": return row.ref || "";
+        case "date": return row.date || ""; case "ref": return row.ref || "";
         case "description": return row.description || "";
-        case "in": return row.inAmt || 0;
-        case "out": return row.outAmt || 0;
+        case "in": return row.inAmt || 0; case "out": return row.outAmt || 0;
         default: return "";
       }
     };
     rows.sort((a, b) => {
-      const av = getVal(a);
-      const bv = getVal(b);
-      let cmp = 0;
-      if (typeof av === "number" || typeof bv === "number") cmp = Number(av || 0) - Number(bv || 0);
-      else cmp = String(av || "").localeCompare(String(bv || ""));
+      const av = getVal(a), bv = getVal(b);
+      let cmp = (typeof av === "number" || typeof bv === "number") ? Number(av || 0) - Number(bv || 0) : String(av || "").localeCompare(String(bv || ""));
       return sortDir === "asc" ? cmp : -cmp;
     });
     return rows;
-  }, [txns, bankAccounts, sortKey, sortDir, dateFilter]);
+  };
+
+  const bankRows = useMemo(() => buildRows(bankOnlyAccts), [txns, bankOnlyAccts, sortKey, sortDir, dateFilter]);
+  const cashRows = useMemo(() => buildRows(cashOnlyAccts), [txns, cashOnlyAccts, sortKey, sortDir, dateFilter]);
   const handleExportBankRows = () => {
-    if (!bankRows.length) { toast("No bank transactions to export", "warning"); return; }
-    const exportRows = [...bankRows].sort((a, b) => {
+    const allRows = [...bankRows, ...cashRows];
+    if (!allRows.length) { toast("No bank or cash transactions to export", "warning"); return; }
+    const exportRows = [...allRows].sort((a, b) => {
       const dateCmp = String(a.date || "").localeCompare(String(b.date || ""));
       if (dateCmp !== 0) return dateCmp;
       return String(a.ref || "").localeCompare(String(b.ref || ""));
@@ -1284,7 +1291,7 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
             <td>${escapeExcel(row.description)}</td>
             <td>${escapeExcel(row.counterparty)}</td>
             <td>${escapeExcel(row.txnType)}</td>
-            <td>${escapeExcel(row.bankAccounts)}</td>
+            <td>${escapeExcel(row.acctName)}</td>
             <td style="mso-number-format:'0.00';">${((row.inAmt || 0) / 100).toFixed(2)}</td>
             <td style="mso-number-format:'0.00';">${((row.outAmt || 0) / 100).toFixed(2)}</td>
             <td style="mso-number-format:'0.00';">${(((row.inAmt || 0) - (row.outAmt || 0)) / 100).toFixed(2)}</td>
@@ -1379,46 +1386,98 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
     toast("Bank transaction updated", "success");
   };
 
+  // Shared activity table renderer
+  const ActivityTable = (rows, emptyMsg) => (
+    <div style={{ overflowX: "auto", overflowY: "visible" }}>
+      <table style={{ width: "100%", minWidth: 900, borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
+        <colgroup>
+          <col style={{ width: 110 }} /><col style={{ width: 110 }} /><col /><col style={{ width: 160 }} /><col style={{ width: 160 }} /><col style={{ width: 80 }} />
+        </colgroup>
+        <thead><tr>
+          <SortTh label="Date"        sortKey={sortKey} activeKey="date"        sortDir={sortDir} onToggle={toggleSort} />
+          <SortTh label="Ref"         sortKey={sortKey} activeKey="ref"         sortDir={sortDir} onToggle={toggleSort} />
+          <SortTh label="Description" sortKey={sortKey} activeKey="description" sortDir={sortDir} onToggle={toggleSort} />
+          <SortTh label="In (AED)"    sortKey={sortKey} activeKey="in"          sortDir={sortDir} onToggle={toggleSort} align="right" />
+          <SortTh label="Out (AED)"   sortKey={sortKey} activeKey="out"         sortDir={sortDir} onToggle={toggleSort} align="right" />
+          <th style={C.th}>Actions</th>
+        </tr></thead>
+        <tbody>
+          {rows.length === 0 && <tr><td colSpan={6} style={{ ...C.td, textAlign: "center", padding: 32, color: "#9CA3AF" }}>{emptyMsg}</td></tr>}
+          {rows.map(row => <tr key={row.id}>
+            <td style={C.td}>{fmtDate(row.date)}</td>
+            <td style={C.td}>{row.ref}</td>
+            <td style={{ ...C.td, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 0 }} title={row.description}>{row.description}</td>
+            <td style={{ ...C.td, textAlign: "right", color: row.inAmt  > 0 ? "#059669" : "#9CA3AF" }}>{row.inAmt  > 0 ? fmtAED(row.inAmt)  : "—"}</td>
+            <td style={{ ...C.td, textAlign: "right", color: row.outAmt > 0 ? "#DC2626" : "#9CA3AF" }}>{row.outAmt > 0 ? fmtAED(row.outAmt) : "—"}</td>
+            <td style={C.td}>{hasPermission(userRole, 'canEditTxns') && <button style={C.btn("secondary", true)} onClick={() => setEditTxnId(row.id)}>Edit</button>}</td>
+          </tr>)}
+        </tbody>
+      </table>
+    </div>
+  );
+
   return <div>
-    <PageHeader title="Banking" sub="Bank account balances, transfers, and CSV import">
+    <PageHeader title="Banking" sub="Bank accounts and cash — kept separate">
       <button style={C.btn("secondary")} onClick={handleExportBankRows}>Export Excel</button>
       {hasPermission(userRole, 'canCreateTxns') && <button style={C.btn("secondary")} onClick={() => setShowImport(true)}>Import Bank CSV</button>}
       {hasPermission(userRole, 'canCreateTxns') && <button style={C.btn()} onClick={() => setShowTransfer(true)}>Transfer</button>}
     </PageHeader>
     <DateFilterBar dateFilter={dateFilter} setDateFilter={setDateFilter} />
 
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 14, marginBottom: 22 }}>
-      {bankAccounts.map(a => {
-        const bal = accountBalance(a, ledger);
-        return <div key={a.id} style={{ ...C.card, padding: "18px 20px", borderLeft: `4px solid ${bal >= 0 ? "#059669" : "#DC2626"}` }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{a.name}</div>
-          <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 2 }}>Account {a.code}</div>
-          <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8, color: bal >= 0 ? "#059669" : "#DC2626" }}>{fmtAED(bal)}</div>
-        </div>;
-      })}
+    {/* ══ BANK ACCOUNTS SECTION ═══════════════════════════════════════ */}
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <div style={{ width: 3, height: 20, borderRadius: 2, background: "#1D4ED8" }} />
+        <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "#374151" }}>Bank Accounts</span>
+      </div>
+
+      {bankOnlyAccts.length === 0
+        ? <div style={{ ...C.card, padding: "18px 20px", color: "#9CA3AF", fontSize: 13 }}>No bank accounts found. Go to Chart of Accounts and mark an account as "Bank account".</div>
+        : <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 14, marginBottom: 16 }}>
+              {bankOnlyAccts.map(a => {
+                const bal = accountBalance(a, ledger);
+                return <div key={a.id} style={{ ...C.card, padding: "18px 20px", borderLeft: "4px solid #1D4ED8" }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{a.name}</div>
+                  <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 2 }}>Account {a.code}</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8, color: bal >= 0 ? "#059669" : "#DC2626" }}>{fmtAED(bal)}</div>
+                </div>;
+              })}
+            </div>
+            <div style={C.card}>
+              <div style={{ padding: "12px 18px", borderBottom: "1px solid #E5E7EB", fontWeight: 600, fontSize: 13, color: "#1D4ED8" }}>Bank Transactions</div>
+              {ActivityTable(bankRows, "No bank transactions in this period.")}
+            </div>
+          </>
+      }
     </div>
 
-    <div style={C.card}>
-      <div style={{ padding: "13px 18px", borderBottom: "1px solid #E5E7EB", fontWeight: 600, fontSize: 14 }}>Recent Bank Activity</div>
-      <div style={{ overflowX: "auto", overflowY: "visible" }}>
-        <table style={{ width: "100%", minWidth: 1120, borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
-          <thead><tr>
-            <SortTh label="Date" sortKey={sortKey} activeKey="date" sortDir={sortDir} onToggle={toggleSort} />
-            <SortTh label="Ref" sortKey={sortKey} activeKey="ref" sortDir={sortDir} onToggle={toggleSort} />
-            <SortTh label="Description" sortKey={sortKey} activeKey="description" sortDir={sortDir} onToggle={toggleSort} />
-            <SortTh label="In" sortKey={sortKey} activeKey="in" sortDir={sortDir} onToggle={toggleSort} align="right" />
-            <SortTh label="Out" sortKey={sortKey} activeKey="out" sortDir={sortDir} onToggle={toggleSort} align="right" />
-            <th style={C.th}>Actions</th>
-          </tr></thead>
-          <tbody>
-            {bankRows.length === 0 && <tr><td colSpan={6} style={{ ...C.td, textAlign: "center", padding: 40, color: "#9CA3AF" }}>No bank transactions found.</td></tr>}
-            {bankRows.map(row => <tr key={row.id}><td style={C.td}>{fmtDate(row.date)}</td><td style={C.td}>{row.ref}</td><td style={C.td}>{row.description}</td>
-              <td style={{ ...C.td, textAlign: "right", color: row.inAmt > 0 ? "#059669" : "#9CA3AF" }}>{row.inAmt > 0 ? fmtAED(row.inAmt) : "—"}</td>
-              <td style={{ ...C.td, textAlign: "right", color: row.outAmt > 0 ? "#DC2626" : "#9CA3AF" }}>{row.outAmt > 0 ? fmtAED(row.outAmt) : "—"}</td>
-              <td style={C.td}>{hasPermission(userRole, 'canEditTxns') && <button style={C.btn("secondary", true)} onClick={() => setEditTxnId(row.id)}>Edit</button>}</td></tr>)}
-          </tbody>
-        </table>
+    {/* ══ CASH ACCOUNTS SECTION ════════════════════════════════════════ */}
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <div style={{ width: 3, height: 20, borderRadius: 2, background: "#D97706" }} />
+        <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "#374151" }}>Cash Accounts</span>
       </div>
+
+      {cashOnlyAccts.length === 0
+        ? <div style={{ ...C.card, padding: "18px 20px", color: "#9CA3AF", fontSize: 13 }}>No cash accounts found. Go to Chart of Accounts and mark an account as "Cash / Petty Cash".</div>
+        : <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 14, marginBottom: 16 }}>
+              {cashOnlyAccts.map(a => {
+                const bal = accountBalance(a, ledger);
+                return <div key={a.id} style={{ ...C.card, padding: "18px 20px", borderLeft: "4px solid #D97706" }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{a.name}</div>
+                  <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 2 }}>Account {a.code}</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8, color: bal >= 0 ? "#059669" : "#DC2626" }}>{fmtAED(bal)}</div>
+                </div>;
+              })}
+            </div>
+            <div style={C.card}>
+              <div style={{ padding: "12px 18px", borderBottom: "1px solid #E5E7EB", fontWeight: 600, fontSize: 13, color: "#D97706" }}>Cash Transactions</div>
+              {ActivityTable(cashRows, "No cash transactions in this period.")}
+            </div>
+          </>
+      }
     </div>
 
     {showImport && <div style={C.modal} onClick={() => setShowImport(false)}>
@@ -1496,12 +1555,24 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
 
     {showTransfer && <div style={C.modal} onClick={() => setShowTransfer(false)}>
       <div style={C.mbox(460)} onClick={e => e.stopPropagation()}>
-        <div style={C.mhdr}><span style={{ fontWeight: 700 }}>Bank Transfer</span><button onClick={() => setShowTransfer(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>×</button></div>
+        <div style={C.mhdr}><span style={{ fontWeight: 700 }}>Transfer</span><button onClick={() => setShowTransfer(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>×</button></div>
         <div style={C.mbdy}>
           <div style={C.fg}>
             <div><label style={C.label}>Date</label><Inp type="date" value={tf.date} onChange={e => setTf(p => ({ ...p, date: e.target.value }))} /></div>
-            <div><label style={C.label}>From</label><Sel value={tf.fromCode} onChange={e => setTf(p => ({ ...p, fromCode: e.target.value }))}><option value="">— Select —</option>{bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</Sel></div>
-            <div><label style={C.label}>To</label><Sel value={tf.toCode} onChange={e => setTf(p => ({ ...p, toCode: e.target.value }))}><option value="">— Select —</option>{bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</Sel></div>
+            <div><label style={C.label}>From</label>
+              <Sel value={tf.fromCode} onChange={e => setTf(p => ({ ...p, fromCode: e.target.value }))}>
+                <option value="">— Select —</option>
+                {bankOnlyAccts.length > 0 && <optgroup label="Bank Accounts">{bankOnlyAccts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
+                {cashOnlyAccts.length > 0 && <optgroup label="Cash Accounts">{cashOnlyAccts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
+              </Sel>
+            </div>
+            <div><label style={C.label}>To</label>
+              <Sel value={tf.toCode} onChange={e => setTf(p => ({ ...p, toCode: e.target.value }))}>
+                <option value="">— Select —</option>
+                {bankOnlyAccts.length > 0 && <optgroup label="Bank Accounts">{bankOnlyAccts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
+                {cashOnlyAccts.length > 0 && <optgroup label="Cash Accounts">{cashOnlyAccts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
+              </Sel>
+            </div>
             <div><label style={C.label}>Amount (AED)</label><Inp type="number" value={tf.amount} onChange={e => setTf(p => ({ ...p, amount: e.target.value }))} /></div>
           </div>
           <div style={{ marginTop: 12 }}><label style={C.label}>Memo</label><Inp value={tf.memo} onChange={e => setTf(p => ({ ...p, memo: e.target.value }))} /></div>
@@ -1518,7 +1589,7 @@ function COAPage({ accounts, setAccounts, ledger, userRole }) {
   const [show, setShow] = useState(false);
   const [edit, setEdit] = useState(null);
   const [filter, setFilter] = useState("All");
-  const empty = { code: "", name: "", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false };
+  const empty = { code: "", name: "", type: "Expense", isBank: false, isCash: false, isOutputVAT: false, isInputVAT: false };
 
   useEffect(() => {
     const h = () => { setEdit(null); setShow(true); };
@@ -1552,7 +1623,7 @@ function COAPage({ accounts, setAccounts, ledger, userRole }) {
         <tbody>
           {filtered.map(a => {
             const bal = accountBalance(a, ledger);
-            const flags = [a.isBank && "Bank", a.isOutputVAT && "Out VAT", a.isInputVAT && "In VAT"].filter(Boolean);
+            const flags = [a.isBank && "Bank", a.isCash && "Cash", a.isOutputVAT && "Out VAT", a.isInputVAT && "In VAT"].filter(Boolean);
             return <tr key={a.id}>
               <td style={{ ...C.td, fontFamily: "monospace", fontWeight: 600 }}>{a.code}</td>
               <td style={C.td}>{a.name}</td>
@@ -1574,7 +1645,14 @@ function COAPage({ accounts, setAccounts, ledger, userRole }) {
             <div><label style={C.label}>Account Code</label><Inp value={(edit || empty).code} onChange={e => setEdit(p => ({ ...(p || empty), code: e.target.value }))} /></div>
             <div><label style={C.label}>Account Name</label><Inp value={(edit || empty).name} onChange={e => setEdit(p => ({ ...(p || empty), name: e.target.value }))} /></div>
             <div><label style={C.label}>Type</label><Sel value={(edit || empty).type} onChange={e => setEdit(p => ({ ...(p || empty), type: e.target.value }))}>{ACCT_TYPES.map(t => <option key={t}>{t}</option>)}</Sel></div>
-            <div><label style={C.label}>Bank Account?</label><Sel value={(edit || empty).isBank ? "yes" : "no"} onChange={e => setEdit(p => ({ ...(p || empty), isBank: e.target.value === "yes" }))}><option value="no">No</option><option value="yes">Yes</option></Sel></div>
+            <div><label style={C.label}>Account Type Flag</label>
+              <Sel value={(edit || empty).isBank ? "bank" : (edit || empty).isCash ? "cash" : "none"}
+                onChange={e => setEdit(p => ({ ...(p || empty), isBank: e.target.value === "bank", isCash: e.target.value === "cash" }))}>
+                <option value="none">Regular account</option>
+                <option value="bank">Bank account (appears in Banking · bank section)</option>
+                <option value="cash">Cash / Petty Cash (appears in Banking · cash section)</option>
+              </Sel>
+            </div>
           </div>
         </div>
         <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn()} onClick={() => save(edit || empty)}>💾 Save</button></div>

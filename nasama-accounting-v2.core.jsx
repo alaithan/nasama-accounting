@@ -496,7 +496,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     // ── CLEAN CHART OF ACCOUNTS ───────────────────────
     // NO Accounts Receivable, NO Accounts Payable — cash-settled only
     const SEED_ACCOUNTS = [
-      { id: "a1001", code: "1001", name: "Cash", type: "Asset", isBank: false, isOutputVAT: false, isInputVAT: false },
+      { id: "a1001", code: "1001", name: "Cash", type: "Asset", isBank: false, isCash: true, isOutputVAT: false, isInputVAT: false },
       { id: "a1002", code: "1002", name: "Bank — Mashreq Bank", type: "Asset", isBank: true, isOutputVAT: false, isInputVAT: false },
       { id: "a1004", code: "1004", name: "Prepaid Expenses", type: "Asset", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a1201", code: "1201", name: "Input VAT Recoverable", type: "Asset", isBank: false, isOutputVAT: false, isInputVAT: true },
