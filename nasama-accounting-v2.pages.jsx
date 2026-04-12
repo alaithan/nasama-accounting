@@ -145,6 +145,56 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     };
   }, [txns, accounts, dateFilter]);
 
+  // ── Prior-year same period (YoY comparator) ──────────────────────────────
+  const priorDateRange = useMemo(() => {
+    const shiftY = d => d ? `${parseInt(d.slice(0, 4)) - 1}${d.slice(4)}` : null;
+    return { from: shiftY(dateFilter.from), to: shiftY(dateFilter.to) };
+  }, [dateFilter.from, dateFilter.to]);
+
+  const priorFilteredKpis = useMemo(() => {
+    if (!priorDateRange.from || !priorDateRange.to)
+      return { rev: 0, exp: 0, brokerShare: 0, companyNetCommissionRetained: 0, operatingCashFlow: 0 };
+    const ft = txns.filter(t => !t.isVoid && (t.date || "") >= priorDateRange.from && (t.date || "") <= priorDateRange.to);
+    const accountById = new Map(accounts.map(a => [a.id, a]));
+    let rev = 0, exp = 0, brokerPayout = 0, opCashIn = 0, opCashOut = 0;
+    for (const t of ft) {
+      const lines = t.lines || [];
+      for (const l of lines) {
+        const a = accountById.get(l.accountId);
+        if (!a) continue;
+        if (a.type === "Revenue") rev += (l.credit || 0) - (l.debit || 0);
+        if (a.type === "Expense") {
+          const amt = (l.debit || 0) - (l.credit || 0);
+          exp += amt;
+          if ((a.name || "").toLowerCase().includes("broker") || (a.code || "").startsWith("55")) brokerPayout += amt;
+        }
+      }
+      const bankLines = lines.filter(l => { const a = accountById.get(l.accountId); return a && (a.isBank || a.code === "1001"); });
+      const nonBankLines = lines.filter(l => { const a = accountById.get(l.accountId); return a && !(a.isBank || a.code === "1001"); });
+      const isTransfer = bankLines.length > 0 && nonBankLines.length === 0;
+      const isOp = bankLines.length > 0 && !isTransfer && !["CI", "OD", "BT"].includes(t.txnType) && !(t.tags || "").includes("opening-balance");
+      if (isOp) {
+        opCashIn += bankLines.reduce((s, l) => s + (l.debit || 0), 0);
+        opCashOut += bankLines.reduce((s, l) => s + (l.credit || 0), 0);
+      }
+    }
+    return { rev, exp, brokerShare: brokerPayout, companyNetCommissionRetained: rev - brokerPayout, operatingCashFlow: opCashIn - opCashOut };
+  }, [txns, accounts, priorDateRange.from, priorDateRange.to]);
+
+  const priorCash = useMemo(() => {
+    if (!priorDateRange.to) return null;
+    const accountById = new Map(accounts.map(a => [a.id, a]));
+    let cash = 0;
+    txns.filter(t => !t.isVoid && (t.date || "") <= priorDateRange.to).forEach(t => {
+      (t.lines || []).forEach(l => {
+        const a = accountById.get(l.accountId);
+        if (!a || !(a.isBank || a.isCash || a.code === "1001")) return;
+        cash += (l.debit || 0) - (l.credit || 0);
+      });
+    });
+    return cash;
+  }, [txns, accounts, priorDateRange.to]);
+
   // Planned expenses KPIs for CEO snapshot
   const avgMonthlyFixed = (plannedExpenses || []).filter(e => e.expenseType === "recurring").reduce((s, e) => s + feComputeMonthlyEquivalent(e), 0);
   const feKpis = useMemo(() => {
@@ -190,28 +240,46 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
       <div style={{ fontSize: 12, color: "rgba(255,255,255,.76)", marginTop: 4, lineHeight: 1.55 }}>{sub}</div>
     </div>
   </div>;
-  const metricTile = ({ label, value, sub, accent, onClick }) => <div style={{ background: "#ffffff", border: "1px solid #EAECF0", borderRadius: 14, boxShadow: "0 1px 3px rgba(16,24,40,.06)", padding: "20px 20px 16px", position: "relative", overflow: "hidden", cursor: onClick ? "pointer" : "default", transition: "box-shadow .2s, transform .2s" }} onClick={onClick || undefined} onMouseEnter={e => { if (onClick) { e.currentTarget.style.boxShadow = "0 8px 24px rgba(16,24,40,.12)"; e.currentTarget.style.transform = "translateY(-1px)"; } }} onMouseLeave={e => { e.currentTarget.style.boxShadow = "0 1px 3px rgba(16,24,40,.06)"; e.currentTarget.style.transform = "none"; }}>
-    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: accent, borderRadius: "14px 14px 0 0" }} />
-    <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.09em", color: "#98A2B3", fontWeight: 600, marginBottom: 10 }}>{label}</div>
-    <div style={{ fontSize: 25, fontWeight: 700, color: dark ? "#E8EAF2" : NAVY, lineHeight: 1.1, letterSpacing: "-0.02em", fontVariantNumeric: "tabular-nums" }}>{value}</div>
-    <div style={{ fontSize: 12, color: "#98A2B3", marginTop: 8, lineHeight: 1.5 }}>{sub}</div>
-  </div>;
+  const metricTile = ({ label, value, sub, accent, onClick, rawValue, prevValue, higherIsBetter }) => {
+    const hasComp = priorDateRange.from && prevValue !== null && prevValue !== undefined && rawValue !== null && rawValue !== undefined;
+    const variance = hasComp ? rawValue - prevValue : 0;
+    const pct = hasComp && prevValue !== 0 ? (variance / Math.abs(prevValue)) * 100 : null;
+    const varGood = higherIsBetter !== undefined ? (higherIsBetter ? variance >= 0 : variance <= 0) : variance >= 0;
+    const varColor = variance === 0 ? "#98A2B3" : (varGood ? "#059669" : "#DC2626");
+    const varArrow = variance > 0 ? "▲" : variance < 0 ? "▼" : "●";
+    const priorYear = priorDateRange.from ? priorDateRange.from.slice(0, 4) : "Prior";
+    return <div style={{ background: "#ffffff", border: "1px solid #EAECF0", borderRadius: 14, boxShadow: "0 1px 3px rgba(16,24,40,.06)", padding: "20px 20px 16px", position: "relative", overflow: "hidden", cursor: onClick ? "pointer" : "default", transition: "box-shadow .2s, transform .2s" }} onClick={onClick || undefined} onMouseEnter={e => { if (onClick) { e.currentTarget.style.boxShadow = "0 8px 24px rgba(16,24,40,.12)"; e.currentTarget.style.transform = "translateY(-1px)"; } }} onMouseLeave={e => { e.currentTarget.style.boxShadow = "0 1px 3px rgba(16,24,40,.06)"; e.currentTarget.style.transform = "none"; }}>
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: accent, borderRadius: "14px 14px 0 0" }} />
+      <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.09em", color: "#98A2B3", fontWeight: 600, marginBottom: 10 }}>{label}</div>
+      <div style={{ fontSize: 25, fontWeight: 700, color: dark ? "#E8EAF2" : NAVY, lineHeight: 1.1, letterSpacing: "-0.02em", fontVariantNumeric: "tabular-nums" }}>{value}</div>
+      {hasComp && <div style={{ marginTop: 10, paddingTop: 9, borderTop: "1px dashed #EAECF0" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 10.5, color: "#98A2B3", fontVariantNumeric: "tabular-nums" }}>{priorYear}: {fmtAED(prevValue)}</span>
+          <span style={{ fontSize: 10.5, fontWeight: 700, color: varColor, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+            {varArrow} {variance >= 0 ? "+" : ""}{fmtAED(variance)}
+            {pct !== null && <span style={{ fontSize: 9.5, marginLeft: 4, opacity: 0.85 }}>({pct >= 0 ? "+" : ""}{pct.toFixed(1)}%)</span>}
+          </span>
+        </div>
+      </div>}
+      <div style={{ fontSize: 12, color: "#98A2B3", marginTop: 8, lineHeight: 1.5 }}>{sub}</div>
+    </div>;
+  };
   const liabilitiesRatio = Math.max(0, Math.round((kpis.totalLiabilities / Math.max(kpis.totalAssets, 1)) * 100));
   const collectedRatio = deals.length ? Math.round((kpis.collectedDealsCount / deals.length) * 100) : 0;
   const avgOpenDealCommission = kpis.openDealsCount > 0 ? fmtAED(Math.round(kpis.pendingPipelineCommission / kpis.openDealsCount)) : "AED 0.00";
   const obligationCoverageLabel = feKpis.coverageRatio === Infinity ? "Fully covered" : `${feKpis.coverageRatio.toFixed(1)}x`;
   const periodLabel = dateFilter.from && dateFilter.to ? `${dateFilter.from} → ${dateFilter.to}` : "Selected period";
   const liquidityMetrics = [
-    { label: "Cash & Bank", value: fmtAED(kpis.cash), sub: "Available liquidity — current balance", accent: "#2563EB" },
-    { label: "Operating Cash Flow", value: fmtAED(filteredKpis.operatingCashFlow), sub: periodLabel, accent: filteredKpis.operatingCashFlow >= 0 ? "#059669" : "#DC2626" },
-    { label: "Revenue (Period)", value: fmtAED(filteredKpis.rev), sub: periodLabel, accent: filteredKpis.rev >= 0 ? "#0F766E" : "#B91C1C" },
+    { label: "Cash & Bank", value: fmtAED(kpis.cash), sub: "Available liquidity — current balance", accent: "#2563EB", rawValue: kpis.cash, prevValue: priorCash, higherIsBetter: true },
+    { label: "Operating Cash Flow", value: fmtAED(filteredKpis.operatingCashFlow), sub: periodLabel, accent: filteredKpis.operatingCashFlow >= 0 ? "#059669" : "#DC2626", rawValue: filteredKpis.operatingCashFlow, prevValue: priorFilteredKpis.operatingCashFlow, higherIsBetter: true },
+    { label: "Revenue (Period)", value: fmtAED(filteredKpis.rev), sub: periodLabel, accent: filteredKpis.rev >= 0 ? "#0F766E" : "#B91C1C", rawValue: filteredKpis.rev, prevValue: priorFilteredKpis.rev, higherIsBetter: true },
     { label: includePending ? "Projected Runway" : "Cash Runway", value: projectedRunway === Infinity ? "Healthy" : `${projectedRunway.toFixed(1)} months`, sub: includePending ? "Assumes 50% pipeline collection success" : "Cash divided by average monthly expense", accent: includePending ? GOLD : "#475569" },
   ];
   const profitabilityMetrics = [
-    { label: "Gross Commission", value: fmtAED(filteredKpis.grossCommissionCollected), sub: periodLabel, accent: "#0EA5E9" },
-    { label: "Broker Share", value: fmtAED(filteredKpis.brokerShare), sub: "Commission paid to brokers", accent: "#D97706" },
-    { label: "Net Company Commission", value: fmtAED(filteredKpis.companyNetCommissionRetained), sub: "Retained before overhead", accent: filteredKpis.companyNetCommissionRetained >= 0 ? "#059669" : "#DC2626" },
-    { label: "Net Income", value: fmtAED(filteredKpis.rev - filteredKpis.exp), sub: periodLabel, accent: (filteredKpis.rev - filteredKpis.exp) >= 0 ? NAVY : "#DC2626" },
+    { label: "Gross Commission", value: fmtAED(filteredKpis.grossCommissionCollected), sub: periodLabel, accent: "#0EA5E9", rawValue: filteredKpis.grossCommissionCollected, prevValue: priorFilteredKpis.rev, higherIsBetter: true },
+    { label: "Broker Share", value: fmtAED(filteredKpis.brokerShare), sub: "Commission paid to brokers", accent: "#D97706", rawValue: filteredKpis.brokerShare, prevValue: priorFilteredKpis.brokerShare, higherIsBetter: false },
+    { label: "Net Company Commission", value: fmtAED(filteredKpis.companyNetCommissionRetained), sub: "Retained before overhead", accent: filteredKpis.companyNetCommissionRetained >= 0 ? "#059669" : "#DC2626", rawValue: filteredKpis.companyNetCommissionRetained, prevValue: priorFilteredKpis.companyNetCommissionRetained, higherIsBetter: true },
+    { label: "Net Income", value: fmtAED(filteredKpis.rev - filteredKpis.exp), sub: periodLabel, accent: (filteredKpis.rev - filteredKpis.exp) >= 0 ? NAVY : "#DC2626", rawValue: filteredKpis.rev - filteredKpis.exp, prevValue: priorFilteredKpis.rev - priorFilteredKpis.exp, higherIsBetter: true },
   ];
   const controlMetrics = [
     { label: "Net VAT Position", value: fmtAED(filteredKpis.vat), sub: filteredKpis.vat >= 0 ? "Payable VAT for period" : "Recoverable VAT for period", accent: filteredKpis.vat >= 0 ? "#DC2626" : "#059669" },
