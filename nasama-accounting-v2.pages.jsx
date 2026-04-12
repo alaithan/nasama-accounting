@@ -90,12 +90,14 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
   const maxCashFlow = Math.max(1, ...kpis.cashFlowSeries.map(item => Math.max(item.inflow, item.outflow, Math.abs(item.net))));
   const maxPerformance = Math.max(1, ...kpis.monthlyPerformance.map(item => Math.max(item.revenue, item.expense, Math.abs(item.net))));
   const [includePending, setIncludePending] = useState(false);
+  const [showRecentTxns, setShowRecentTxns] = useState(false);
 
   // Projected Runway assuming 50% collection of pipeline
   const projectedRunway = useMemo(() => {
     const effectiveCash = kpis.cash + (includePending ? (kpis.pendingPipelineCommission * 0.5) : 0);
     return kpis.avgMonthlyExpense > 0 ? effectiveCash / kpis.avgMonthlyExpense : Infinity;
   }, [kpis.cash, kpis.pendingPipelineCommission, kpis.avgMonthlyExpense, includePending]);
+  const runwayAlertLevel = projectedRunway === Infinity ? null : projectedRunway < 1 ? "critical" : projectedRunway < 3 ? "warning" : null;
 
   // KPIs recomputed for the selected date period (responds to date filter)
   const filteredKpis = useMemo(() => {
@@ -232,15 +234,13 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     </div>
     {actionLabel && <button style={C.btn("ghost", true)} onClick={() => setPage(actionPage)}>{actionLabel}</button>}
   </div>;
-  const categoryBanner = (eyebrow, title, sub, from, to) => <div style={{ marginBottom: 14, padding: "14px 20px", borderRadius: 12, background: `linear-gradient(125deg, ${from}F0 0%, ${to}E8 100%)`, color: "#FFFFFF", display: "flex", alignItems: "center", gap: 16, boxShadow: `0 4px 18px ${from}28` }}>
-    <div style={{ width: 3, minHeight: 36, borderRadius: 4, background: "rgba(255,255,255,.55)", flexShrink: 0 }} />
-    <div>
-      <div style={{ fontSize: 9.5, textTransform: "uppercase", letterSpacing: "0.18em", opacity: 0.72, fontWeight: 700, marginBottom: 4 }}>{eyebrow}</div>
-      <div style={{ fontSize: 18, fontWeight: 700, lineHeight: 1.2, letterSpacing: "-0.015em" }}>{title}</div>
-      <div style={{ fontSize: 12, color: "rgba(255,255,255,.76)", marginTop: 4, lineHeight: 1.55 }}>{sub}</div>
-    </div>
+  const categoryDivider = (title, sub, color) => <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "8px 0 14px", padding: "0 2px" }}>
+    <div style={{ width: 4, height: 22, borderRadius: 2, background: color, flexShrink: 0 }} />
+    <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.13em", color }}>{title}</span>
+    <div style={{ flex: 1, height: 1, background: "#EAECF0" }} />
+    <span style={{ fontSize: 11, color: "#98A2B3", maxWidth: 340, textAlign: "right", lineHeight: 1.4, display: isTablet ? "none" : "block" }}>{sub}</span>
   </div>;
-  const metricTile = ({ label, value, sub, accent, onClick, rawValue, prevValue, higherIsBetter }) => {
+  const metricTile = ({ label, value, sub, accent, onClick, rawValue, prevValue, higherIsBetter, alertLevel, timeBasis }) => {
     const hasComp = priorDateRange.from && prevValue !== null && prevValue !== undefined && rawValue !== null && rawValue !== undefined;
     const variance = hasComp ? rawValue - prevValue : 0;
     const pct = hasComp && prevValue !== 0 ? (variance / Math.abs(prevValue)) * 100 : null;
@@ -248,11 +248,22 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     const varColor = variance === 0 ? "#98A2B3" : (varGood ? "#059669" : "#DC2626");
     const varArrow = variance > 0 ? "▲" : variance < 0 ? "▼" : "●";
     const priorYear = priorDateRange.from ? priorDateRange.from.slice(0, 4) : "Prior";
-    return <div style={{ background: "#ffffff", border: "1px solid #EAECF0", borderRadius: 14, boxShadow: "0 1px 3px rgba(16,24,40,.06)", padding: "20px 20px 16px", position: "relative", overflow: "hidden", cursor: onClick ? "pointer" : "default", transition: "box-shadow .2s, transform .2s" }} onClick={onClick || undefined} onMouseEnter={e => { if (onClick) { e.currentTarget.style.boxShadow = "0 8px 24px rgba(16,24,40,.12)"; e.currentTarget.style.transform = "translateY(-1px)"; } }} onMouseLeave={e => { e.currentTarget.style.boxShadow = "0 1px 3px rgba(16,24,40,.06)"; e.currentTarget.style.transform = "none"; }}>
-      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: accent, borderRadius: "14px 14px 0 0" }} />
-      <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.09em", color: "#98A2B3", fontWeight: 600, marginBottom: 10 }}>{label}</div>
-      <div style={{ fontSize: 25, fontWeight: 700, color: dark ? "#E8EAF2" : NAVY, lineHeight: 1.1, letterSpacing: "-0.02em", fontVariantNumeric: "tabular-nums" }}>{value}</div>
-      {hasComp && <div style={{ marginTop: 10, paddingTop: 9, borderTop: "1px dashed #EAECF0" }}>
+    // Alert-level overrides
+    const isCritical = alertLevel === "critical";
+    const isWarning = alertLevel === "warning";
+    const bgColor = isCritical ? "#FFF1F1" : isWarning ? "#FFFBEB" : "#ffffff";
+    const borderColor = isCritical ? "#FECACA" : isWarning ? "#FDE68A" : "#EAECF0";
+    const accentBar = isCritical ? "#DC2626" : isWarning ? "#F59E0B" : accent;
+    const valueColor = isCritical ? "#991B1B" : isWarning ? "#92400E" : (dark ? "#E8EAF2" : NAVY);
+    return <div style={{ background: bgColor, border: `1px solid ${borderColor}`, borderRadius: 14, boxShadow: isCritical ? "0 0 0 2px #DC262620" : "0 1px 3px rgba(16,24,40,.06)", padding: "20px 20px 16px", position: "relative", overflow: "hidden", cursor: onClick ? "pointer" : "default", transition: "box-shadow .2s, transform .2s" }} onClick={onClick || undefined} onMouseEnter={e => { if (onClick) { e.currentTarget.style.boxShadow = "0 8px 24px rgba(16,24,40,.12)"; e.currentTarget.style.transform = "translateY(-1px)"; } }} onMouseLeave={e => { e.currentTarget.style.boxShadow = isCritical ? "0 0 0 2px #DC262620" : "0 1px 3px rgba(16,24,40,.06)"; e.currentTarget.style.transform = "none"; }}>
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: accentBar, borderRadius: "14px 14px 0 0" }} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+        <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.09em", color: isCritical ? "#EF4444" : isWarning ? "#D97706" : "#98A2B3", fontWeight: 600 }}>{label}</div>
+        {timeBasis && <span style={{ fontSize: 9.5, color: timeBasis === "balance" ? "#6B7280" : "#2563EB", background: timeBasis === "balance" ? "#F3F4F6" : "#EFF6FF", padding: "2px 6px", borderRadius: 4, fontWeight: 600, whiteSpace: "nowrap" }}>{timeBasis === "balance" ? "As of today" : "Period"}</span>}
+        {(isCritical || isWarning) && <span style={{ fontSize: 11, marginLeft: 4 }}>{isCritical ? "🔴" : "⚠️"}</span>}
+      </div>
+      <div style={{ fontSize: 25, fontWeight: 700, color: valueColor, lineHeight: 1.1, letterSpacing: "-0.02em", fontVariantNumeric: "tabular-nums" }}>{value}</div>
+      {hasComp && <div style={{ marginTop: 10, paddingTop: 9, borderTop: `1px dashed ${isCritical ? "#FECACA" : "#EAECF0"}` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <span style={{ fontSize: 10.5, color: "#98A2B3", fontVariantNumeric: "tabular-nums" }}>{priorYear}: {fmtAED(prevValue)}</span>
           <span style={{ fontSize: 10.5, fontWeight: 700, color: varColor, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
@@ -261,7 +272,7 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
           </span>
         </div>
       </div>}
-      <div style={{ fontSize: 12, color: "#98A2B3", marginTop: 8, lineHeight: 1.5 }}>{sub}</div>
+      <div style={{ fontSize: 12, color: isCritical ? "#DC2626" : isWarning ? "#B45309" : "#98A2B3", marginTop: 8, lineHeight: 1.5 }}>{sub}</div>
     </div>;
   };
   const liabilitiesRatio = Math.max(0, Math.round((kpis.totalLiabilities / Math.max(kpis.totalAssets, 1)) * 100));
@@ -270,109 +281,115 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
   const obligationCoverageLabel = feKpis.coverageRatio === Infinity ? "Fully covered" : `${feKpis.coverageRatio.toFixed(1)}x`;
   const periodLabel = dateFilter.from && dateFilter.to ? `${dateFilter.from} → ${dateFilter.to}` : "Selected period";
   const liquidityMetrics = [
-    { label: "Cash & Bank", value: fmtAED(kpis.cash), sub: "Available liquidity — current balance", accent: "#2563EB", rawValue: kpis.cash, prevValue: priorCash, higherIsBetter: true },
-    { label: "Operating Cash Flow", value: fmtAED(filteredKpis.operatingCashFlow), sub: periodLabel, accent: filteredKpis.operatingCashFlow >= 0 ? "#059669" : "#DC2626", rawValue: filteredKpis.operatingCashFlow, prevValue: priorFilteredKpis.operatingCashFlow, higherIsBetter: true },
-    { label: "Revenue (Period)", value: fmtAED(filteredKpis.rev), sub: periodLabel, accent: filteredKpis.rev >= 0 ? "#0F766E" : "#B91C1C", rawValue: filteredKpis.rev, prevValue: priorFilteredKpis.rev, higherIsBetter: true },
-    { label: includePending ? "Projected Runway" : "Cash Runway", value: projectedRunway === Infinity ? "Healthy" : `${projectedRunway.toFixed(1)} months`, sub: includePending ? "Assumes 50% pipeline collection success" : "Cash divided by average monthly expense", accent: includePending ? GOLD : "#475569" },
+    { label: "Cash & Bank", value: fmtAED(kpis.cash), sub: "Available liquidity — current balance", accent: "#2563EB", rawValue: kpis.cash, prevValue: priorCash, higherIsBetter: true, timeBasis: "balance" },
+    { label: "Operating Cash Flow", value: fmtAED(filteredKpis.operatingCashFlow), sub: periodLabel, accent: filteredKpis.operatingCashFlow >= 0 ? "#059669" : "#DC2626", rawValue: filteredKpis.operatingCashFlow, prevValue: priorFilteredKpis.operatingCashFlow, higherIsBetter: true, timeBasis: "period" },
+    { label: "Gross Commission", value: fmtAED(filteredKpis.rev), sub: periodLabel, accent: filteredKpis.rev >= 0 ? "#0F766E" : "#B91C1C", rawValue: filteredKpis.rev, prevValue: priorFilteredKpis.rev, higherIsBetter: true, timeBasis: "period" },
+    { label: includePending ? "Projected Runway" : "Cash Runway", value: projectedRunway === Infinity ? "✓ Healthy" : `${projectedRunway.toFixed(1)} months`, sub: projectedRunway !== Infinity && projectedRunway < 3 ? (projectedRunway < 1 ? "Immediate action required — less than 1 month left" : "Below safe threshold — target 3+ months") : (includePending ? "Assumes 50% pipeline collection" : "Cash ÷ avg monthly expense"), accent: runwayAlertLevel === "critical" ? "#DC2626" : runwayAlertLevel === "warning" ? "#F59E0B" : "#059669", alertLevel: runwayAlertLevel, timeBasis: "balance" },
   ];
   const profitabilityMetrics = [
-    { label: "Gross Commission", value: fmtAED(filteredKpis.grossCommissionCollected), sub: periodLabel, accent: "#0EA5E9", rawValue: filteredKpis.grossCommissionCollected, prevValue: priorFilteredKpis.rev, higherIsBetter: true },
-    { label: "Broker Share", value: fmtAED(filteredKpis.brokerShare), sub: "Commission paid to brokers", accent: "#D97706", rawValue: filteredKpis.brokerShare, prevValue: priorFilteredKpis.brokerShare, higherIsBetter: false },
-    { label: "Net Company Commission", value: fmtAED(filteredKpis.companyNetCommissionRetained), sub: "Retained before overhead", accent: filteredKpis.companyNetCommissionRetained >= 0 ? "#059669" : "#DC2626", rawValue: filteredKpis.companyNetCommissionRetained, prevValue: priorFilteredKpis.companyNetCommissionRetained, higherIsBetter: true },
-    { label: "Net Income", value: fmtAED(filteredKpis.rev - filteredKpis.exp), sub: periodLabel, accent: (filteredKpis.rev - filteredKpis.exp) >= 0 ? NAVY : "#DC2626", rawValue: filteredKpis.rev - filteredKpis.exp, prevValue: priorFilteredKpis.rev - priorFilteredKpis.exp, higherIsBetter: true },
+    { label: "Broker Share", value: fmtAED(filteredKpis.brokerShare), sub: "Commission paid to brokers — period", accent: "#D97706", rawValue: filteredKpis.brokerShare, prevValue: priorFilteredKpis.brokerShare, higherIsBetter: false, timeBasis: "period" },
+    { label: "Net Company Commission", value: fmtAED(filteredKpis.companyNetCommissionRetained), sub: "Gross commission retained — before overhead", accent: filteredKpis.companyNetCommissionRetained >= 0 ? "#059669" : "#DC2626", rawValue: filteredKpis.companyNetCommissionRetained, prevValue: priorFilteredKpis.companyNetCommissionRetained, higherIsBetter: true, timeBasis: "period" },
+    { label: "Total Expenses", value: fmtAED(filteredKpis.exp), sub: periodLabel, accent: "#6B7280", rawValue: filteredKpis.exp, prevValue: priorFilteredKpis.exp, higherIsBetter: false, timeBasis: "period" },
+    { label: "Net Income", value: fmtAED(filteredKpis.rev - filteredKpis.exp), sub: periodLabel, accent: (filteredKpis.rev - filteredKpis.exp) >= 0 ? NAVY : "#DC2626", rawValue: filteredKpis.rev - filteredKpis.exp, prevValue: priorFilteredKpis.rev - priorFilteredKpis.exp, higherIsBetter: true, timeBasis: "period" },
   ];
   const controlMetrics = [
-    { label: "Net VAT Position", value: fmtAED(filteredKpis.vat), sub: filteredKpis.vat >= 0 ? "Payable VAT for period" : "Recoverable VAT for period", accent: filteredKpis.vat >= 0 ? "#DC2626" : "#059669" },
-    { label: "Liabilities Load", value: `${liabilitiesRatio}%`, sub: "Share of total assets funded by liabilities", accent: liabilitiesRatio > 60 ? "#DC2626" : "#2563EB" },
-    { label: "Overdue Expenses", value: feKpis.overdueCount > 0 ? fmtAED(feKpis.overdueTotal) : "None", sub: `${feKpis.overdueCount} planned items overdue`, accent: feKpis.overdueCount > 0 ? "#DC2626" : "#059669", onClick: () => setPage("futureExpenses") },
-    { label: "Next 30 Days", value: feKpis.next30Count > 0 ? fmtAED(feKpis.next30Total) : "None", sub: `Coverage ${obligationCoverageLabel}`, accent: feKpis.next30Count > 0 ? "#F59E0B" : "#059669", onClick: () => setPage("futureExpenses") },
+    { label: "Net VAT Position", value: fmtAED(filteredKpis.vat), sub: filteredKpis.vat >= 0 ? "Payable to FTA — review before filing" : "Recoverable from FTA", accent: filteredKpis.vat >= 0 ? "#DC2626" : "#059669", timeBasis: "period" },
+    { label: "Liabilities Load", value: liabilitiesRatio > 0 ? `${liabilitiesRatio}%` : "—", sub: liabilitiesRatio > 0 ? "Share of total assets funded by liabilities" : "No liabilities recorded yet", accent: liabilitiesRatio > 60 ? "#DC2626" : "#2563EB", timeBasis: "balance" },
+    { label: "Overdue Expenses", value: feKpis.overdueCount > 0 ? fmtAED(feKpis.overdueTotal) : "None", sub: feKpis.overdueCount > 0 ? `${feKpis.overdueCount} planned item${feKpis.overdueCount > 1 ? "s" : ""} past due date` : "All planned expenses on schedule", accent: feKpis.overdueCount > 0 ? "#DC2626" : "#059669", alertLevel: feKpis.overdueCount > 0 ? "warning" : null, onClick: () => setPage("futureExpenses") },
+    { label: "Due Next 30 Days", value: feKpis.next30Count > 0 ? fmtAED(feKpis.next30Total) : "None", sub: `${feKpis.next30Count} item${feKpis.next30Count !== 1 ? "s" : ""} due — Coverage ${obligationCoverageLabel}`, accent: feKpis.next30Count > 0 ? "#F59E0B" : "#059669", onClick: () => setPage("futureExpenses") },
   ];
   const pipelineMetrics = [
-    { label: "Pending Pipeline", value: fmtAED(kpis.pendingPipelineCommission), sub: "Expected commission not yet collected", accent: GOLD },
-    { label: "Open Deals", value: kpis.openDealsCount, sub: "Deals still progressing through the funnel", accent: "#7C3AED" },
-    { label: "Collected Ratio", value: `${collectedRatio}%`, sub: `${kpis.collectedDealsCount} of ${deals.length} deals collected`, accent: collectedRatio >= 50 ? "#059669" : "#2563EB" },
-    { label: "Avg. Pending / Deal", value: avgOpenDealCommission, sub: "Average expected commission per open deal", accent: "#2563EB" },
+    { label: "Pending Pipeline", value: fmtAED(kpis.pendingPipelineCommission), sub: "Projected — not yet collected", accent: GOLD, timeBasis: "balance" },
+    { label: "Open Deals", value: kpis.openDealsCount, sub: "Deals progressing through the funnel", accent: "#7C3AED", timeBasis: "balance" },
+    { label: "Collected Ratio", value: `${collectedRatio}%`, sub: `${kpis.collectedDealsCount} of ${deals.length} deals fully collected`, accent: collectedRatio >= 50 ? "#059669" : "#2563EB" },
+    { label: "Avg. Pending / Deal", value: avgOpenDealCommission, sub: "Avg. expected commission per open deal", accent: "#2563EB" },
   ];
 
   return <div>
-    <PageHeader title="Dashboard" sub={`Nasama Properties - ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}`}>
-      <button style={C.btn("ghost", true)} onClick={() => setPage("reports")}>Open Financial Reports</button>
-      <button style={C.btn("ghost", true)} onClick={() => setPage("banking")}>Review Cash Movement</button>
+    <PageHeader title="Dashboard" sub={`Nasama Properties — ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}`}>
+      <button style={C.btn("ghost", true)} onClick={() => setPage("reports")}>Financial Reports</button>
+      <button style={C.btn("ghost", true)} onClick={() => setPage("banking")}>Cash Movement</button>
     </PageHeader>
     <DateFilterBar dateFilter={dateFilter} setDateFilter={setDateFilter} />
 
-    <div style={{ ...C.card, marginBottom: 24, padding: 28, background: "linear-gradient(140deg, #080C1A 0%, #0F2748 52%, #0A4D44 100%)", color: "#FFFFFF", border: "none", position: "relative", overflow: "hidden", boxShadow: "0 20px 48px rgba(8,12,26,.35)" }}>
+    {/* ── Alert Strip ── */}
+    {(() => {
+      const alerts = [];
+      if (runwayAlertLevel === "critical") alerts.push({ level: "critical", msg: `Cash Runway: ${projectedRunway.toFixed(1)} months — immediate action required. Review expenses or secure funding.`, action: { label: "Review Expenses", page: "futureExpenses" } });
+      else if (runwayAlertLevel === "warning") alerts.push({ level: "warning", msg: `Cash Runway: ${projectedRunway.toFixed(1)} months — below safe threshold of 3 months.`, action: { label: "Review Expenses", page: "futureExpenses" } });
+      if (kpis.cash < 0) alerts.push({ level: "critical", msg: `Negative total cash balance: ${fmtAED(kpis.cash)}. Check account entries immediately.` });
+      if (feKpis.overdueCount > 0) alerts.push({ level: "warning", msg: `${feKpis.overdueCount} planned expense${feKpis.overdueCount > 1 ? "s" : ""} are overdue — ${fmtAED(feKpis.overdueTotal)} total unpaid.`, action: { label: "View Overdue", page: "futureExpenses" } });
+      if (alerts.length === 0) return null;
+      const hasCritical = alerts.some(a => a.level === "critical");
+      return <div style={{ marginBottom: 16, borderRadius: 10, overflow: "hidden", border: `1.5px solid ${hasCritical ? "#FECACA" : "#FDE68A"}`, background: hasCritical ? "#FEF2F2" : "#FFFBEB" }}>
+        {alerts.map((a, i) => <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: i < alerts.length - 1 ? `1px solid ${a.level === "critical" ? "#FECACA" : "#FDE68A"}` : "none" }}>
+          <span style={{ fontSize: 15, flexShrink: 0 }}>{a.level === "critical" ? "🔴" : "⚠️"}</span>
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: a.level === "critical" ? "#991B1B" : "#92400E", flex: 1 }}>{a.msg}</span>
+          {a.action && <button onClick={() => setPage(a.action.page)} style={{ flexShrink: 0, fontSize: 11, padding: "4px 12px", borderRadius: 6, border: `1px solid ${a.level === "critical" ? "#DC2626" : "#D97706"}`, background: "white", color: a.level === "critical" ? "#DC2626" : "#D97706", cursor: "pointer", fontWeight: 700 }}>{a.action.label}</button>}
+        </div>)}
+      </div>;
+    })()}
+
+    {/* ── Hero ── */}
+    <div style={{ ...C.card, marginBottom: 20, padding: "24px 28px", background: "linear-gradient(140deg, #080C1A 0%, #0F2748 52%, #0A4D44 100%)", color: "#FFFFFF", border: "none", position: "relative", overflow: "hidden", boxShadow: "0 12px 36px rgba(8,12,26,.28)" }}>
       <div style={{ position: "absolute", top: -60, right: -30, width: 200, height: 200, borderRadius: "50%", background: "rgba(201,160,68,.07)" }} />
       <div style={{ position: "absolute", bottom: -50, left: -30, width: 160, height: 160, borderRadius: "50%", background: "rgba(255,255,255,.03)" }} />
-      <div style={{ position: "relative", display: "grid", gridTemplateColumns: isTablet ? "1fr" : "1.35fr 0.95fr", gap: 18, alignItems: "stretch" }}>
-        <div>
-          <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.18em", color: GOLD, fontWeight: 700, marginBottom: 12, opacity: 0.85 }}>Management Cockpit</div>
-          <div style={{ fontSize: 28, fontWeight: 700, lineHeight: 1.18, marginBottom: 10, letterSpacing: "-0.02em" }}>
-            {filteredKpis.operatingCashFlow >= 0 ? "Operations are generating cash." : "Operations need tighter cash discipline."}
-          </div>
-          <div style={{ fontSize: 14, color: "#E5E7EB", maxWidth: 760, lineHeight: 1.7 }}>
-            Operating cash flow for <strong>{periodLabel}</strong> is <strong>{fmtAED(filteredKpis.operatingCashFlow)}</strong>. Net company commission for this period is <strong>{fmtAED(filteredKpis.companyNetCommissionRetained)}</strong>, while pending pipeline stands at <strong>{fmtAED(kpis.pendingPipelineCommission)}</strong>.
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 18 }}>
-            {[
-              { label: "Liquidity", tone: "#93C5FD" },
-              { label: "Profitability", tone: "#6EE7B7" },
-              { label: "Control / Compliance", tone: "#FCA5A5" },
-              { label: "Pipeline Quality", tone: GOLD },
-            ].map(item => <span key={item.label} style={{ padding: "5px 12px", borderRadius: 999, border: "1px solid rgba(255,255,255,.10)", background: "rgba(255,255,255,.06)", color: item.tone, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase" }}>{item.label}</span>)}
-          </div>
+      <div style={{ position: "relative" }}>
+        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.18em", color: GOLD, fontWeight: 700, marginBottom: 10, opacity: 0.85 }}>Management Cockpit — {periodLabel}</div>
+        <div style={{ fontSize: isTablet ? 22 : 27, fontWeight: 700, lineHeight: 1.18, marginBottom: 10, letterSpacing: "-0.02em" }}>
+          {filteredKpis.rev - filteredKpis.exp >= 0 ? "Operations are profitable this period." : "Expenses are exceeding revenue this period."}
+          {runwayAlertLevel === "critical" && <span style={{ marginLeft: 14, fontSize: 14, fontWeight: 600, color: "#FCA5A5" }}>⚠ Runway critical</span>}
+          {runwayAlertLevel === "warning" && <span style={{ marginLeft: 14, fontSize: 14, fontWeight: 600, color: "#FCD34D" }}>⚠ Runway low</span>}
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          {[
-            { label: "Cash & Bank", value: fmtAED(kpis.cash), tone: "#93C5FD" },
-            { label: "Net Company Commission", value: fmtAED(filteredKpis.companyNetCommissionRetained), tone: "#6EE7B7" },
-            { label: "Net VAT Position", value: fmtAED(filteredKpis.vat), tone: filteredKpis.vat >= 0 ? "#FCA5A5" : "#6EE7B7" },
-            { label: "Pending Pipeline", value: fmtAED(kpis.pendingPipelineCommission), tone: GOLD },
-          ].map(item => <div key={item.label} style={{ padding: "15px 16px", borderRadius: 12, background: "rgba(255,255,255,.07)", border: "1px solid rgba(255,255,255,.10)", backdropFilter: "blur(8px)" }}>
-            <div style={{ fontSize: 9.5, textTransform: "uppercase", letterSpacing: "0.12em", color: "rgba(255,255,255,.5)", fontWeight: 600 }}>{item.label}</div>
-            <div style={{ fontSize: 19, fontWeight: 700, color: item.tone, marginTop: 9, letterSpacing: "-0.02em", fontVariantNumeric: "tabular-nums" }}>{item.value}</div>
-          </div>)}
+        <div style={{ fontSize: 13.5, color: "#D1D5DB", maxWidth: 820, lineHeight: 1.72, marginBottom: 16 }}>
+          Cash flow from operations: <strong style={{ color: filteredKpis.operatingCashFlow >= 0 ? "#6EE7B7" : "#FCA5A5" }}>{fmtAED(filteredKpis.operatingCashFlow)}</strong>. Net commission retained: <strong style={{ color: "#93C5FD" }}>{fmtAED(filteredKpis.companyNetCommissionRetained)}</strong>. Net income: <strong style={{ color: (filteredKpis.rev - filteredKpis.exp) >= 0 ? "#6EE7B7" : "#FCA5A5" }}>{fmtAED(filteredKpis.rev - filteredKpis.exp)}</strong>. Pipeline: <strong style={{ color: GOLD }}>{fmtAED(kpis.pendingPipelineCommission)}</strong> projected.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {[{ label: "Liquidity", tone: "#93C5FD" }, { label: "Profitability", tone: "#6EE7B7" }, { label: "Control", tone: "#FCA5A5" }, { label: "Pipeline", tone: GOLD }].map(item => <span key={item.label} style={{ padding: "4px 11px", borderRadius: 999, border: "1px solid rgba(255,255,255,.10)", background: "rgba(255,255,255,.06)", color: item.tone, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase" }}>{item.label}</span>)}
         </div>
       </div>
     </div>
 
-    {categoryBanner("Category 1", "Liquidity", "Can the business fund itself comfortably, meet near-term obligations, and keep operational cash moving in the right direction?", "#1D4ED8", "#0F766E")}
+    {categoryDivider("Liquidity", "Can the business fund itself and keep cash moving in the right direction?", "#2563EB")}
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 14, marginBottom: 20 }}>
-      {liquidityMetrics.map(item => <div key={item.label}>{metricTile({ label: item.label, value: item.value, sub: item.sub, accent: item.accent, onClick: item.onClick })}</div>)}
+      {liquidityMetrics.map(item => <div key={item.label}>{metricTile({ ...item })}</div>)}
     </div>
 
-    {categoryBanner("Category 2", "Profitability", "What the brokerage is collecting, what it is sharing with brokers, and what the company actually retains before overhead.", "#0F766E", "#1D4ED8")}
+    {categoryDivider("Profitability", "What the brokerage collects, pays out to brokers, and retains.", "#059669")}
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 14, marginBottom: 20 }}>
-      {profitabilityMetrics.map(item => <div key={item.label}>{metricTile({ label: item.label, value: item.value, sub: item.sub, accent: item.accent })}</div>)}
+      {profitabilityMetrics.map(item => <div key={item.label}>{metricTile({ ...item })}</div>)}
     </div>
 
-    {categoryBanner("Category 3", "Control / Compliance", "Focus on VAT exposure, liabilities, upcoming obligations, and whether transaction activity is staying disciplined and reviewable.", "#7C2D12", "#B91C1C")}
+    {categoryDivider("Control / Compliance", "VAT exposure, liabilities, and upcoming obligations.", "#DC2626")}
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 14, marginBottom: 20 }}>
-      {controlMetrics.map(item => <div key={item.label}>{metricTile({ label: item.label, value: item.value, sub: item.sub, accent: item.accent, onClick: item.onClick })}</div>)}
+      {controlMetrics.map(item => <div key={item.label}>{metricTile({ ...item })}</div>)}
     </div>
 
-    {categoryBanner("Category 4", "Pipeline Quality", "How healthy the commission funnel is, where expected value is concentrated, and how efficiently deals are converting into collected revenue.", "#7C3AED", "#B8960C")}
+    {categoryDivider("Pipeline Quality", "Commission funnel health and conversion into collected revenue.", "#7C3AED")}
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 14, marginBottom: 20 }}>
-      {pipelineMetrics.map(item => <div key={item.label}>{metricTile({ label: item.label, value: item.value, sub: item.sub, accent: item.accent })}</div>)}
+      {pipelineMetrics.map(item => <div key={item.label}>{metricTile({ ...item })}</div>)}
     </div>
 
     <div style={{ display: "grid", gridTemplateColumns: isTablet ? "1fr" : "1.1fr 1.1fr 0.9fr", gap: 16, marginBottom: 16 }}>
       <div style={C.card}>
-        {sectionTitle("Liquidity - Cash Flow Trend", "Last 6 months of bank and cash movement")}
-        <div style={{ padding: 18 }}>
-          {kpis.cashFlowSeries.map((item, i) => <div key={item.key} style={{ marginBottom: i < kpis.cashFlowSeries.length - 1 ? 14 : 0 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>{item.label}</div>
-              <div style={{ fontSize: 12, color: item.net >= 0 ? "#059669" : "#DC2626", fontWeight: 700 }}>{fmtAED(item.net)}</div>
+        {sectionTitle("Cash Flow Trend", "6 months · inflow vs outflow · net highlighted")}
+        <div style={{ padding: "10px 18px 18px" }}>
+          {kpis.cashFlowSeries.map((item, i) => <div key={item.key} style={{ marginBottom: i < kpis.cashFlowSeries.length - 1 ? 18 : 0 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: NAVY }}>{item.label}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 10, color: "#98A2B3", fontWeight: 500 }}>Net</span>
+                <span style={{ fontSize: 13, fontWeight: 800, color: item.net >= 0 ? "#059669" : "#DC2626", fontVariantNumeric: "tabular-nums" }}>{item.net >= 0 ? "+" : ""}{fmtAED(item.net)}</span>
+              </div>
             </div>
-            <div style={{ display: "grid", gap: 6 }}>
+            <div style={{ display: "grid", gap: 5 }}>
               <div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#6B7280", marginBottom: 4 }}><span>Cash in</span><span>{fmtAED(item.inflow)}</span></div>
-                <div style={{ height: 8, borderRadius: 999, background: "#E5E7EB", overflow: "hidden" }}><div style={{ width: `${Math.max(4, (item.inflow / maxCashFlow) * 100)}%`, height: "100%", background: "#059669" }} /></div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "#6B7280", marginBottom: 4 }}><span>↑ Cash in</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtAED(item.inflow)}</span></div>
+                <div style={{ height: 10, borderRadius: 999, background: "#E5E7EB", overflow: "hidden" }}><div style={{ width: `${Math.max(4, (item.inflow / maxCashFlow) * 100)}%`, height: "100%", background: "#34D399", transition: "width .4s" }} /></div>
               </div>
               <div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#6B7280", marginBottom: 4 }}><span>Cash out</span><span>{fmtAED(item.outflow)}</span></div>
-                <div style={{ height: 8, borderRadius: 999, background: "#E5E7EB", overflow: "hidden" }}><div style={{ width: `${Math.max(4, (item.outflow / maxCashFlow) * 100)}%`, height: "100%", background: "#DC2626" }} /></div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "#6B7280", marginBottom: 4 }}><span>↓ Cash out</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtAED(item.outflow)}</span></div>
+                <div style={{ height: 10, borderRadius: 999, background: "#E5E7EB", overflow: "hidden" }}><div style={{ width: `${Math.max(4, (item.outflow / maxCashFlow) * 100)}%`, height: "100%", background: item.outflow > item.inflow ? "#F87171" : "#FCA5A5", transition: "width .4s" }} /></div>
               </div>
             </div>
           </div>)}
@@ -380,21 +397,24 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
       </div>
 
       <div style={C.card}>
-        {sectionTitle("Profitability - Revenue vs Expense", "Last 6 months of operating performance")}
-        <div style={{ padding: 18 }}>
-          {kpis.monthlyPerformance.map((item, i) => <div key={item.key} style={{ marginBottom: i < kpis.monthlyPerformance.length - 1 ? 14 : 0 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>{item.label}</div>
-              <div style={{ fontSize: 12, color: item.net >= 0 ? "#059669" : "#DC2626", fontWeight: 700 }}>{fmtAED(item.net)}</div>
+        {sectionTitle("Revenue vs Expense", "6 months · profit highlighted in green, loss in red")}
+        <div style={{ padding: "10px 18px 18px" }}>
+          {kpis.monthlyPerformance.map((item, i) => <div key={item.key} style={{ marginBottom: i < kpis.monthlyPerformance.length - 1 ? 18 : 0 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: NAVY }}>{item.label}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 10, color: "#98A2B3", fontWeight: 500 }}>Net</span>
+                <span style={{ fontSize: 13, fontWeight: 800, color: item.net >= 0 ? "#059669" : "#DC2626", fontVariantNumeric: "tabular-nums" }}>{item.net >= 0 ? "+" : ""}{fmtAED(item.net)}</span>
+              </div>
             </div>
-            <div style={{ display: "grid", gap: 6 }}>
+            <div style={{ display: "grid", gap: 5 }}>
               <div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#6B7280", marginBottom: 4 }}><span>Revenue</span><span>{fmtAED(item.revenue)}</span></div>
-                <div style={{ height: 8, borderRadius: 999, background: "#E5E7EB", overflow: "hidden" }}><div style={{ width: `${Math.max(4, (item.revenue / maxPerformance) * 100)}%`, height: "100%", background: "#0EA5E9" }} /></div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "#6B7280", marginBottom: 4 }}><span>Revenue</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtAED(item.revenue)}</span></div>
+                <div style={{ height: 10, borderRadius: 999, background: "#E5E7EB", overflow: "hidden" }}><div style={{ width: `${Math.max(4, (item.revenue / maxPerformance) * 100)}%`, height: "100%", background: "#38BDF8", transition: "width .4s" }} /></div>
               </div>
               <div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#6B7280", marginBottom: 4 }}><span>Expense</span><span>{fmtAED(item.expense)}</span></div>
-                <div style={{ height: 8, borderRadius: 999, background: "#E5E7EB", overflow: "hidden" }}><div style={{ width: `${Math.max(4, (item.expense / maxPerformance) * 100)}%`, height: "100%", background: "#F59E0B" }} /></div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "#6B7280", marginBottom: 4 }}><span>Expenses</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtAED(item.expense)}</span></div>
+                <div style={{ height: 10, borderRadius: 999, background: "#E5E7EB", overflow: "hidden" }}><div style={{ width: `${Math.max(4, (item.expense / maxPerformance) * 100)}%`, height: "100%", background: item.expense > item.revenue ? "#F87171" : "#FBD38D", transition: "width .4s" }} /></div>
               </div>
             </div>
           </div>)}
@@ -496,8 +516,17 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     </div>
 
     <div style={C.card}>
-      {sectionTitle("Control / Compliance - Recent Transactions", "Latest journal activity across the company", "Open Journal", "journal")}
-      <div style={{ padding: "4px 18px 12px" }}>
+      <div style={{ padding: "14px 20px 13px", borderBottom: showRecentTxns ? "1px solid #EAECF0" : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, cursor: "pointer" }} onClick={() => setShowRecentTxns(v => !v)}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 13.5, color: NAVY, letterSpacing: "-0.01em" }}>Recent Transactions</div>
+          <div style={{ fontSize: 12, color: "#98A2B3", marginTop: 3 }}>{recentTxns.length} latest entries for {periodLabel}</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button style={C.btn("ghost", true)} onClick={e => { e.stopPropagation(); setPage("journal"); }}>Open Journal</button>
+          <span style={{ fontSize: 18, color: "#98A2B3", userSelect: "none", lineHeight: 1 }}>{showRecentTxns ? "▲" : "▼"}</span>
+        </div>
+      </div>
+      {showRecentTxns && <div style={{ padding: "4px 18px 12px" }}>
         {recentTxns.length === 0 && <div style={{ textAlign: "center", padding: 30, color: "#9CA3AF", fontSize: 13 }}>No transactions yet. Start by recording a sale receipt or payment.</div>}
         {recentTxns.map((t, i) => {
           const typeInfo = TXN_TYPES[t.txnType] || { label: t.txnType || "JV" };
@@ -505,13 +534,13 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
           return <div key={t.id || i} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.2fr auto auto", gap: 12, alignItems: "center", padding: "11px 0", borderBottom: i < recentTxns.length - 1 ? "1px solid #F3F4F6" : "none", fontSize: 13 }}>
             <div>
               <div style={{ fontWeight: 700, color: NAVY }}>{t.description || "Manual journal entry"}</div>
-              <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 4 }}>{fmtDate(t.date)} - {typeInfo.label} - {t.counterparty || "Internal"}</div>
+              <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 4 }}>{fmtDate(t.date)} · {typeInfo.label} · {t.counterparty || "Internal"}</div>
             </div>
             <span style={{ ...C.badge(t.txnType === "SR" ? "success" : t.txnType === "PV" || t.txnType === "BP" ? "warning" : "info"), justifySelf: isMobile ? "start" : "center" }}>{t.ref}</span>
             <div style={{ fontWeight: 700, color: "#374151", textAlign: isMobile ? "left" : "right" }}>{fmtAED(total || 0)}</div>
           </div>;
         })}
-      </div>
+      </div>}
     </div>
   </div>;
 }
