@@ -612,7 +612,10 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
                       <input type="number" min="0" style={{ ...inp, fontSize: 12, textAlign: "right" }} placeholder="0.00" value={li.dealValue} onChange={e => setLine(idx, "dealValue", e.target.value)} />
                     </td>
                     <td style={{ padding: 8, border: "1px solid #E8DCC8", verticalAlign: "top" }}>
-                      <input type="number" min="0" step="0.01" style={{ ...inp, fontSize: 12, textAlign: "right" }} placeholder="0.00" value={pct || ""} onChange={e => setLine(idx, "commissionPct", e.target.value)} />
+                      <div style={{ display: "flex", alignItems: "center", border: "1.5px solid #D0D5DD", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
+                        <input type="number" min="0" max="100" step="0.01" style={{ ...inp, border: "none", borderRadius: 0, fontSize: 12, textAlign: "right", flex: 1, width: "100%", minWidth: 0 }} placeholder="0.00" value={pct || ""} onChange={e => setLine(idx, "commissionPct", e.target.value)} />
+                        <span style={{ padding: "0 7px", color: "#C9A044", fontSize: 13, fontWeight: 700, background: "#FBF6EC", borderLeft: "1px solid #E8DCC8", whiteSpace: "nowrap", userSelect: "none" }}>%</span>
+                      </div>
                     </td>
                     <td style={{ padding: 8, border: "1px solid #E8DCC8", textAlign: "right", color: "#111827", fontWeight: 600, fontSize: 12, verticalAlign: "middle" }}>{invFmt(c.commissionAmount)}</td>
                     <td style={{ padding: 8, border: "1px solid #E8DCC8", textAlign: "right", color: "#6B7280", fontSize: 12, verticalAlign: "middle" }}>{invFmt(c.vat)}</td>
