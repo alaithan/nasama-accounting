@@ -10,7 +10,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     const GOLD = "#C9A044", GOLD_D = "#A8853A", NAVY = "#0C0F1E", NAVY2 = "#161B35";
     const NASAMA_WORDMARK_SRC = "./nasama_wordmark_transparent.png";
     const NASAMA_ICON_SRC = "./nasama-logo.svg";
-    const DEFAULT_REPORTING_START_DATE = "2026-01-01";
+    const DEFAULT_REPORTING_START_DATE = "2025-01-01";
 
     // ── CONSTANTS ─────────────────────────────────────
     const DEAL_STAGES = ["Lead", "EOI", "Booking Form Signed", "First Payment Paid", "MOU Signed", "SPA Signed", "Handover", "Commission Earned", "Commission Collected"];
