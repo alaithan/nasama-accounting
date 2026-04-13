@@ -26,33 +26,43 @@ function invFmtDate(iso) {
 function invPad(n) { return String(n || 0).padStart(3, "0"); }
 
 function invNum(v) {
-  const n = parseFloat(String(v ?? "").replace(/,/g, ""));
-  return Number.isFinite(n) ? n : 0;
+  var n = parseFloat(String(v === null || v === undefined ? "" : v).replace(/,/g, ""));
+  return isFinite(n) && !isNaN(n) ? n : 0;
 }
 
+// Returns commission amount in AED: dealValue × (commissionPct / 100)
+// e.g. pct = 7 means 7%  →  dealValue × 0.07
 function invCommissionAmount(line) {
-  const dealValue = invNum(line?.dealValue);
-  const rawPct    = line?.commissionPct ?? line?.commission_pct;
-  const hasPct    = rawPct !== undefined && rawPct !== null && String(rawPct).trim() !== "";
-  const pct       = invNum(rawPct);
-  if (hasPct) return dealValue > 0 && pct > 0 ? +(dealValue * pct / 100).toFixed(2) : 0;
-  return +invNum(line?.commissionAmount).toFixed(2);
+  if (!line) return 0;
+  var dv  = invNum(line.dealValue);
+  // Prefer commissionPct; fall back to commission_pct only if commissionPct is absent/blank
+  var rawPct = (line.commissionPct !== undefined && line.commissionPct !== null && String(line.commissionPct).trim() !== "")
+               ? line.commissionPct
+               : line.commission_pct;
+  var pct = invNum(rawPct);
+  if (dv > 0 && pct > 0) return parseFloat((dv * pct / 100).toFixed(2));
+  return 0;
 }
 
 function invLineCalc(line) {
-  const c = invCommissionAmount(line);
-  return { commissionAmount: c, vat: +(c * INV_VAT_RATE).toFixed(2), total: +(c * (1 + INV_VAT_RATE)).toFixed(2) };
+  var c = invCommissionAmount(line);
+  return { commissionAmount: c, vat: parseFloat((c * INV_VAT_RATE).toFixed(2)), total: parseFloat((c * (1 + INV_VAT_RATE)).toFixed(2)) };
 }
 
 function invTotals(items) {
-  const excl = (items || []).reduce((s, li) => s + invCommissionAmount(li), 0);
-  const vat  = +(excl * INV_VAT_RATE).toFixed(2);
-  return { excl: +excl.toFixed(2), vat, incl: +(excl + vat).toFixed(2) };
+  var excl = 0;
+  (items || []).forEach(function(li) { excl += invCommissionAmount(li); });
+  excl = parseFloat(excl.toFixed(2));
+  var vat  = parseFloat((excl * INV_VAT_RATE).toFixed(2));
+  return { excl: excl, vat: vat, incl: parseFloat((excl + vat).toFixed(2)) };
 }
 
 function invNormalizeLine(line) {
-  const calc = invLineCalc(line);
-  return { ...line, commissionPct: line?.commissionPct || line?.commission_pct || "", commissionAmount: calc.commissionAmount };
+  var calc = invLineCalc(line);
+  var pct  = (line.commissionPct !== undefined && line.commissionPct !== null && String(line.commissionPct).trim() !== "")
+             ? line.commissionPct
+             : (line.commission_pct || "");
+  return Object.assign({}, line, { commissionPct: pct, commissionAmount: calc.commissionAmount });
 }
 
 function invWithDerivedTotals(inv) {
@@ -61,15 +71,15 @@ function invWithDerivedTotals(inv) {
 }
 
 function invValidate(inv) {
-  const e = [];
-  if (!inv.invoicedTo?.companyName?.trim())    e.push("Developer / Client name is required");
-  if (!(inv.lineItems?.length > 0))            e.push("At least one line item is required");
-  (inv.lineItems || []).forEach((li, i) => {
-    if (!li.projectUnit?.trim())                e.push(`Row ${i+1}: Project | Unit is required`);
-    if (!li.specification?.trim())              e.push(`Row ${i+1}: Specification is required`);
-    if (!(invNum(li.dealValue) > 0))             e.push(`Row ${i+1}: Deal Value must be > 0`);
-    if (!(invNum(li.commissionPct ?? li.commission_pct) > 0) && !(invNum(li.commissionAmount) > 0)) e.push(`Row ${i+1}: Commission % must be > 0`);
-    if (!(invCommissionAmount(li) > 0))          e.push(`Row ${i+1}: Commission Amount must be > 0`);
+  var e = [];
+  if (!inv.invoicedTo || !(inv.invoicedTo.companyName || "").trim()) e.push("Developer / Client name is required");
+  if (!inv.lineItems || inv.lineItems.length === 0)                  e.push("At least one line item is required");
+  (inv.lineItems || []).forEach(function(li, i) {
+    if (!(li.projectUnit  || "").trim()) e.push("Row " + (i+1) + ": Project | Unit is required");
+    if (!(li.specification || "").trim()) e.push("Row " + (i+1) + ": Specification is required");
+    if (!(invNum(li.dealValue) > 0))      e.push("Row " + (i+1) + ": Deal Value must be > 0");
+    if (!(invNum(li.commissionPct) > 0 || invNum(li.commission_pct) > 0)) e.push("Row " + (i+1) + ": Commission % must be > 0");
+    if (!(invCommissionAmount(li) > 0))   e.push("Row " + (i+1) + ": Commission Amount must be > 0");
   });
   return e;
 }
