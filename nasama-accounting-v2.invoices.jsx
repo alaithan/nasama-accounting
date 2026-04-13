@@ -34,6 +34,13 @@ function invFromCents(v) {
   return parseFloat((invNum(v) / 100).toFixed(2));
 }
 
+function invCleanCompanyAddress(address) {
+  return String(address || "")
+    .replace(/,\s*P\.?\s*O\.?\s*Box\s*:?\s*626-?0\s*$/i, "")
+    .replace(/\s*P\.?\s*O\.?\s*Box\s*:?\s*626-?0\s*/i, "")
+    .trim();
+}
+
 // Returns commission amount in AED: dealValue × (commissionPct / 100)
 // e.g. pct = 7 means 7%  →  dealValue × 0.07
 function invCommissionAmount(line) {
@@ -106,7 +113,7 @@ function invBlankDoc(settings) {
     status:           "draft",
     billFrom: {
       companyName: settings?.company    || "NASAMA PROPERTIES LLC",
-      address:     settings?.address    || "Office 218, Binghatti Emerald, JVC, District 15, Dubai, UAE, P.O. Box: 626-0",
+      address:     settings?.address    || "Office 218, Binghatti Emerald, JVC, District 15, Dubai, UAE",
       email:       settings?.email      || "info@nasamaproperties.com",
       contactNo:   settings?.contactNo  || "971 502757603",
       trn:         settings?.trn        || "",
@@ -190,11 +197,15 @@ async function invExportPDF(elementId, invoiceNumber) {
 
     // Add first page then append additional pages if content overflows
     pdf.addImage(img, "PNG", 0, 0, pageW, imgHeightMM);
-    let yUsed = pageH;
-    while (yUsed < imgHeightMM) {
-      pdf.addPage();
-      pdf.addImage(img, "PNG", 0, -yUsed, pageW, imgHeightMM);
-      yUsed += pageH;
+    // Only add extra pages when content genuinely overflows (>2 mm tolerance
+    // prevents a near-empty trailing page from tiny render rounding)
+    if (imgHeightMM > pageH + 2) {
+      let yUsed = pageH;
+      while (yUsed < imgHeightMM - 2) {
+        pdf.addPage();
+        pdf.addImage(img, "PNG", 0, -yUsed, pageW, imgHeightMM);
+        yUsed += pageH;
+      }
     }
 
     pdf.save(`Nasama_Invoice_${invoiceNumber || "draft"}.pdf`);
@@ -214,56 +225,196 @@ function InvoicePreviewDoc({ invoice }) {
   const { billFrom = {}, invoicedTo = {}, lineItems = [], bankDetails = {}, invoiceNumber, invoiceDate } = invoice;
   const T  = invTotals(lineItems);
 
-  // Design tokens
-  const G  = "#C9A044";           // gold
-  const GB = "#FBF6EC";           // gold tint bg
-  const BD = "#E8DCC8";           // warm border
-  const TX = "#1A1A2E";           // primary text
-  const SL = "#777";              // secondary text
-
   const logoSrc = typeof NASAMA_WORDMARK_SRC !== "undefined" ? NASAMA_WORDMARK_SRC : null;
 
-  const S = {
-    root:    { width: INV_A4_PX + "px", background: "#fff", fontFamily: "'Segoe UI','Helvetica Neue',Arial,sans-serif", fontSize: 12, color: TX, boxSizing: "border-box" },
-    goldBar: { height: 7, background: `linear-gradient(90deg,${G} 0%,#A07830 60%,#5C3F10 100%)` },
-    hdr:     { display: "flex", alignItems: "flex-start", justifyContent: "space-between", padding: "22px 38px 18px", borderBottom: `2.5px solid ${G}` },
-    rBlock:  { textAlign: "right" },
-    title:   { fontSize: 27, fontWeight: 800, letterSpacing: "0.07em", color: TX, lineHeight: 1 },
-    mGrid:   { marginTop: 11, display: "grid", gridTemplateColumns: "auto auto", columnGap: 18, rowGap: 3, justifyContent: "end" },
-    mLbl:    { fontSize: 11, color: SL, fontWeight: 500 },
-    mVal:    { fontSize: 11, color: TX, fontWeight: 700 },
-    parties: { display: "grid", gridTemplateColumns: "1fr 1fr", border: `1px solid ${BD}`, margin: "20px 38px 0" },
-    pL:      { padding: "15px 20px", borderRight: `1px solid ${BD}` },
-    pR:      { padding: "15px 20px" },
-    pSec:    { fontSize: 9.5, fontWeight: 800, letterSpacing: "0.16em", textTransform: "uppercase", color: G, paddingBottom: 8, borderBottom: `1px solid ${BD}`, marginBottom: 12 },
-    pRow:    { display: "flex", gap: 8, marginBottom: 5, fontSize: 11, lineHeight: 1.45 },
-    pLbl:    { color: SL, fontWeight: 600, minWidth: 108, flexShrink: 0 },
-    pVal:    { color: TX, flex: 1, wordBreak: "break-word" },
-    tWrap:   { margin: "20px 38px 0" },
-    tTitle:  { fontSize: 9.5, fontWeight: 800, letterSpacing: "0.15em", textTransform: "uppercase", color: G, background: GB, padding: "8px 13px", border: `1px solid ${BD}`, borderBottom: "none" },
-    tbl:     { width: "100%", borderCollapse: "collapse", border: `1px solid ${BD}` },
-    th:      { background: "#F5EDD8", padding: "9px 10px", fontSize: 10, fontWeight: 700, color: TX, border: `1px solid ${BD}`, letterSpacing: "0.03em", verticalAlign: "middle" },
-    td:      { padding: "10px 10px", border: `1px solid ${BD}`, fontSize: 11, color: TX, verticalAlign: "top" },
-    tdR:     { textAlign: "right" },
-    totRow:  { background: GB },
-    totCell: { padding: "10px 10px", border: `1px solid ${BD}`, fontWeight: 700, fontSize: 11, textAlign: "right" },
-    totLbl:  { padding: "10px 12px", border: `1px solid ${BD}`, fontWeight: 700, fontSize: 11, color: G, textAlign: "center", letterSpacing: "0.04em" },
-    bottom:  { display: "grid", gridTemplateColumns: "1.15fr 0.85fr", border: `1px solid ${BD}`, margin: "20px 38px 0" },
-    bBox:    { padding: "15px 20px", borderRight: `1px solid ${BD}` },
-    sBox:    { padding: "15px 20px" },
-    bRow:    { display: "flex", gap: 6, marginBottom: 6, fontSize: 11 },
-    bLbl:    { color: SL, fontWeight: 600, minWidth: 165, flexShrink: 0 },
-    bVal:    { color: TX, fontWeight: 500, flex: 1 },
-    sRow:    { display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px solid ${BD}`, fontSize: 12 },
-    sLbl:    { color: SL },
-    sVal:    { fontWeight: 600, color: TX },
-    sFinal:  { display: "flex", justifyContent: "space-between", background: `rgba(201,160,68,.12)`, padding: "10px", marginTop: 8, borderRadius: 5 },
-    sFLbl:   { fontWeight: 700, color: TX, fontSize: 12.5 },
-    sFVal:   { fontWeight: 800, color: G, fontSize: 15 },
-    stamp:   { width: 190, height: 88, border: `1.5px dashed ${G}`, borderRadius: 7, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 20 },
-    sTxt:    { fontSize: 9.5, color: G, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" },
-    foot:    { borderTop: `1px solid ${BD}`, margin: "14px 38px 22px", paddingTop: 9, display: "flex", justifyContent: "space-between", fontSize: 10, color: "#AAAAAA" },
+  const G = "#B58A2A";
+  const CHAR = "#252833";
+  const INK = "#1E2028";
+  const MUT = "#6F6A60";
+  const LINE = "#DDD4C4";
+  const SOFT = "#F8F4EC";
+  const SOFT2 = "#FBFAF7";
+
+  const P = {
+    root: { width: INV_A4_PX + "px", background: "#FFFFFF", fontFamily: "'Segoe UI','Helvetica Neue',Arial,sans-serif", fontSize: 11.2, color: INK, boxSizing: "border-box", position: "relative", overflow: "hidden" },
+    leftChar: { position: "absolute", left: -82, top: 0, width: 164, height: 348, background: CHAR, borderBottomRightRadius: 180, zIndex: 0 },
+    leftGold: { position: "absolute", left: -58, top: 132, width: 82, height: 392, background: G, borderTopRightRadius: 90, borderBottomRightRadius: 90, zIndex: 0 },
+    rightChar: { position: "absolute", right: -86, bottom: 0, width: 170, height: 364, background: CHAR, borderTopLeftRadius: 190, zIndex: 0 },
+    rightGold: { position: "absolute", right: -54, bottom: 132, width: 74, height: 250, background: G, borderTopLeftRadius: 82, borderBottomLeftRadius: 82, zIndex: 0 },
+    hairline: { position: "absolute", left: 44, right: 44, top: 144, height: 1, background: LINE, zIndex: 0 },
+    watermark: { position: "absolute", left: 118, right: 118, top: 430, textAlign: "center", fontSize: 76, fontWeight: 800, letterSpacing: "0.16em", color: G, opacity: 0.035, zIndex: 0, pointerEvents: "none" },
+    content: { position: "relative", zIndex: 1, padding: "42px 44px 28px 58px", boxSizing: "border-box" },
+    hdr: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 28, paddingBottom: 24 },
+    logoWrap: { paddingTop: 4 },
+    logo: { width: 244, maxHeight: 82, objectFit: "contain", display: "block" },
+    fallbackLogo: { fontWeight: 800, fontSize: 22, color: G, letterSpacing: "0.16em", lineHeight: 1.18 },
+    titleBlock: { textAlign: "right", minWidth: 244 },
+    title: { fontSize: 34, fontWeight: 800, color: CHAR, lineHeight: 0.95, letterSpacing: "0.08em", marginBottom: 15 },
+    metaBox: { display: "grid", gridTemplateColumns: "102px 126px", marginLeft: "auto", borderTop: "3px solid " + G, background: SOFT2, boxShadow: "inset 0 0 0 1px " + LINE },
+    mLbl: { padding: "8px 10px", color: MUT, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.09em", borderBottom: "1px solid " + LINE },
+    mVal: { padding: "8px 10px", color: INK, fontSize: 11.5, fontWeight: 800, textAlign: "right", borderBottom: "1px solid " + LINE, fontVariantNumeric: "tabular-nums" },
+    introRule: { display: "flex", alignItems: "center", gap: 12, margin: "0 0 20px" },
+    ruleGold: { width: 96, height: 4, background: G },
+    ruleChar: { flex: 1, height: 1, background: LINE },
+    parties: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, marginBottom: 22 },
+    partyCard: { background: "rgba(255,255,255,0.96)", border: "1px solid " + LINE, borderTop: "4px solid " + G, padding: "15px 17px 13px", minHeight: 156, boxSizing: "border-box" },
+    secTitle: { color: CHAR, fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", marginBottom: 11, display: "flex", alignItems: "center", gap: 9 },
+    secTick: { width: 20, height: 2, background: G, display: "inline-block" },
+    pRow: { display: "grid", gridTemplateColumns: "110px 1fr", gap: 10, padding: "4px 0", borderBottom: "1px solid #EFE8DA", lineHeight: 1.35 },
+    pLbl: { color: MUT, fontSize: 10.3, fontWeight: 700 },
+    pVal: { color: INK, fontSize: 10.8, fontWeight: 600, wordBreak: "break-word" },
+    tableTitle: { background: "linear-gradient(90deg," + G + " 0%,#8C6518 100%)", color: "#FFFFFF", padding: "9px 13px", fontSize: 11, fontWeight: 800, letterSpacing: "0.16em", textTransform: "uppercase" },
+    tbl: { width: "100%", borderCollapse: "collapse", tableLayout: "fixed", borderLeft: "1px solid " + LINE, borderRight: "1px solid " + LINE, borderBottom: "1px solid " + LINE },
+    th: { background: SOFT, color: CHAR, padding: "9px 8px", borderBottom: "1px solid " + LINE, borderRight: "1px solid " + LINE, fontSize: 9.4, fontWeight: 800, letterSpacing: "0.025em", verticalAlign: "middle", lineHeight: 1.25 },
+    td: { padding: "10px 8px", borderBottom: "1px solid #ECE3D4", borderRight: "1px solid #ECE3D4", fontSize: 10.3, color: INK, verticalAlign: "middle", lineHeight: 1.35, wordBreak: "break-word" },
+    tdR: { textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "normal" },
+    totalLabel: { background: "#F1E8D6", color: CHAR, padding: "10px 12px", borderRight: "1px solid " + LINE, fontWeight: 800, fontSize: 10.8, letterSpacing: "0.08em", textTransform: "uppercase" },
+    totalCell: { background: "#F1E8D6", padding: "10px 8px", borderRight: "1px solid " + LINE, fontWeight: 800, fontSize: 10.5, textAlign: "right", fontVariantNumeric: "tabular-nums" },
+    lower: { display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 18, marginTop: 22 },
+    bankBox: { border: "1px solid " + LINE, background: "#FFFFFF", padding: "16px 17px" },
+    bankTitle: { color: CHAR, fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.13em", borderBottom: "1px solid " + LINE, paddingBottom: 9, marginBottom: 10 },
+    bankNote: { color: MUT, fontSize: 9.5, fontStyle: "italic", fontWeight: 500, letterSpacing: 0, textTransform: "none" },
+    bRow: { display: "grid", gridTemplateColumns: "158px 1fr", gap: 10, padding: "4px 0", lineHeight: 1.35 },
+    bLbl: { color: MUT, fontWeight: 700, fontSize: 10.2 },
+    bVal: { color: INK, fontWeight: 600, fontSize: 10.4, wordBreak: "break-word" },
+    summaryBox: { border: "1px solid " + LINE, background: SOFT2, padding: 0, overflow: "hidden" },
+    sumHead: { background: CHAR, color: "#FFFFFF", padding: "10px 14px", fontSize: 11, fontWeight: 800, letterSpacing: "0.1em" },
+    sumBody: { padding: "12px 14px 14px" },
+    sRow: { display: "flex", justifyContent: "space-between", gap: 16, padding: "8px 0", borderBottom: "1px solid " + LINE, fontSize: 11.2 },
+    sLbl: { color: MUT, fontWeight: 700 },
+    sVal: { color: INK, fontWeight: 800, textAlign: "right", fontVariantNumeric: "tabular-nums" },
+    sFinal: { display: "flex", justifyContent: "space-between", gap: 14, marginTop: 10, padding: "11px 12px", background: G, color: "#FFFFFF" },
+    sFLbl: { fontWeight: 800, fontSize: 11.5 },
+    sFVal: { fontWeight: 900, fontSize: 14, textAlign: "right", fontVariantNumeric: "tabular-nums" },
+    stampRow: { display: "flex", justifyContent: "flex-end", marginTop: 20 },
+    stamp: { width: 238, height: 94, border: "1.5px dashed " + G, background: "rgba(255,255,255,0.74)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 13 },
+    stampTxt: { color: CHAR, fontSize: 10, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" },
+    stampLine: { width: 132, height: 1, background: LINE },
+    foot: { marginTop: 22, paddingTop: 10, borderTop: "1px solid " + LINE, display: "flex", justifyContent: "space-between", gap: 18, color: MUT, fontSize: 9.6, lineHeight: 1.35 },
   };
+
+  const pFields = [["Company Name", "companyName"], ["Address", "address"], ["Email", "email"], ["Contact No.", "contactNo"], ["TRN", "trn"]];
+  const iFields = [["Developer / Client Name", "companyName"], ["Address", "address"], ["Email", "email"], ["Contact No.", "contactNo"], ["TRN", "trn"]];
+  const bankRows = [["Account Beneficiary Name","beneficiaryName"],["Bank Name","bankName"],["Bank Branch Address","branchAddress"],["Account Number","accountNumber"],["IBAN","iban"],["Swift Code","swiftCode"]];
+
+  return (
+    <div style={P.root}>
+      <div style={P.leftChar} />
+      <div style={P.leftGold} />
+      <div style={P.rightChar} />
+      <div style={P.rightGold} />
+      <div style={P.hairline} />
+      <div style={P.watermark}>NASAMA</div>
+
+      <div style={P.content}>
+        <div style={P.hdr}>
+          <div style={P.logoWrap}>
+            {logoSrc
+              ? <img src={logoSrc} alt="Nasama Properties" style={P.logo} crossOrigin="anonymous" />
+              : <div style={P.fallbackLogo}>NASAMA<br /><span style={{ fontSize: 11, color: MUT, letterSpacing: "0.28em" }}>PROPERTIES</span></div>
+            }
+          </div>
+          <div style={P.titleBlock}>
+            <div style={P.title}>TAX INVOICE</div>
+            <div style={P.metaBox}>
+              <span style={P.mLbl}>Invoice Date</span><span style={P.mVal}>{invFmtDate(invoiceDate)}</span>
+              <span style={{ ...P.mLbl, borderBottom: "none" }}>Invoice No.</span><span style={{ ...P.mVal, borderBottom: "none" }}>{invoiceNumber || "--"}</span>
+            </div>
+          </div>
+        </div>
+
+        <div style={P.introRule}><div style={P.ruleGold} /><div style={P.ruleChar} /></div>
+
+        <div style={P.parties}>
+          <div style={P.partyCard}>
+            <div style={P.secTitle}><span style={P.secTick} />BILL FROM</div>
+            {pFields.map(([l, k]) => (
+              <div key={k} style={P.pRow}><span style={P.pLbl}>{l}</span><span style={P.pVal}>{(k === "address" ? invCleanCompanyAddress(billFrom[k]) : billFrom[k]) || "--"}</span></div>
+            ))}
+          </div>
+          <div style={P.partyCard}>
+            <div style={P.secTitle}><span style={P.secTick} />INVOICED TO</div>
+            {iFields.map(([l, k]) => (
+              <div key={k} style={P.pRow}><span style={P.pLbl}>{l}</span><span style={P.pVal}>{invoicedTo[k] || "--"}</span></div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div style={P.tableTitle}>DESCRIPTION</div>
+          <table style={P.tbl}>
+            <thead>
+              <tr>
+                <th style={{ ...P.th, textAlign: "left", width: "16%" }}>Project | Unit</th>
+                <th style={{ ...P.th, textAlign: "left", width: "24%" }}>Specification</th>
+                <th style={{ ...P.th, width: "13%", textAlign: "right" }}>Deal Value</th>
+                <th style={{ ...P.th, width: "10%", textAlign: "right" }}>Commission %</th>
+                <th style={{ ...P.th, width: "13%", textAlign: "right" }}>Commission Amount</th>
+                <th style={{ ...P.th, width: "10%", textAlign: "right" }}>Vat 5%</th>
+                <th style={{ ...P.th, width: "14%", textAlign: "right", borderRight: "none" }}>Total Amount Incl. Vat</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lineItems.map((li, i) => {
+                const c = invLineCalc(li);
+                const pct = li.commissionPct ?? li.commission_pct;
+                return (
+                  <tr key={li._id || i}>
+                    <td style={P.td}>{li.projectUnit || "--"}</td>
+                    <td style={P.td}>{li.specification || "--"}</td>
+                    <td style={{ ...P.td, ...P.tdR }}>{li.dealValue ? invFmt(li.dealValue) : "--"}</td>
+                    <td style={{ ...P.td, ...P.tdR }}>{pct ? `${invNum(pct)}%` : "--"}</td>
+                    <td style={{ ...P.td, ...P.tdR }}>{invFmt(c.commissionAmount)}</td>
+                    <td style={{ ...P.td, ...P.tdR }}>{invFmt(c.vat)}</td>
+                    <td style={{ ...P.td, ...P.tdR, borderRight: "none", fontWeight: 800 }}>{invFmt(c.total)}</td>
+                  </tr>
+                );
+              })}
+              {lineItems.length < 2 && <tr><td colSpan={7} style={{ ...P.td, height: 30, background: "#FCFAF6", borderRight: "none" }} /></tr>}
+              <tr>
+                <td colSpan={2} style={P.totalLabel}>Total Amount</td>
+                <td style={{ ...P.totalCell, color: "#AAAAAA", fontSize: 9 }}>—</td>
+                <td style={{ ...P.totalCell, color: "#AAAAAA", fontSize: 9 }}>—</td>
+                <td style={P.totalCell}>{invFmt(T.excl)}</td>
+                <td style={P.totalCell}>{invFmt(T.vat)}</td>
+                <td style={{ ...P.totalCell, borderRight: "none", color: G }}>{invFmt(T.incl)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div style={P.lower}>
+          <div>
+            <div style={P.bankBox}>
+              <div style={P.bankTitle}>BANK DETAILS <span style={P.bankNote}>(for Cheque Preparation)</span></div>
+              {bankRows.map(([l,k]) => (
+                <div key={k} style={P.bRow}><span style={P.bLbl}>{l}</span><span style={P.bVal}>{bankDetails[k] || "--"}</span></div>
+              ))}
+            </div>
+            <div style={P.stampRow}>
+              <div style={P.stamp}>
+                <div style={P.stampLine} />
+                <div style={P.stampTxt}>Company Stamp &amp; Signature</div>
+              </div>
+            </div>
+          </div>
+          <div style={P.summaryBox}>
+            <div style={P.sumHead}>Tax Invoice Summary: AED</div>
+            <div style={P.sumBody}>
+              <div style={P.sRow}><span style={P.sLbl}>Total Amount Excl. Vat</span><span style={P.sVal}>{invFmt(T.excl)}</span></div>
+              <div style={P.sRow}><span style={P.sLbl}>Vat (5%)</span><span style={P.sVal}>{invFmt(T.vat)}</span></div>
+              <div style={P.sFinal}><span style={P.sFLbl}>Total Amount Incl. Vat</span><span style={P.sFVal}>{invFmt(T.incl)}</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div style={P.foot}>
+          <span>NASAMA PROPERTIES LLC - Office 218, Binghatti Emerald, JVC, Dubai, UAE</span>
+          <span>TRN: {billFrom.trn || "--"}</span>
+        </div>
+      </div>
+    </div>
+  );
 
   const partyFields = [["Company Name", "companyName"], ["Address", "address"], ["Email", "email"], ["Contact No.", "contactNo"], ["TRN", "trn"]];
   const invToLabels = [["Developer / Client Name", "companyName"], ["Address", "address"], ["Email", "email"], ["Contact No.", "contactNo"], ["TRN", "trn"]];
