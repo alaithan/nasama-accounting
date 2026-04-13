@@ -9,6 +9,7 @@
 //  A. CONSTANTS & PURE HELPERS
 // ═══════════════════════════════════════════════════════════════════
 const INV_VAT_RATE = 0.05;
+const INV_START_NUMBER = 94;
 const INV_A4_PX    = 794;   // A4 width at 96 DPI (≡ 210 mm)
 
 function invFmt(n) {
@@ -24,25 +25,51 @@ function invFmtDate(iso) {
 
 function invPad(n) { return String(n || 0).padStart(3, "0"); }
 
-function invLineCalc(commAmount) {
-  const c = parseFloat(commAmount) || 0;
-  return { vat: +(c * INV_VAT_RATE).toFixed(2), total: +(c * (1 + INV_VAT_RATE)).toFixed(2) };
+function invNum(v) {
+  const n = parseFloat(String(v ?? "").replace(/,/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function invCommissionAmount(line) {
+  const dealValue = invNum(line?.dealValue);
+  const rawPct    = line?.commissionPct ?? line?.commission_pct;
+  const hasPct    = rawPct !== undefined && rawPct !== null && String(rawPct).trim() !== "";
+  const pct       = invNum(rawPct);
+  if (hasPct) return dealValue > 0 && pct > 0 ? +(dealValue * pct / 100).toFixed(2) : 0;
+  return +invNum(line?.commissionAmount).toFixed(2);
+}
+
+function invLineCalc(line) {
+  const c = invCommissionAmount(line);
+  return { commissionAmount: c, vat: +(c * INV_VAT_RATE).toFixed(2), total: +(c * (1 + INV_VAT_RATE)).toFixed(2) };
 }
 
 function invTotals(items) {
-  const excl = (items || []).reduce((s, li) => s + (parseFloat(li.commissionAmount) || 0), 0);
+  const excl = (items || []).reduce((s, li) => s + invCommissionAmount(li), 0);
   const vat  = +(excl * INV_VAT_RATE).toFixed(2);
   return { excl: +excl.toFixed(2), vat, incl: +(excl + vat).toFixed(2) };
 }
 
+function invNormalizeLine(line) {
+  const calc = invLineCalc(line);
+  return { ...line, commissionPct: line?.commissionPct || line?.commission_pct || "", commissionAmount: calc.commissionAmount };
+}
+
+function invWithDerivedTotals(inv) {
+  const lineItems = (inv.lineItems || []).map(invNormalizeLine);
+  return { ...inv, lineItems, totals: invTotals(lineItems) };
+}
+
 function invValidate(inv) {
   const e = [];
-  if (!inv.invoicedTo?.companyName?.trim())    e.push("Client / Company Name is required");
+  if (!inv.invoicedTo?.companyName?.trim())    e.push("Developer / Client name is required");
   if (!(inv.lineItems?.length > 0))            e.push("At least one line item is required");
   (inv.lineItems || []).forEach((li, i) => {
     if (!li.projectUnit?.trim())                e.push(`Row ${i+1}: Project | Unit is required`);
     if (!li.specification?.trim())              e.push(`Row ${i+1}: Specification is required`);
-    if (!(parseFloat(li.commissionAmount) > 0)) e.push(`Row ${i+1}: Commission Amount must be > 0`);
+    if (!(invNum(li.dealValue) > 0))             e.push(`Row ${i+1}: Deal Value must be > 0`);
+    if (!(invNum(li.commissionPct ?? li.commission_pct) > 0) && !(invNum(li.commissionAmount) > 0)) e.push(`Row ${i+1}: Commission % must be > 0`);
+    if (!(invCommissionAmount(li) > 0))          e.push(`Row ${i+1}: Commission Amount must be > 0`);
   });
   return e;
 }
@@ -54,7 +81,7 @@ function invBlankLine() {
   const _id = (typeof uid === "function")
     ? uid()
     : Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  return { _id, projectUnit: "", specification: "", dealValue: "", commissionAmount: "", dealId: "" };
+  return { _id, projectUnit: "", specification: "", dealValue: "", commissionPct: "", commissionAmount: "", dealId: "" };
 }
 
 function invBlankDoc(settings) {
@@ -70,7 +97,7 @@ function invBlankDoc(settings) {
       contactNo:   settings?.contactNo  || "971 502757603",
       trn:         settings?.trn        || "",
     },
-    invoicedTo: { companyName: "", address: "", email: "", contactNo: "", trn: "", customerId: "" },
+    invoicedTo: { companyName: "", address: "", email: "", contactNo: "", trn: "", partyType: "", partyId: "", customerId: "", developerId: "" },
     lineItems:   [invBlankLine()],
     bankDetails: {
       beneficiaryName: settings?.bankBeneficiary || "NASAMA PROPERTIES L.L.C",
@@ -92,22 +119,22 @@ function invBlankDoc(settings) {
    collide. Fallback: timestamp-based 5-digit suffix.            */
 async function invGenNumber() {
   const ref = db.collection("meta").doc("invoiceCounter");
-  let num = 1;
+  let num = INV_START_NUMBER;
   try {
     await db.runTransaction(async tx => {
       const snap = await tx.get(ref);
-      num = snap.exists ? (snap.data().lastNumber || 0) + 1 : 1;
+      num = snap.exists ? Math.max((snap.data().lastNumber || 0) + 1, INV_START_NUMBER) : INV_START_NUMBER;
       tx.set(ref, { lastNumber: num }, { merge: true });
     });
-  } catch {
-    num = parseInt(Date.now().toString().slice(-5));
+  } catch (err) {
+    num = Math.max(parseInt(Date.now().toString().slice(-5)), INV_START_NUMBER);
   }
   return { formatted: invPad(num), raw: num };
 }
 
 function invTs() {
   try { return firebase.firestore.FieldValue.serverTimestamp(); }
-  catch { return new Date().toISOString(); }
+  catch (err) { return new Date().toISOString(); }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -225,7 +252,7 @@ function InvoicePreviewDoc({ invoice }) {
   };
 
   const partyFields = [["Company Name", "companyName"], ["Address", "address"], ["Email", "email"], ["Contact No.", "contactNo"], ["TRN", "trn"]];
-  const invToLabels = [["Client / Company Name", "companyName"], ["Address", "address"], ["Email", "email"], ["Contact No.", "contactNo"], ["TRN", "trn"]];
+  const invToLabels = [["Developer / Client Name", "companyName"], ["Address", "address"], ["Email", "email"], ["Contact No.", "contactNo"], ["TRN", "trn"]];
 
   return (
     <div style={S.root}>
@@ -267,31 +294,35 @@ function InvoicePreviewDoc({ invoice }) {
         <table style={S.tbl}>
           <thead>
             <tr>
-              <th style={{ ...S.th, textAlign: "left", width: "17%" }}>Project | Unit</th>
-              <th style={{ ...S.th, textAlign: "left", width: "27%" }}>Specification</th>
-              <th style={{ ...S.th, width: "14%" }}>Deal Value</th>
-              <th style={{ ...S.th, width: "16%" }}>Commission Amount</th>
+              <th style={{ ...S.th, textAlign: "left", width: "16%" }}>Project | Unit</th>
+              <th style={{ ...S.th, textAlign: "left", width: "24%" }}>Specification</th>
+              <th style={{ ...S.th, width: "13%" }}>Deal Value</th>
+              <th style={{ ...S.th, width: "10%" }}>Commission %</th>
+              <th style={{ ...S.th, width: "13%" }}>Commission Amount</th>
               <th style={{ ...S.th, width: "10%" }}>Vat 5%</th>
-              <th style={{ ...S.th, width: "16%" }}>Total Amount Incl. Vat</th>
+              <th style={{ ...S.th, width: "14%" }}>Total Amount Incl. Vat</th>
             </tr>
           </thead>
           <tbody>
             {lineItems.map((li, i) => {
-              const c = invLineCalc(li.commissionAmount);
+              const c = invLineCalc(li);
+              const pct = li.commissionPct ?? li.commission_pct;
               return (
                 <tr key={li._id || i}>
                   <td style={S.td}>{li.projectUnit}</td>
                   <td style={S.td}>{li.specification}</td>
                   <td style={{ ...S.td, ...S.tdR }}>{li.dealValue ? invFmt(li.dealValue) : "—"}</td>
-                  <td style={{ ...S.td, ...S.tdR }}>{invFmt(li.commissionAmount)}</td>
+                  <td style={{ ...S.td, ...S.tdR }}>{pct ? `${invNum(pct)}%` : "--"}</td>
+                  <td style={{ ...S.td, ...S.tdR }}>{invFmt(c.commissionAmount)}</td>
                   <td style={{ ...S.td, ...S.tdR }}>{invFmt(c.vat)}</td>
                   <td style={{ ...S.td, ...S.tdR }}>{invFmt(c.total)}</td>
                 </tr>
               );
             })}
-            {lineItems.length < 2 && <tr><td colSpan={6} style={{ ...S.td, height: 32, background: "#FAFAFA" }} /></tr>}
+            {lineItems.length < 2 && <tr><td colSpan={7} style={{ ...S.td, height: 32, background: "#FAFAFA" }} /></tr>}
             <tr style={S.totRow}>
               <td colSpan={2} style={S.totLbl}>Total Amount</td>
+              <td style={{ ...S.totCell, color: "#AAAAAA" }} />
               <td style={{ ...S.totCell, color: "#AAAAAA" }} />
               <td style={S.totCell}>{invFmt(T.excl)}</td>
               <td style={S.totCell}>{invFmt(T.vat)}</td>
@@ -381,9 +412,10 @@ function InvoicePreviewModal({ invoice, onClose }) {
 // ═══════════════════════════════════════════════════════════════════
 //  G. InvoiceEditor — create / edit form
 // ═══════════════════════════════════════════════════════════════════
-function InvoiceEditor({ invoice, customers, deals, settings, onSave, onPreview, onCancel, saving }) {
+function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave, onPreview, onCancel, saving }) {
   const [inv, setInv] = React.useState(() => JSON.parse(JSON.stringify(invoice)));
   const T = invTotals(inv.lineItems || []);
+  const buildInvoice = () => invWithDerivedTotals(inv);
 
   // Deep-set helper for dotted paths (e.g. "billFrom.trn")
   const setPath = (dotPath, val) => setInv(prev => {
@@ -395,11 +427,38 @@ function InvoiceEditor({ invoice, customers, deals, settings, onSave, onPreview,
     return copy;
   });
 
-  // Auto-fill Invoiced To from customer record
-  const fillCustomer = (id) => {
-    const c = (customers || []).find(x => x.id === id);
-    if (!c) { setPath("invoicedTo.customerId", ""); return; }
-    setInv(p => ({ ...p, invoicedTo: { companyName: c.name || "", address: c.address || "", email: c.email || "", contactNo: c.phone || c.contactNo || "", trn: c.trn || "", customerId: c.id } }));
+  const selectedPartyValue = inv.invoicedTo?.developerId
+    ? `developer:${inv.invoicedTo.developerId}`
+    : inv.invoicedTo?.customerId
+      ? `client:${inv.invoicedTo.customerId}`
+      : "";
+
+  // Auto-fill Invoiced To from a developer or client record.
+  const fillInvoiceParty = (value) => {
+    const [type, id] = String(value || "").split(":");
+    if (!id) {
+      setInv(p => ({ ...p, invoicedTo: { ...(p.invoicedTo || {}), partyType: "", partyId: "", customerId: "", developerId: "" } }));
+      return;
+    }
+
+    const source = type === "developer" ? (developers || []) : (customers || []);
+    const party = source.find(x => x.id === id);
+    if (!party) return;
+
+    setInv(p => ({
+      ...p,
+      invoicedTo: {
+        companyName: party.name || "",
+        address: party.address || "",
+        email: party.email || "",
+        contactNo: party.phone || party.contactNo || "",
+        trn: party.trn || "",
+        partyType: type,
+        partyId: id,
+        customerId: type === "client" ? id : "",
+        developerId: type === "developer" ? id : "",
+      }
+    }));
   };
 
   // Auto-fill line item from deal record
@@ -407,17 +466,23 @@ function InvoiceEditor({ invoice, customers, deals, settings, onSave, onPreview,
     const d = (deals || []).find(x => x.id === dealId);
     if (!d) return;
     const projectUnit = [d.property_name, d.unit_no ? `Unit ${d.unit_no}` : ""].filter(Boolean).join(" — ");
-    const pct         = d.commission_pct ? `${d.commission_pct}%` : "3%";
+    const pct         = d.commission_pct || 3;
     setInv(prev => {
       const copy = JSON.parse(JSON.stringify(prev));
-      Object.assign(copy.lineItems[idx], { projectUnit, specification: `${pct} of Agency Commission Claim`, dealValue: d.transaction_value || "", commissionAmount: d.expected_commission_net || "", dealId });
+      const line = { ...copy.lineItems[idx], projectUnit, specification: `${pct}% of Agency Commission Claim`, dealValue: d.transaction_value || "", commissionPct: pct, dealId };
+      Object.assign(copy.lineItems[idx], invNormalizeLine(line));
       return copy;
     });
   };
 
   const addLine    = ()      => setInv(p => ({ ...p, lineItems: [...p.lineItems, invBlankLine()] }));
   const removeLine = (i)     => setInv(p => ({ ...p, lineItems: p.lineItems.filter((_, j) => j !== i) }));
-  const setLine    = (i, f, v) => setInv(prev => { const copy = JSON.parse(JSON.stringify(prev)); copy.lineItems[i][f] = v; return copy; });
+  const setLine    = (i, f, v) => setInv(prev => {
+    const copy = JSON.parse(JSON.stringify(prev));
+    copy.lineItems[i][f] = v;
+    if (f === "dealValue" || f === "commissionPct") copy.lineItems[i] = invNormalizeLine(copy.lineItems[i]);
+    return copy;
+  });
 
   // Style tokens
   const G    = "#C9A044";
@@ -447,9 +512,9 @@ function InvoiceEditor({ invoice, customers, deals, settings, onSave, onPreview,
           </div>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
-          <button style={C.btn("secondary")} onClick={() => onPreview({ ...inv, totals: T })}>Preview</button>
-          <button style={C.btn()} onClick={() => onSave({ ...inv, totals: T }, "draft")} disabled={saving}>{saving ? "Saving…" : "Save Draft"}</button>
-          <button style={{ background: G, color: "#fff", border: "none", padding: "8px 20px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={() => onSave({ ...inv, totals: T }, "issued")} disabled={saving}>{saving ? "Issuing…" : "Issue Invoice"}</button>
+          <button style={C.btn("secondary")} onClick={() => onPreview(buildInvoice())}>Preview</button>
+          <button style={C.btn()} onClick={() => onSave(buildInvoice(), "draft")} disabled={saving}>{saving ? "Saving…" : "Save Draft"}</button>
+          <button style={{ background: G, color: "#fff", border: "none", padding: "8px 20px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={() => onSave(buildInvoice(), "issued")} disabled={saving}>{saving ? "Issuing…" : "Issue Invoice"}</button>
         </div>
       </div>
 
@@ -486,13 +551,22 @@ function InvoiceEditor({ invoice, customers, deals, settings, onSave, onPreview,
         <div style={{ ...card, marginBottom: 0 }}>
           <div style={sec}>Invoiced To</div>
           <div style={{ marginBottom: 13 }}>
-            <label style={lbl}>Select Existing Client (auto-fill)</label>
-            <select style={sel} value={inv.invoicedTo?.customerId || ""} onChange={e => fillCustomer(e.target.value)}>
-              <option value="">— Choose a client —</option>
-              {(customers || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            <label style={lbl}>Select Developer or Client (auto-fill)</label>
+            <select style={sel} value={selectedPartyValue} onChange={e => fillInvoiceParty(e.target.value)}>
+              <option value="">-- Choose developer or client --</option>
+              {(developers || []).length > 0 && (
+                <optgroup label="Developers">
+                  {(developers || []).map(d => <option key={`developer:${d.id}`} value={`developer:${d.id}`}>{d.name}</option>)}
+                </optgroup>
+              )}
+              {(customers || []).length > 0 && (
+                <optgroup label="Clients">
+                  {(customers || []).map(c => <option key={`client:${c.id}`} value={`client:${c.id}`}>{c.name}</option>)}
+                </optgroup>
+              )}
             </select>
           </div>
-          {[["companyName","Client / Company Name"],["address","Address"],["email","Email"],["contactNo","Contact No."],["trn","TRN"]].map(([f,l]) => (
+          {[["companyName","Developer / Client Name"],["address","Address"],["email","Email"],["contactNo","Contact No."],["trn","TRN"]].map(([f,l]) => (
             <div key={f} style={{ marginBottom: 13 }}>
               <label style={lbl}>{l}</label>
               <input style={inp} value={inv.invoicedTo?.[f] || ""} onChange={e => setPath(`invoicedTo.${f}`, e.target.value)} />
@@ -511,14 +585,15 @@ function InvoiceEditor({ invoice, customers, deals, settings, onSave, onPreview,
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "#FBF6EC" }}>
-                {[["Project | Unit","left","22%"],["Specification","left","25%"],["Deal Value (AED)","right","11%"],["Commission (AED)","right","13%"],["Vat 5%","right","9%"],["Total Incl. Vat","right","13%"],["","center","4%"]].map(([h,a,w]) => (
+                {[["Project | Unit","left","18%"],["Specification","left","22%"],["Deal Value (AED)","right","12%"],["Commission %","right","10%"],["Commission (AED)","right","13%"],["Vat 5%","right","9%"],["Total Incl. Vat","right","12%"],["","center","4%"]].map(([h,a,w]) => (
                   <th key={h} style={{ padding: "9px 10px", fontSize: 10.5, fontWeight: 700, color: "#1A1A2E", border: "1px solid #E8DCC8", textAlign: a, width: w, letterSpacing: "0.02em" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {inv.lineItems.map((li, idx) => {
-                const c = invLineCalc(li.commissionAmount);
+                const c = invLineCalc(li);
+                const pct = li.commissionPct ?? li.commission_pct;
                 return (
                   <tr key={li._id}>
                     <td style={{ padding: 8, border: "1px solid #E8DCC8", verticalAlign: "top" }}>
@@ -537,8 +612,9 @@ function InvoiceEditor({ invoice, customers, deals, settings, onSave, onPreview,
                       <input type="number" min="0" style={{ ...inp, fontSize: 12, textAlign: "right" }} placeholder="0.00" value={li.dealValue} onChange={e => setLine(idx, "dealValue", e.target.value)} />
                     </td>
                     <td style={{ padding: 8, border: "1px solid #E8DCC8", verticalAlign: "top" }}>
-                      <input type="number" min="0" style={{ ...inp, fontSize: 12, textAlign: "right" }} placeholder="0.00" value={li.commissionAmount} onChange={e => setLine(idx, "commissionAmount", e.target.value)} />
+                      <input type="number" min="0" step="0.01" style={{ ...inp, fontSize: 12, textAlign: "right" }} placeholder="0.00" value={pct || ""} onChange={e => setLine(idx, "commissionPct", e.target.value)} />
                     </td>
+                    <td style={{ padding: 8, border: "1px solid #E8DCC8", textAlign: "right", color: "#111827", fontWeight: 600, fontSize: 12, verticalAlign: "middle" }}>{invFmt(c.commissionAmount)}</td>
                     <td style={{ padding: 8, border: "1px solid #E8DCC8", textAlign: "right", color: "#6B7280", fontSize: 12, verticalAlign: "middle" }}>{invFmt(c.vat)}</td>
                     <td style={{ padding: 8, border: "1px solid #E8DCC8", textAlign: "right", fontWeight: 700, fontSize: 12, verticalAlign: "middle" }}>{invFmt(c.total)}</td>
                     <td style={{ padding: 8, border: "1px solid #E8DCC8", textAlign: "center", verticalAlign: "middle" }}>
@@ -583,9 +659,9 @@ function InvoiceEditor({ invoice, customers, deals, settings, onSave, onPreview,
       {/* Bottom action bar */}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
         <button style={C.btn("secondary")} onClick={onCancel}>Cancel</button>
-        <button style={C.btn("secondary")} onClick={() => onPreview({ ...inv, totals: T })}>Preview Invoice</button>
-        <button style={C.btn()} onClick={() => onSave({ ...inv, totals: T }, "draft")} disabled={saving}>{saving ? "Saving…" : "Save Draft"}</button>
-        <button style={{ background: G, color: "#fff", border: "none", padding: "8px 22px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={() => onSave({ ...inv, totals: T }, "issued")} disabled={saving}>{saving ? "Issuing…" : "Issue Invoice"}</button>
+        <button style={C.btn("secondary")} onClick={() => onPreview(buildInvoice())}>Preview Invoice</button>
+        <button style={C.btn()} onClick={() => onSave(buildInvoice(), "draft")} disabled={saving}>{saving ? "Saving…" : "Save Draft"}</button>
+        <button style={{ background: G, color: "#fff", border: "none", padding: "8px 22px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={() => onSave(buildInvoice(), "issued")} disabled={saving}>{saving ? "Issuing…" : "Issue Invoice"}</button>
       </div>
     </div>
   );
@@ -594,7 +670,7 @@ function InvoiceEditor({ invoice, customers, deals, settings, onSave, onPreview,
 // ═══════════════════════════════════════════════════════════════════
 //  H. InvoicePage — list + orchestration
 // ═══════════════════════════════════════════════════════════════════
-function InvoicePage({ customers, deals, settings, userEmail }) {
+function InvoicePage({ customers, developers, deals, settings, userEmail }) {
   const [invoices,   setInvoices]   = React.useState([]);
   const [editing,    setEditing]    = React.useState(null);
   const [previewInv, setPreviewInv] = React.useState(null);
@@ -621,18 +697,19 @@ function InvoicePage({ customers, deals, settings, userEmail }) {
   };
 
   const handleSave = async (inv, status) => {
+    const finalInv = invWithDerivedTotals(inv);
     if (status === "issued") {
-      const errs = invValidate(inv);
+      const errs = invValidate(finalInv);
       if (errs.length) { errs.forEach(e => toast(e, "error")); return; }
     }
     setSaving(true);
     try {
-      const payload = { ...inv, status, updatedAt: invTs(), createdBy: userEmail };
-      if (inv.id) {
-        await db.collection("invoices").doc(inv.id).set(payload, { merge: true });
+      const payload = { ...finalInv, status, updatedAt: invTs(), createdBy: userEmail };
+      if (finalInv.id) {
+        await db.collection("invoices").doc(finalInv.id).set(payload, { merge: true });
       } else {
         const ref = await db.collection("invoices").add({ ...payload, createdAt: invTs() });
-        inv.id = ref.id;
+        finalInv.id = ref.id;
       }
       toast(status === "issued" ? "Invoice issued" : "Draft saved", "success");
       setEditing(null);
@@ -654,6 +731,7 @@ function InvoicePage({ customers, deals, settings, userEmail }) {
       <InvoiceEditor
         invoice={editing}
         customers={customers || []}
+        developers={developers || []}
         deals={deals || []}
         settings={settings || {}}
         onSave={handleSave}
@@ -690,7 +768,7 @@ function InvoicePage({ customers, deals, settings, userEmail }) {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "#F9FAFB", borderBottom: "1px solid #EAECF0" }}>
-                {[["Invoice No.",""],["Date",""],["Client / Company",""],["Excl. VAT","right"],["VAT","right"],["Total Incl. VAT","right"],["Status",""],["Actions",""]].map(([h,a]) => (
+                {[["Invoice No.",""],["Date",""],["Developer / Client",""],["Excl. VAT","right"],["VAT","right"],["Total Incl. VAT","right"],["Status",""],["Actions",""]].map(([h,a]) => (
                   <th key={h} style={{ ...C.th, textAlign: a || "left" }}>{h}</th>
                 ))}
               </tr>
