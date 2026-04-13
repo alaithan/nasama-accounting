@@ -2678,10 +2678,27 @@ function PerformancePage({ deals, setPage }) {
 
 function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn, persistTxn }) {
   const [s, setS] = useState(() => normalizeSettings(settings));
+  const [backupStatus, setBackupStatus]     = useState("idle"); // idle | loading | done | error
+  const [restorePreview, setRestorePreview] = useState(null);
+  const [restoreFileName, setRestoreFileName] = useState("");
+  const [restoreConfirm, setRestoreConfirm] = useState(false);
+  const [restoreStatus, setRestoreStatus]   = useState("idle"); // idle | loading | done | error
+  const fileRef = React.useRef();
+
+  // ── localStorage helpers (local to this component) ──
+  const lsGet = (k, fb) => { try { const v = localStorage.getItem("na2_" + k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
+  const lsSet = (k, v) => { try { localStorage.setItem("na2_" + k, JSON.stringify(v)); } catch {} };
+
+  // ── Weekly backup reminder ──
+  const lastBackupDate = lsGet("last_backup_date", null);
+  const daysSinceBackup = lastBackupDate
+    ? Math.floor((Date.now() - new Date(lastBackupDate + "T00:00:00").getTime()) / (1000 * 60 * 60 * 24))
+    : null;
+  const showBackupWarning = daysSinceBackup === null || daysSinceBackup >= 7;
+
   const save = () => {
     const nextSettings = normalizeSettings(s);
     setSettings(nextSettings);
-    // Create opening balance transaction if amount > 0
     if (nextSettings.openingBalance > 0 && accounts && saveTxn) {
       const bankA = accounts.find(a => a.code === "1002");
       const capitalA = accounts.find(a => a.code === "3000");
@@ -2690,8 +2707,8 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
         if (!existingOB) {
           const amountCents = toCents(nextSettings.openingBalance);
           const lines = [
-            { id: uid(), accountId: bankA.id, debit: amountCents, credit: 0, memo: `Opening Balance — Bank deposit`, deal_id: null, broker_id: null, developer_id: null },
-            { id: uid(), accountId: capitalA.id, debit: 0, credit: amountCents, memo: `Opening Balance — Capital Injection`, deal_id: null, broker_id: null, developer_id: null }
+            { id: uid(), accountId: bankA.id, debit: amountCents, credit: 0, memo: "Opening Balance — Bank deposit", deal_id: null, broker_id: null, developer_id: null },
+            { id: uid(), accountId: capitalA.id, debit: 0, credit: amountCents, memo: "Opening Balance — Capital Injection", deal_id: null, broker_id: null, developer_id: null }
           ];
           const txn = { id: uid(), date: nextSettings.openingBalanceDate, description: "Opening Balance", ref: `OB-${Date.now().toString(36).toUpperCase()}`, counterparty: "Opening Balance", tags: "opening-balance", txnType: "JV", isVoid: false, lines, createdAt: new Date().toISOString() };
           saveTxn(txn);
@@ -2701,15 +2718,126 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
     toast("Settings saved", "success");
   };
 
+  // ── Backup: read all collections from Firestore → JSON file ──
+  const BACKUP_COLS = ["accounts", "transactions", "deals", "customers", "vendors", "brokers", "developers", "planned_expenses"];
+
+  const handleBackup = async () => {
+    setBackupStatus("loading");
+    try {
+      const snaps = await Promise.all([
+        ...BACKUP_COLS.map(c => db.collection(c).get()),
+        db.collection("settings").doc("company").get()
+      ]);
+      const backup = {
+        version: "2.0",
+        app: "Nasama Accounting",
+        company: settings.company || "Nasama Properties",
+        exportedAt: new Date().toISOString(),
+        settings: snaps[BACKUP_COLS.length].exists ? snaps[BACKUP_COLS.length].data() : {},
+        collections: {}
+      };
+      BACKUP_COLS.forEach((col, i) => {
+        backup.collections[col] = snaps[i].docs.map(d => ({ _id: d.id, ...d.data() }));
+      });
+      const json = JSON.stringify(backup, null, 2);
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `nasama-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      lsSet("last_backup_date", new Date().toISOString().slice(0, 10));
+      setBackupStatus("done");
+      toast("Backup downloaded — store it in a safe location", "success");
+      setTimeout(() => setBackupStatus("idle"), 4000);
+    } catch (err) {
+      setBackupStatus("error");
+      toast("Backup failed: " + err.message, "error");
+      setTimeout(() => setBackupStatus("idle"), 4000);
+    }
+  };
+
+  // ── Restore: parse uploaded JSON → write to Firestore ──
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setRestoreFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!data.collections || !data.version) throw new Error("Not a valid Nasama backup file");
+        setRestorePreview(data);
+      } catch (err) {
+        toast("Invalid file: " + err.message, "error");
+        setRestorePreview(null);
+        setRestoreFileName("");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  const handleRestore = async () => {
+    if (!restorePreview) return;
+    setRestoreConfirm(false);
+    setRestoreStatus("loading");
+    try {
+      if (restorePreview.settings) {
+        await db.collection("settings").doc("company").set(restorePreview.settings);
+      }
+      for (const [col, docs] of Object.entries(restorePreview.collections || {})) {
+        for (let i = 0; i < docs.length; i += 400) {
+          const batch = db.batch();
+          docs.slice(i, i + 400).forEach(doc => {
+            const { _id, ...data } = doc;
+            batch.set(db.collection(col).doc(_id), data);
+          });
+          await batch.commit();
+        }
+      }
+      setRestoreStatus("done");
+      toast("Restore complete — page will reload in 3 seconds", "success");
+      setTimeout(() => window.location.reload(), 3000);
+    } catch (err) {
+      setRestoreStatus("error");
+      toast("Restore failed: " + err.message, "error");
+      setTimeout(() => setRestoreStatus("idle"), 4000);
+    }
+  };
+
+  const totalRestoreRecords = restorePreview
+    ? Object.values(restorePreview.collections || {}).reduce((s, a) => s + a.length, 0)
+    : 0;
+
   return <div>
     <PageHeader title="Settings" sub="Company configuration" />
+
+    {/* ── Weekly backup reminder banner ── */}
+    {showBackupWarning && <div style={{ marginBottom: 16, padding: "12px 18px", borderRadius: 10, background: "#FFFBEB", border: "1.5px solid #FDE68A", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      <span style={{ fontSize: 18 }}>💾</span>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, color: "#92400E" }}>
+          {lastBackupDate ? `Last backup was ${daysSinceBackup} day${daysSinceBackup !== 1 ? "s" : ""} ago — weekly backup recommended` : "No backup on record — back up your database now"}
+        </div>
+        <div style={{ fontSize: 12, color: "#B45309", marginTop: 2 }}>Regular backups protect against accidental data loss. Download a backup file and store it safely.</div>
+      </div>
+      <button style={{ ...C.btn(), background: "#D97706", borderColor: "#D97706", fontSize: 12, padding: "7px 14px" }} onClick={handleBackup}>
+        {backupStatus === "loading" ? "Backing up…" : "Back Up Now"}
+      </button>
+    </div>}
+
     <div style={{ ...C.card, padding: 22, maxWidth: 600 }}>
+      {/* ── Company Settings ── */}
       <div style={C.fg}>
         <div><label style={C.label}>Company Name</label><Inp value={s.company || ""} onChange={e => setS(p => ({ ...p, company: e.target.value }))} /></div>
         <div><label style={C.label}>TRN (Tax Registration No.)</label><Inp value={s.trn || ""} onChange={e => setS(p => ({ ...p, trn: e.target.value }))} /></div>
         <div><label style={C.label}>VAT Rate %</label><Inp type="number" value={s.vatRate || 5} onChange={e => setS(p => ({ ...p, vatRate: parseInt(e.target.value) || 5 }))} /></div>
         <div><label style={C.label}>Currency</label><Inp value={s.currency || "AED"} onChange={e => setS(p => ({ ...p, currency: e.target.value }))} /></div>
       </div>
+
+      {/* ── Opening Balance ── */}
       <div style={{ borderTop: "1px solid #E5E7EB", marginTop: 20, paddingTop: 20 }}>
         <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>🏦 Opening Balance</div>
         <div style={C.fg}>
@@ -2720,11 +2848,81 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
       </div>
       <div style={{ marginTop: 20 }}><button style={C.btn()} onClick={save}>💾 Save Settings</button></div>
 
-      <div style={{ marginTop: 30, padding: 16, background: "#FEF2F2", borderRadius: 8, border: "1px solid #FECACA" }}>
-        <div style={{ fontWeight: 700, fontSize: 14, color: "#DC2626", marginBottom: 6 }}>🗑️ Architecture Note</div>
+      {/* ── Database Backup ── */}
+      <div style={{ borderTop: "1px solid #E5E7EB", marginTop: 28, paddingTop: 22 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4, color: NAVY }}>🗄️ Database Backup</div>
+        <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 14, lineHeight: 1.6 }}>
+          Downloads a complete snapshot of all your data — accounts, transactions, deals, customers, brokers, vendors, planned expenses — as a single JSON file. Store the file in Google Drive, email it to yourself, or keep it on a USB drive.
+          {lastBackupDate && <span style={{ color: "#059669", fontWeight: 600 }}> Last backup: {lastBackupDate}.</span>}
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <button style={{ ...C.btn(), background: backupStatus === "done" ? "#059669" : NAVY, borderColor: backupStatus === "done" ? "#059669" : NAVY, minWidth: 180 }} onClick={handleBackup} disabled={backupStatus === "loading"}>
+            {backupStatus === "loading" ? "⏳ Reading data…" : backupStatus === "done" ? "✅ Backup downloaded" : backupStatus === "error" ? "❌ Failed — retry" : "⬇️ Download Backup"}
+          </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            {BACKUP_COLS.map(c => <span key={c} style={{ fontSize: 10, color: "#98A2B3", fontFamily: "monospace" }}>{c}</span>)}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Restore from Backup ── */}
+      <div style={{ borderTop: "1px solid #E5E7EB", marginTop: 28, paddingTop: 22 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4, color: "#DC2626" }}>♻️ Restore from Backup</div>
+        <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 14, lineHeight: 1.6 }}>
+          Upload a previously downloaded backup file to restore your database. <strong style={{ color: "#DC2626" }}>This will overwrite all current data.</strong> Only use this if you need to recover from data loss.
+        </div>
+        <input ref={fileRef} type="file" accept=".json" style={{ display: "none" }} onChange={handleFileChange} />
+        <button style={{ ...C.btn("secondary"), marginBottom: 12 }} onClick={() => fileRef.current?.click()}>
+          📂 Choose Backup File
+        </button>
+        {restorePreview && <div style={{ padding: 14, background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 8, marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: "#166534", marginBottom: 8 }}>✅ Backup file loaded — ready to restore</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px", fontSize: 12, color: "#374151" }}>
+            <span>File:</span><span style={{ fontWeight: 600 }}>{restoreFileName}</span>
+            <span>Company:</span><span style={{ fontWeight: 600 }}>{restorePreview.company || "—"}</span>
+            <span>Exported:</span><span style={{ fontWeight: 600 }}>{restorePreview.exportedAt ? restorePreview.exportedAt.slice(0, 10) : "—"}</span>
+            <span>Total records:</span><span style={{ fontWeight: 600 }}>{totalRestoreRecords.toLocaleString()}</span>
+            {Object.entries(restorePreview.collections || {}).map(([col, docs]) =>
+              <React.Fragment key={col}><span style={{ color: "#6B7280" }}>{col}:</span><span>{docs.length} records</span></React.Fragment>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+            <button style={{ ...C.btn(), background: "#DC2626", borderColor: "#DC2626" }} onClick={() => setRestoreConfirm(true)} disabled={restoreStatus === "loading"}>
+              {restoreStatus === "loading" ? "⏳ Restoring…" : restoreStatus === "done" ? "✅ Restored" : "🔄 Restore Database"}
+            </button>
+            <button style={C.btn("secondary")} onClick={() => { setRestorePreview(null); setRestoreFileName(""); }}>Cancel</button>
+          </div>
+        </div>}
+      </div>
+
+      {/* ── Architecture Note ── */}
+      <div style={{ marginTop: 28, padding: 16, background: "#FEF2F2", borderRadius: 8, border: "1px solid #FECACA" }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: "#DC2626", marginBottom: 6 }}>📐 Architecture Note</div>
         <div style={{ fontSize: 13, color: "#7F1D1D" }}>This system uses a <strong>cash-settled</strong> model. There are no Accounts Receivable, no Accounts Payable, no invoices, and no bills. Every transaction is settled immediately at the point of recording.</div>
       </div>
     </div>
+
+    {/* ── Restore confirmation modal ── */}
+    {restoreConfirm && <div style={C.modal} onClick={() => setRestoreConfirm(false)}>
+      <div style={C.mbox(440)} onClick={e => e.stopPropagation()}>
+        <div style={C.mhdr}>
+          <span style={{ fontWeight: 700, fontSize: 16, color: "#DC2626" }}>⚠️ Confirm Database Restore</span>
+          <button onClick={() => setRestoreConfirm(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
+        </div>
+        <div style={C.mbdy}>
+          <p style={{ fontSize: 13, color: "#374151", lineHeight: 1.7, marginBottom: 12 }}>
+            You are about to restore <strong>{totalRestoreRecords.toLocaleString()} records</strong> from the backup exported on <strong>{restorePreview?.exportedAt?.slice(0, 10)}</strong>.
+          </p>
+          <div style={{ padding: 12, background: "#FEF2F2", borderRadius: 6, border: "1px solid #FECACA", fontSize: 13, color: "#991B1B", fontWeight: 600 }}>
+            ⚠️ This will overwrite ALL current data in the database. This cannot be undone. Make sure you have a backup of your current data first.
+          </div>
+        </div>
+        <div style={C.mftr}>
+          <button style={C.btn("secondary")} onClick={() => setRestoreConfirm(false)}>Cancel — keep current data</button>
+          <button style={{ ...C.btn(), background: "#DC2626", borderColor: "#DC2626" }} onClick={handleRestore}>Yes, restore now</button>
+        </div>
+      </div>
+    </div>}
   </div>;
 }
 
