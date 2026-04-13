@@ -39,16 +39,11 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       secretary: { canCreateTxns: false, canEditTxns: false, canVoidTxns: false, canManageUsers: false, canViewReports: false, canAccessBanking: false, canEditSettings: false, canExportData: false, canManageAccounts: false, canAccessVAT: false }
     };
     const SECURITY_MODULES = [
-      { id: "main", label: "MAIN", pages: ["Dashboard"], actions: ["read"] },
-      { id: "sales", label: "SALES", pages: ["Deals / Pipeline", "Sale Receipts", "Customers", "Brokers", "Developers"], actions: ["read", "create", "edit"] },
-      { id: "expenses", label: "EXPENSES", pages: ["Payments", "Vendors"], actions: ["read", "create", "edit"] },
-      { id: "banking", label: "BANKING", pages: ["Banking"], actions: ["read", "create", "edit", "import", "reconcile"] },
-      { id: "accounting", label: "ACCOUNTING", pages: ["Journal Entries", "Chart of Accounts"], actions: ["read", "create", "edit", "void"] },
-      { id: "reports", label: "REPORTS", pages: ["Reports", "VAT / Taxes"], actions: ["read", "export"] },
-      { id: "help", label: "HELP", pages: ["User Manual"], actions: ["read"] },
-      { id: "system", label: "SYSTEM", pages: ["User Management"], actions: ["read", "create", "edit", "approve"] },
-      { id: "planning", label: "PLANNING", pages: ["Future Expenses"], actions: ["read", "create", "edit"] },
-      { id: "settings", label: "SETTINGS", pages: ["Settings"], actions: ["read", "edit"] },
+      { id: "overview",   label: "OVERVIEW",   pages: ["Dashboard", "Performance"],                                                                 actions: ["read"] },
+      { id: "sales",      label: "SALES",      pages: ["Deals / Pipeline", "Sale Receipts", "Invoices", "Customers", "Brokers", "Developers"],      actions: ["read", "create", "edit"] },
+      { id: "expenses",   label: "EXPENSES",   pages: ["Payments", "Vendors", "Future Expenses"],                                                    actions: ["read", "create", "edit"] },
+      { id: "accounting", label: "ACCOUNTING", pages: ["Banking", "Journal Entries", "Chart of Accounts", "Reports", "VAT / Taxes"],                actions: ["read", "create", "edit", "import", "reconcile", "void", "export"] },
+      { id: "system",     label: "SYSTEM",     pages: ["User Management", "Settings", "User Manual"],                                               actions: ["read", "create", "edit", "approve"] },
     ];
     const SECURITY_PERMISSION_KEYS = SECURITY_MODULES.flatMap(module => module.actions.map(action => `${module.id}.${action}`));
     const sanitizeRolePermissions = (permissions = {}) => SECURITY_PERMISSION_KEYS.reduce((acc, key) => {
@@ -57,25 +52,23 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     }, {});
     const countRolePermissions = permissions => Object.keys(sanitizeRolePermissions(permissions)).length;
     const APPROVAL_POLICY_MODULES = [
-      { id: "sales", label: "SALES" },
-      { id: "expenses", label: "EXPENSES" },
-      { id: "banking", label: "BANKING" },
+      { id: "sales",      label: "SALES" },
+      { id: "expenses",   label: "EXPENSES" },
       { id: "accounting", label: "ACCOUNTING" },
-      { id: "reports", label: "REPORTS" },
     ];
     const APPROVAL_POLICY_MODULE_LABELS = {
       sales: "SALES",
       payments: "EXPENSES",
       purchases: "EXPENSES",
       expenses: "EXPENSES",
-      bank: "BANKING",
-      banking: "BANKING",
-      reconciliation: "BANKING",
+      bank: "ACCOUNTING",
+      banking: "ACCOUNTING",
+      reconciliation: "ACCOUNTING",
       journalEntries: "ACCOUNTING",
       accounting: "ACCOUNTING",
-      tax: "REPORTS",
-      vat: "REPORTS",
-      reports: "REPORTS"
+      tax: "ACCOUNTING",
+      vat: "ACCOUNTING",
+      reports: "ACCOUNTING"
     };
     const DEFAULT_SECURITY_ROLE_TEMPLATES = [
       {
@@ -94,14 +87,11 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         description: "Operational accounting access without user administration.",
         legacyRole: "accountant",
         permissions: {
-          "main.read": true,
+          "overview.read": true,
           "sales.read": true, "sales.create": true, "sales.edit": true,
           "expenses.read": true, "expenses.create": true, "expenses.edit": true,
-          "banking.read": true, "banking.create": true, "banking.edit": true, "banking.import": true, "banking.reconcile": true,
-          "accounting.read": true, "accounting.create": true, "accounting.edit": true, "accounting.void": true,
-          "reports.read": true, "reports.export": true,
-          "help.read": true,
-          "settings.read": true,
+          "accounting.read": true, "accounting.create": true, "accounting.edit": true, "accounting.import": true, "accounting.reconcile": true, "accounting.void": true, "accounting.export": true,
+          "system.read": true,
         }
       },
       {
@@ -110,48 +100,47 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         description: "Front office and master-data access with no posting or approval authority.",
         legacyRole: "secretary",
         permissions: {
-          "main.read": true,
+          "overview.read": true,
           "sales.read": true, "sales.create": true, "sales.edit": true,
           "expenses.read": true,
-          "banking.read": true,
-          "reports.read": true,
-          "help.read": true,
-          "settings.read": true,
+          "accounting.read": true,
+          "system.read": true,
         }
       }
     ];
     let ACTIVE_USER_ACCESS = null;
     const ACCESS_BRIDGE = {
-      canCreateTxns: ["sales.create", "expenses.create", "banking.create", "accounting.create"],
-      canEditTxns: ["sales.edit", "expenses.edit", "banking.edit", "accounting.edit"],
+      canCreateTxns: ["sales.create", "expenses.create", "accounting.create"],
+      canEditTxns: ["sales.edit", "expenses.edit", "accounting.edit"],
       canVoidTxns: ["accounting.void"],
-      canManageUsers: ["system.read", "system.create", "system.edit", "system.approve"],
-      canViewReports: ["reports.read"],
-      canAccessBanking: ["banking.read"],
-      canEditSettings: ["settings.edit"],
-      canExportData: ["reports.export"],
+      canManageUsers: ["system.create", "system.edit", "system.approve"],
+      canViewReports: ["accounting.read"],
+      canAccessBanking: ["accounting.read"],
+      canEditSettings: ["system.edit"],
+      canExportData: ["accounting.export"],
       canManageAccounts: ["accounting.create", "accounting.edit"],
-      canAccessVAT: ["reports.read"]
+      canAccessVAT: ["accounting.read"]
     };
     const PAGE_ACCESS_BRIDGE = {
-      dashboard: "main.read",
-      deals: "sales.read",
-      receipts: "sales.read",
-      customers: "sales.read",
-      brokers: "sales.read",
-      developers: "sales.read",
-      payments: "expenses.read",
-      vendors: "expenses.read",
-      banking: "banking.read",
-      journal: "accounting.read",
-      coa: "accounting.read",
-      reports: "reports.read",
-      vat: "reports.read",
-      manual: "help.read",
-      users: "system.read",
-      settings: "settings.read",
-      futureExpenses: "planning.read",
-      banana2: "main.read"
+      dashboard:      "overview.read",
+      banana2:        "overview.read",
+      deals:          "sales.read",
+      receipts:       "sales.read",
+      invoices:       "sales.read",
+      customers:      "sales.read",
+      brokers:        "sales.read",
+      developers:     "sales.read",
+      payments:       "expenses.read",
+      vendors:        "expenses.read",
+      futureExpenses: "expenses.read",
+      banking:        "accounting.read",
+      journal:        "accounting.read",
+      coa:            "accounting.read",
+      reports:        "accounting.read",
+      vat:            "accounting.read",
+      users:          "system.read",
+      settings:       "system.read",
+      manual:         "system.read",
     };
     const getDefaultSecurityTemplate = (roleId) => DEFAULT_SECURITY_ROLE_TEMPLATES.find(role => role.id === roleId) || null;
     const resolveLegacyRole = (subject) => typeof subject === "string" ? subject : subject?.legacyRole || subject?.role || "secretary";
