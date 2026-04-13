@@ -30,6 +30,10 @@ function invNum(v) {
   return isFinite(n) && !isNaN(n) ? n : 0;
 }
 
+function invFromCents(v) {
+  return parseFloat((invNum(v) / 100).toFixed(2));
+}
+
 // Returns commission amount in AED: dealValue × (commissionPct / 100)
 // e.g. pct = 7 means 7%  →  dealValue × 0.07
 function invCommissionAmount(line) {
@@ -479,7 +483,7 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
     const pct         = d.commission_pct || 3;
     setInv(prev => {
       const copy = JSON.parse(JSON.stringify(prev));
-      const line = { ...copy.lineItems[idx], projectUnit, specification: `${pct}% of Agency Commission Claim`, dealValue: d.transaction_value || "", commissionPct: pct, dealId };
+      const line = { ...copy.lineItems[idx], projectUnit, specification: `${pct}% of Agency Commission Claim`, dealValue: d.transaction_value ? invFromCents(d.transaction_value) : "", commissionPct: pct, dealId };
       Object.assign(copy.lineItems[idx], invNormalizeLine(line));
       return copy;
     });

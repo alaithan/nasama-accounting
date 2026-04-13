@@ -1235,6 +1235,7 @@ function DevelopersPage(p) {
   return <CRUDPage title="Developers" icon="🏗️" items={p.developers} setItems={p.setDevelopers} eventName="add-developer" userRole={p.userRole} createPerm="sales.create" editPerm="sales.edit" fields={[
     { key: "name", label: "Name" }, { key: "contact_person", label: "Contact Person" },
     { key: "email", label: "Email" }, { key: "phone", label: "Phone" },
+    { key: "address", label: "Address", showInTable: false }, { key: "trn", label: "TRN", showInTable: false },
     { key: "expiry_date", label: "Agreement Expiry" }
   ]} />;
 }
@@ -3957,7 +3958,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       case "dashboard": return <Dashboard {...shared} kpis={kpis} plannedExpenses={plannedExpenses} />;
       case "deals": return <DealsPage {...shared} />;
       case "receipts": return <ReceiptsPage {...shared} />;
-      case "invoices": return <InvoicePage customers={customers} deals={deals} settings={settings} userEmail={userEmail} />;
+      case "invoices": return <InvoicePage customers={customers} developers={developers} deals={deals} settings={settings} userEmail={userEmail} />;
       case "payments": return <PaymentsPage {...shared} />;
       case "customers": return <CustomersPage {...shared} />;
       case "brokers": return <BrokersPage {...shared} />;
