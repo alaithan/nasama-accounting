@@ -3562,6 +3562,35 @@ function AuthGate({ children }) {
 }
 
 // ╔══════════════════════════════════════════════════╗
+//  SIDEBAR ICON
+// ╚══════════════════════════════════════════════════╝
+function SidebarIcon({ id, active }) {
+  const c = active ? "#C9A044" : "#4B5585";
+  const p = { width: 16, height: 16, fill: "none", stroke: c, strokeWidth: "1.8", viewBox: "0 0 24 24", style: { flexShrink: 0, display: "block" } };
+  const icons = {
+    dashboard:      <svg {...p}><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>,
+    deals:          <svg {...p}><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg>,
+    receipts:       <svg {...p}><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>,
+    customers:      <svg {...p}><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>,
+    brokers:        <svg {...p}><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>,
+    developers:     <svg {...p}><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
+    payments:       <svg {...p}><rect x="1" y="4" width="22" height="16" rx="2.5"/><line x1="1" y1="10" x2="23" y2="10"/></svg>,
+    vendors:        <svg {...p}><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>,
+    futureExpenses: <svg {...p}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path strokeLinecap="round" d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/></svg>,
+    banking:        <svg {...p}><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 2 7 22 7"/></svg>,
+    journal:        <svg {...p}><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="13" y2="12"/></svg>,
+    coa:            <svg {...p}><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6" strokeWidth="2.5" strokeLinecap="round"/><line x1="3" y1="12" x2="3.01" y2="12" strokeWidth="2.5" strokeLinecap="round"/><line x1="3" y1="18" x2="3.01" y2="18" strokeWidth="2.5" strokeLinecap="round"/></svg>,
+    reports:        <svg {...p}><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg>,
+    vat:            <svg {...p}><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><circle cx="9" cy="14" r="1.5"/><circle cx="15" cy="14" r="1.5"/><line x1="9" y1="16.5" x2="15" y2="11.5" strokeLinecap="round"/></svg>,
+    manual:         <svg {...p}><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/><circle cx="12" cy="10" r="1.5" fill={c} stroke="none"/><line x1="12" y1="13" x2="12" y2="15"/></svg>,
+    users:          <svg {...p}><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>,
+    settings:       <svg {...p}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
+    banana2:        <svg {...p}><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>,
+  };
+  return icons[id] || <svg {...p}><circle cx="12" cy="12" r="9"/></svg>;
+}
+
+// ╔══════════════════════════════════════════════════╗
 //  MAIN APP
 // ╚══════════════════════════════════════════════════╝
 function App({ userRole, userAccess, userEmail, signOut }) {
@@ -3966,30 +3995,80 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       </div>}
 
       {/* Sidebar */}
-      {(!isMobile || mobileMenuOpen) && <div style={{ width: isMobile ? "80%" : 234, background: navBg, display: "flex", flexDirection: "column", overflowY: "auto", flexShrink: 0, position: isMobile ? "fixed" : "relative", top: 0, left: 0, bottom: 0, zIndex: isMobile ? 1001 : 1, boxShadow: isMobile ? "4px 0 28px rgba(0,0,0,.45)" : "1px 0 0 rgba(255,255,255,.04)" }}>
-        <div style={{ padding: "20px 18px", display: "flex", alignItems: "center", gap: 11, borderBottom: "1px solid rgba(255,255,255,.05)" }}>
-          <Logo size={28} />
+      {(!isMobile || mobileMenuOpen) && <div style={{ width: isMobile ? "80%" : 244, background: navBg, display: "flex", flexDirection: "column", flexShrink: 0, position: isMobile ? "fixed" : "relative", top: 0, left: 0, bottom: 0, zIndex: isMobile ? 1001 : 1, boxShadow: isMobile ? "4px 0 32px rgba(0,0,0,.55)" : "none", borderRight: "1px solid rgba(255,255,255,.05)" }}>
+
+        {/* Logo */}
+        <div style={{ padding: "20px 20px 16px", display: "flex", alignItems: "center", gap: 12 }}>
+          <Logo size={30} />
           <div>
-            <div style={{ color: GOLD, fontWeight: 700, fontSize: 13, letterSpacing: "0.06em" }}>NASAMA</div>
-            <div style={{ color: "#3B4270", fontSize: 9.5, letterSpacing: "0.12em", marginTop: 1 }}>ACCOUNTING v2</div>
+            <div style={{ color: GOLD, fontWeight: 800, fontSize: 14, letterSpacing: "0.08em", lineHeight: 1.2 }}>NASAMA</div>
+            <div style={{ color: "#2D3460", fontSize: 9, letterSpacing: "0.15em", marginTop: 2, textTransform: "uppercase" }}>Accounting v2</div>
           </div>
         </div>
-        <div style={{ flex: 1, padding: "10px 0" }}>
+        <div style={{ height: 1, background: "linear-gradient(to right, rgba(201,160,68,.25), rgba(255,255,255,.03))", margin: "0 16px 6px" }} />
+
+        {/* Nav */}
+        <div style={{ flex: 1, padding: "4px 0 8px", overflowY: "auto" }}>
           {NAV.map((item, i) => {
-            if (item.s) return sectionHasVisiblePage(i) ? <div key={i} style={{ padding: "14px 20px 4px", fontSize: 9.5, fontWeight: 700, letterSpacing: "0.16em", color: "#2D3460", textTransform: "uppercase" }}>{item.s}</div> : null;
+            if (item.s) return sectionHasVisiblePage(i) ? (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "14px 18px 5px" }}>
+                <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.18em", color: "#2E3660", textTransform: "uppercase", whiteSpace: "nowrap" }}>{item.s}</span>
+                <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,.05)" }} />
+              </div>
+            ) : null;
             if (!canAccessPage(accessSubject, item.id)) return null;
             const active = page === item.id;
-            return <div key={item.id} className="nav-item" style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 14px", cursor: "pointer", borderRadius: 8, margin: "1px 8px", color: active ? "#ffffff" : "#6B75A8", background: active ? "rgba(201,160,68,.14)" : "transparent", fontSize: 13, fontWeight: active ? 600 : 400, userSelect: "none", borderLeft: active ? `3px solid ${GOLD}` : "3px solid transparent" }} onClick={() => { setPage(item.id); if (isMobile) setMobileMenuOpen(false); }}>
-              <span style={{ fontSize: 14, opacity: active ? 1 : 0.7 }}>{item.icon}</span>
-              <span>{item.label}</span>
-            </div>;
+            return (
+              <div
+                key={item.id}
+                className="nav-item"
+                style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "8px 14px 8px 14px",
+                  margin: "1px 10px",
+                  cursor: "pointer",
+                  borderRadius: 8,
+                  color: active ? "#F0E6CF" : "#5C6690",
+                  background: active ? "rgba(201,160,68,.12)" : "transparent",
+                  fontSize: 13,
+                  fontWeight: active ? 600 : 400,
+                  borderLeft: active ? `2px solid ${GOLD}` : "2px solid transparent",
+                  transition: "background .15s, color .15s",
+                  userSelect: "none",
+                  letterSpacing: "0.01em",
+                }}
+                onClick={() => { setPage(item.id); if (isMobile) setMobileMenuOpen(false); }}
+                onMouseEnter={e => { if (!active) { e.currentTarget.style.background = "rgba(255,255,255,.04)"; e.currentTarget.style.color = "#8892B8"; } }}
+                onMouseLeave={e => { if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#5C6690"; } }}
+              >
+                <SidebarIcon id={item.id} active={active} />
+                <span style={{ flex: 1 }}>{item.label}</span>
+                {active && <div style={{ width: 5, height: 5, borderRadius: "50%", background: GOLD, opacity: 0.7, flexShrink: 0 }} />}
+              </div>
+            );
           })}
         </div>
-        <div style={{ padding: "14px 16px", borderTop: "1px solid rgba(255,255,255,.05)" }}>
-          <div style={{ marginBottom: 7, color: "#4B5585", fontSize: 11.5, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userEmail}</div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={C.badge(userRole === "admin" ? "danger" : userRole === "accountant" ? "info" : "neutral")}>{userRole}</span>
-            <button style={{ background: "none", border: "none", color: "#4B5585", fontSize: 11, cursor: "pointer", transition: "color .15s" }} onClick={signOut}>Sign Out</button>
+
+        {/* Footer */}
+        <div style={{ padding: "10px 10px 14px" }}>
+          <div style={{ height: 1, background: "rgba(255,255,255,.05)", marginBottom: 10 }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10, background: "rgba(255,255,255,.03)" }}>
+            <div style={{ width: 32, height: 32, borderRadius: "50%", background: `linear-gradient(135deg, ${GOLD} 0%, #7A5A1E 100%)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "#fff", flexShrink: 0, letterSpacing: "0.02em" }}>
+              {userEmail ? userEmail[0].toUpperCase() : "?"}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: "#4A5480", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 3 }}>{userEmail}</div>
+              <span style={C.badge(userRole === "admin" ? "danger" : userRole === "accountant" ? "info" : "neutral")}>{userRole}</span>
+            </div>
+            <button
+              title="Sign Out"
+              style={{ background: "none", border: "none", cursor: "pointer", padding: "4px", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, opacity: 0.6, transition: "opacity .15s" }}
+              onClick={signOut}
+              onMouseEnter={e => e.currentTarget.style.opacity = "1"}
+              onMouseLeave={e => e.currentTarget.style.opacity = "0.6"}
+            >
+              <svg width="15" height="15" fill="none" stroke="#8892B8" strokeWidth="2" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            </button>
           </div>
         </div>
       </div>}
