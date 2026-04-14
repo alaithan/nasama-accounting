@@ -2549,15 +2549,36 @@ function VATPage({ accounts, txns, ledger, settings }) {
     '</div>';
   }
 
-  function handlePrintVAT() {
-    var el = document.getElementById("rpt-print-area");
-    if (el) el.innerHTML = buildVATReportHTML();
-    rptPrint(false);
+  function triggerVATPrint() {
+    var old = document.getElementById("__vat_print_iframe__");
+    if (old) old.remove();
+    var iframe = document.createElement("iframe");
+    iframe.id = "__vat_print_iframe__";
+    iframe.style.cssText = "position:fixed;left:-9999px;top:-9999px;width:210mm;height:297mm;border:0;visibility:hidden;";
+    document.body.appendChild(iframe);
+    var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+      '<link rel="preconnect" href="https://fonts.googleapis.com">' +
+      '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,600;14..32,700;14..32,800&display=swap">' +
+      '<style>*,*::before,*::after{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;box-sizing:border-box;margin:0;padding:0;}' +
+      'html,body{background:#fff;color:#000;font-family:"Inter",Arial,Helvetica,sans-serif;}' +
+      '@page{margin:12mm 15mm 22mm;size:A4 portrait;}' +
+      'table{border-collapse:collapse;width:100%;}thead{display:table-header-group;}tfoot{display:table-footer-group;}tr{page-break-inside:avoid;}' +
+      '</style></head><body style="padding:16px 0;margin:0;">' +
+      buildVATReportHTML() +
+      '</body></html>';
+    var doc = iframe.contentDocument || iframe.contentWindow.document;
+    doc.open(); doc.write(html); doc.close();
+    function doprint() {
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+      setTimeout(function() { var f = document.getElementById("__vat_print_iframe__"); if (f) f.remove(); }, 8000);
+    }
+    try { iframe.contentDocument.fonts.ready.then(function() { doprint(); }); }
+    catch(e) { setTimeout(doprint, 700); }
   }
 
-  function handleExportPDFVAT() {
-    handlePrintVAT(); // opens print dialog — user selects "Save as PDF"
-  }
+  function handlePrintVAT() { triggerVATPrint(); }
+  function handleExportPDFVAT() { triggerVATPrint(); }
 
   return <div>
     <PageHeader title="VAT / Taxes" sub={`TRN: ${settings.trn || "Not set"} · UAE VAT 5%`}>
