@@ -1362,6 +1362,16 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
 
   // Build activity rows for a given set of target accounts
   const buildRows = (targetAccts) => {
+    // Opening balance: sum of all non-void transactions BEFORE the period start for these accounts
+    const openingBalance = dateFilter.from
+      ? txns
+          .filter(t => !t.isVoid && (t.date || "") < dateFilter.from)
+          .reduce((sum, t) => {
+            const lines = (t.lines || []).filter(l => targetAccts.some(a => a.id === l.accountId));
+            return sum + lines.reduce((s, l) => s + (l.debit || 0) - (l.credit || 0), 0);
+          }, 0)
+      : 0;
+
     const rows = txns
       .filter(t => !t.isVoid && (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to))
       .map(t => {
@@ -1374,9 +1384,22 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
           acctName: lines.map(l => targetAccts.find(a => a.id === l.accountId)?.name || "").join(", "),
           inAmt: lines.reduce((s, l) => s + (l.debit || 0), 0),
           outAmt: lines.reduce((s, l) => s + (l.credit || 0), 0),
+          balance: 0,
         };
       })
       .filter(Boolean);
+
+    // Compute running balance in chronological order (always date ASC)
+    const dateSorted = [...rows].sort((a, b) => {
+      const d = a.date.localeCompare(b.date);
+      return d !== 0 ? d : a.ref.localeCompare(b.ref);
+    });
+    let running = openingBalance;
+    dateSorted.forEach(row => {
+      running += (row.inAmt || 0) - (row.outAmt || 0);
+      row.balance = running;
+    });
+
     const getVal = (row) => {
       switch (sortKey) {
         case "date": return row.date || ""; case "ref": return row.ref || "";
@@ -1511,9 +1534,9 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
   // Shared activity table renderer
   const ActivityTable = (rows, emptyMsg) => (
     <div style={{ overflowX: "auto", overflowY: "visible" }}>
-      <table style={{ width: "100%", minWidth: 900, borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
+      <table style={{ width: "100%", minWidth: 1060, borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
         <colgroup>
-          <col style={{ width: 110 }} /><col style={{ width: 110 }} /><col /><col style={{ width: 160 }} /><col style={{ width: 160 }} /><col style={{ width: 80 }} />
+          <col style={{ width: 110 }} /><col style={{ width: 100 }} /><col /><col style={{ width: 140 }} /><col style={{ width: 140 }} /><col style={{ width: 150 }} /><col style={{ width: 70 }} />
         </colgroup>
         <thead><tr>
           <SortTh label="Date"        sortKey={sortKey} activeKey="date"        sortDir={sortDir} onToggle={toggleSort} />
@@ -1521,16 +1544,18 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
           <SortTh label="Description" sortKey={sortKey} activeKey="description" sortDir={sortDir} onToggle={toggleSort} />
           <SortTh label="In (AED)"    sortKey={sortKey} activeKey="in"          sortDir={sortDir} onToggle={toggleSort} align="right" />
           <SortTh label="Out (AED)"   sortKey={sortKey} activeKey="out"         sortDir={sortDir} onToggle={toggleSort} align="right" />
+          <th style={{ ...C.th, textAlign: "right", background: "#F0FDF4", color: "#065F46", letterSpacing: "0.04em" }}>Balance (AED)</th>
           <th style={C.th}>Actions</th>
         </tr></thead>
         <tbody>
-          {rows.length === 0 && <tr><td colSpan={6} style={{ ...C.td, textAlign: "center", padding: 32, color: "#9CA3AF" }}>{emptyMsg}</td></tr>}
+          {rows.length === 0 && <tr><td colSpan={7} style={{ ...C.td, textAlign: "center", padding: 32, color: "#9CA3AF" }}>{emptyMsg}</td></tr>}
           {rows.map(row => <tr key={row.id}>
             <td style={C.td}>{fmtDate(row.date)}</td>
             <td style={C.td}>{row.ref}</td>
             <td style={{ ...C.td, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 0 }} title={row.description}>{row.description}</td>
             <td style={{ ...C.td, textAlign: "right", color: row.inAmt  > 0 ? "#059669" : "#9CA3AF" }}>{row.inAmt  > 0 ? fmtAED(row.inAmt)  : "—"}</td>
             <td style={{ ...C.td, textAlign: "right", color: row.outAmt > 0 ? "#DC2626" : "#9CA3AF" }}>{row.outAmt > 0 ? fmtAED(row.outAmt) : "—"}</td>
+            <td style={{ ...C.td, textAlign: "right", fontWeight: 600, fontVariantNumeric: "tabular-nums", background: "#F0FDF4", color: row.balance >= 0 ? "#065F46" : "#DC2626", whiteSpace: "nowrap" }}>{fmtAED(row.balance)}</td>
             <td style={C.td}>{hasPermission(userRole, 'canEditTxns') && <button style={C.btn("secondary", true)} onClick={() => setEditTxnId(row.id)}>Edit</button>}</td>
           </tr>)}
         </tbody>
