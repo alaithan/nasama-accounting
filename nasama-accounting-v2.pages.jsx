@@ -39,8 +39,8 @@ function DateFilterBar({ dateFilter, setDateFilter }) {
     { id: "custom", label: "Custom" },
   ];
   return (
-    <div style={{ display: "flex", gap: 3, flexWrap: "wrap", alignItems: "center", marginBottom: 18, padding: "7px 8px", background: "#ffffff", borderRadius: 12, border: "1px solid #EAECF0", boxShadow: "0 1px 3px rgba(16,24,40,.05)" }}>
-      <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: "#98A2B3", letterSpacing: "0.12em", marginRight: 6, paddingLeft: 6 }}>Period</span>
+    <div style={{ display: "flex", gap: 3, flexWrap: window.innerWidth <= 768 ? "nowrap" : "wrap", overflowX: window.innerWidth <= 768 ? "auto" : "visible", WebkitOverflowScrolling: "touch", msOverflowStyle: "none", scrollbarWidth: "none", alignItems: "center", marginBottom: 18, padding: "7px 8px", background: "#ffffff", borderRadius: 12, border: "1px solid #EAECF0", boxShadow: "0 1px 3px rgba(16,24,40,.05)" }}>
+      <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: "#98A2B3", letterSpacing: "0.12em", marginRight: 6, paddingLeft: 6, flexShrink: 0 }}>Period</span>
       {PRESETS.map(p => {
         const active = dateFilter.preset === p.id;
         return <button key={p.id} onClick={() => {
@@ -249,7 +249,7 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     const pct = hasComp && prevValue !== 0 ? (variance / Math.abs(prevValue)) * 100 : null;
     const varGood = higherIsBetter !== undefined ? (higherIsBetter ? variance >= 0 : variance <= 0) : variance >= 0;
     const varColor = variance === 0 ? "#98A2B3" : (varGood ? "#059669" : "#DC2626");
-    const varArrow = variance === 0 ? "●" : (varGood ? "▲" : "▼");
+    const varArrow = variance === 0 ? "●" : (variance > 0 ? "▲" : "▼");
     // Show full prior date range so user knows exactly what dates are being compared
     const shortDate = d => { if (!d) return ""; const p = d.split("-"); return `${p[2] || ""}/${p[1] || ""}/${(p[0] || "").slice(2)}`; };
     const priorFromY = priorDateRange.from ? priorDateRange.from.slice(0, 4) : "";
@@ -350,9 +350,24 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
           {runwayAlertLevel === "critical" && <span style={{ marginLeft: 14, fontSize: 14, fontWeight: 600, color: "#FCA5A5" }}>⚠ Runway critical</span>}
           {runwayAlertLevel === "warning" && <span style={{ marginLeft: 14, fontSize: 14, fontWeight: 600, color: "#FCD34D" }}>⚠ Runway low</span>}
         </div>
-        <div style={{ fontSize: 13.5, color: "#D1D5DB", maxWidth: 820, lineHeight: 1.72, marginBottom: 16 }}>
-          Cash flow from operations: <strong style={{ color: filteredKpis.operatingCashFlow >= 0 ? "#6EE7B7" : "#FCA5A5" }}>{fmtAED(filteredKpis.operatingCashFlow)}</strong>. Net commission retained: <strong style={{ color: "#93C5FD" }}>{fmtAED(filteredKpis.companyNetCommissionRetained)}</strong>. Net income: <strong style={{ color: (filteredKpis.rev - filteredKpis.exp) >= 0 ? "#6EE7B7" : "#FCA5A5" }}>{fmtAED(filteredKpis.rev - filteredKpis.exp)}</strong>. Pipeline: <strong style={{ color: GOLD }}>{fmtAED(kpis.pendingPipelineCommission)}</strong> projected.
-        </div>
+        {isMobile
+          ? <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px", marginBottom: 16 }}>
+              {[
+                { label: "Net Income", value: fmtAED(filteredKpis.rev - filteredKpis.exp), color: (filteredKpis.rev - filteredKpis.exp) >= 0 ? "#6EE7B7" : "#FCA5A5" },
+                { label: "Cash Flow", value: fmtAED(filteredKpis.operatingCashFlow), color: filteredKpis.operatingCashFlow >= 0 ? "#6EE7B7" : "#FCA5A5" },
+                { label: "Pipeline", value: fmtAED(kpis.pendingPipelineCommission), color: GOLD },
+                { label: "Net Commission", value: fmtAED(filteredKpis.companyNetCommissionRetained), color: "#93C5FD" },
+              ].map(item => (
+                <div key={item.label}>
+                  <div style={{ fontSize: 9.5, textTransform: "uppercase", letterSpacing: "0.1em", color: "rgba(255,255,255,.5)", marginBottom: 2 }}>{item.label}</div>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: item.color, fontVariantNumeric: "tabular-nums" }}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+          : <div style={{ fontSize: 13.5, color: "#D1D5DB", maxWidth: 820, lineHeight: 1.72, marginBottom: 16 }}>
+              Cash flow from operations: <strong style={{ color: filteredKpis.operatingCashFlow >= 0 ? "#6EE7B7" : "#FCA5A5" }}>{fmtAED(filteredKpis.operatingCashFlow)}</strong>. Net commission retained: <strong style={{ color: "#93C5FD" }}>{fmtAED(filteredKpis.companyNetCommissionRetained)}</strong>. Net income: <strong style={{ color: (filteredKpis.rev - filteredKpis.exp) >= 0 ? "#6EE7B7" : "#FCA5A5" }}>{fmtAED(filteredKpis.rev - filteredKpis.exp)}</strong>. Pipeline: <strong style={{ color: GOLD }}>{fmtAED(kpis.pendingPipelineCommission)}</strong> projected.
+            </div>
+        }
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {[{ label: "Liquidity", tone: "#93C5FD" }, { label: "Profitability", tone: "#6EE7B7" }, { label: "Control", tone: "#FCA5A5" }, { label: "Pipeline", tone: GOLD }].map(item => <span key={item.label} style={{ padding: "4px 11px", borderRadius: 999, border: "1px solid rgba(255,255,255,.10)", background: "rgba(255,255,255,.06)", color: item.tone, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase" }}>{item.label}</span>)}
         </div>
@@ -4116,17 +4131,26 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0, minHeight: 0 }}>
 
         {/* Header */}
-        <div style={{ height: isMobile ? 50 : 60, background: headerBg, borderBottom: `1px solid ${borderClr}`, display: "flex", alignItems: "center", gap: isMobile ? 8 : 12, padding: isMobile ? "0 12px" : "0 24px", flexShrink: 0, boxShadow: "0 1px 0 " + borderClr }}>
-          {isMobile && <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} style={{ background: "none", border: "none", padding: 8, cursor: "pointer", display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ height: isMobile ? 54 : 60, background: headerBg, borderBottom: `1px solid ${borderClr}`, display: "flex", alignItems: "center", gap: isMobile ? 6 : 12, padding: isMobile ? "0 10px" : "0 24px", flexShrink: 0, boxShadow: "0 1px 0 " + borderClr }}>
+          {isMobile && <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} style={{ background: "none", border: "none", padding: 6, cursor: "pointer", display: "flex", flexDirection: "column", gap: 4.5, flexShrink: 0 }}>
             <div style={{ width: 20, height: 2, background: GOLD, borderRadius: 2 }}></div>
-            <div style={{ width: 20, height: 2, background: GOLD, borderRadius: 2 }}></div>
+            <div style={{ width: 13, height: 2, background: GOLD, borderRadius: 2 }}></div>
             <div style={{ width: 20, height: 2, background: GOLD, borderRadius: 2 }}></div>
           </button>}
-          <div style={{ flex: 1 }} />
-          <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 10, flexShrink: 0 }}>
+          {isMobile
+            ? <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Logo size={22} />
+                  <span style={{ color: GOLD, fontWeight: 800, fontSize: 13, letterSpacing: "0.12em", textTransform: "uppercase" }}>NASAMA</span>
+                </div>
+              </div>
+            : <div style={{ flex: 1 }} />
+          }
+          <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 4 : 10, flexShrink: 0 }}>
             {!isMobile && <button style={C.btn()} onClick={() => (addMap[page] || (() => toast("Navigate to a module first", "info")))()}>+ Add New</button>}
-            {isMobile && <button style={{ ...C.btn(), padding: '8px 12px', fontSize: 13 }} onClick={() => (addMap[page] || (() => toast("Navigate first", "info")))()}>+</button>}
-            <button style={{ ...C.btn("secondary"), padding: isMobile ? '8px 10px' : undefined }} onClick={() => setDark(d => !d)}>{dark ? "☀️" : "🌙"}</button>
+            {isMobile && <button style={{ ...C.btn(), padding: '7px 11px', fontSize: 13, minHeight: 36 }} onClick={() => (addMap[page] || (() => toast("Navigate first", "info")))()}>+</button>}
+            <button style={{ ...C.btn("secondary"), padding: isMobile ? '7px 9px' : undefined, minHeight: isMobile ? 36 : undefined }} onClick={() => setDark(d => !d)}>{dark ? "☀️" : "🌙"}</button>
+            {syncing && isMobile && <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#059669", flexShrink: 0, display: "block" }} title="Saving…" />}
             {syncing && !isMobile && <span style={{ fontSize: 11, background: "#ECFDF3", color: "#027A48", border: "1px solid #A6F4C5", borderRadius: 20, padding: "3px 11px", fontWeight: 500 }}>Saving…</span>}
             {!syncing && syncError && <span style={{ fontSize: 11, background: "#FEF3F2", color: "#B42318", border: "1px solid #FECDCA", borderRadius: 20, padding: "3px 11px", fontWeight: 500 }}>Sync Error</span>}
             {!syncing && !syncError && !isMobile && <span style={{ fontSize: 11, color: "#039855", fontWeight: 500 }}>Synced</span>}
@@ -4134,25 +4158,34 @@ function App({ userRole, userAccess, userEmail, signOut }) {
         </div>
 
         {/* Content */}
-        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: isMobile ? 10 : 24, paddingBottom: isMobile ? 70 : 24, background: mainBg }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: isMobile ? 10 : 24, paddingBottom: isMobile ? 80 : 24, background: mainBg }}>
           {renderPage()}
         </div>
       </div>
 
       {/* Mobile bottom nav */}
-      {isMobile && <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, height: 62, background: dark ? "#080C1A" : "#ffffff", borderTop: `1px solid ${borderClr}`, display: "flex", justifyContent: "space-around", alignItems: "center", zIndex: 1000, boxShadow: "0 -1px 0 " + borderClr + ", 0 -4px 12px rgba(0,0,0,.06)" }}>
+      {isMobile && <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: dark ? "rgba(8,12,26,0.95)" : "rgba(255,255,255,0.95)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderTop: `1px solid ${dark ? "rgba(255,255,255,.06)" : "#EAECF0"}`, display: "flex", justifyContent: "space-around", alignItems: "center", padding: "6px 6px 10px", zIndex: 1000, boxShadow: "0 -4px 24px rgba(0,0,0,.08)" }}>
         {[
-          { id: "dashboard", icon: "🏠", label: "Home" },
-          { id: "deals", icon: "🤝", label: "Deals" },
-          { id: "banking", icon: "🏦", label: "Bank" },
-          { id: "reports", icon: "📊", label: "Reports" },
-          { id: "more", icon: "⋯", label: "More" }
+          { id: "dashboard", label: "Home" },
+          { id: "deals", label: "Deals" },
+          { id: "banking", label: "Bank" },
+          { id: "reports", label: "Reports" },
+          { id: "more", label: "More" }
         ].map(item => {
           const isActive = item.id === "more" ? false : page === item.id;
-          return <div key={item.id} onClick={() => item.id === "more" ? setMobileMenuOpen(true) : setPage(item.id)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, cursor: "pointer", padding: "8px 4px", color: isActive ? GOLD : "#6B7280" }}>
-            <span style={{ fontSize: 20 }}>{item.icon}</span>
-            <span style={{ fontSize: 10, fontWeight: isActive ? 600 : 400 }}>{item.label}</span>
-          </div>;
+          return (
+            <div
+              key={item.id}
+              onClick={() => item.id === "more" ? setMobileMenuOpen(true) : setPage(item.id)}
+              style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, cursor: "pointer", padding: "7px 2px 6px", borderRadius: 12, background: isActive ? (dark ? "rgba(201,160,68,.13)" : "rgba(201,160,68,.10)") : "transparent", transition: "background .18s", margin: "0 2px" }}
+            >
+              {item.id === "more"
+                ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="5" cy="12" r="2" fill={isActive ? GOLD : (dark ? "#617098" : "#9CA3AF")}/><circle cx="12" cy="12" r="2" fill={isActive ? GOLD : (dark ? "#617098" : "#9CA3AF")}/><circle cx="19" cy="12" r="2" fill={isActive ? GOLD : (dark ? "#617098" : "#9CA3AF")}/></svg>
+                : <SidebarIcon id={item.id} active={isActive} />
+              }
+              <span style={{ fontSize: 9.5, fontWeight: isActive ? 700 : 500, color: isActive ? GOLD : (dark ? "#617098" : "#9CA3AF"), letterSpacing: "0.05em", textTransform: "uppercase", lineHeight: 1.1, marginTop: 1 }}>{item.label}</span>
+            </div>
+          );
         })}
       </div>}
 

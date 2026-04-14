@@ -18,6 +18,8 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: #98A2B3 }
 /* Mobile scrollbar hidden */
 @media (max-width: 768px) { ::-webkit-scrollbar { display: none } }
+/* Date filter bar: hide scrollbar on all breakpoints */
+.date-filter-bar::-webkit-scrollbar { display: none }
 /* Input focus glow */
 input:focus, select:focus, textarea:focus {
   outline: none;
