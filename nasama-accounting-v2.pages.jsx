@@ -2384,8 +2384,192 @@ function VATPage({ accounts, txns, ledger, settings }) {
   const netVAT = outputVAT - inputVAT;
   const netVatLabel = netVAT > 0 ? "Payable" : netVAT < 0 ? "Refundable" : "Settled";
 
+  // ── VAT Report HTML builder ──────────────────────────────
+  function buildVATReportHTML() {
+    var GOLD = "#C9A044", NAVY = "#0C0F1E", RED = "#DC2626", GREEN = "#059669", GRAY = "#6B7280";
+    var periodLabel = dateFilter.from && dateFilter.to
+      ? "Period: " + fmtDate(dateFilter.from) + " — " + fmtDate(dateFilter.to)
+      : dateFilter.from ? "From " + fmtDate(dateFilter.from)
+      : dateFilter.to   ? "Up to " + fmtDate(dateFilter.to)
+      : "All Dates";
+    var company = (settings && settings.company) || "Nasama Properties";
+    var trn     = (settings && settings.trn) || "Not Set";
+    var netColor = netVAT > 0 ? RED : netVAT < 0 ? GREEN : GRAY;
+    var netStatus = netVAT > 0 ? "PAYABLE TO FTA" : netVAT < 0 ? "REFUND DUE" : "SETTLED";
+
+    // Formatted amounts (cents → AED string, strip "AED " prefix for table cells)
+    function fmt(cents) { return fmtAED(cents); }
+    function fmtAbs(cents) { return fmtAED(Math.abs(cents)); }
+
+    // VAT transaction rows HTML
+    var txRowsHTML = "";
+    if (vatRows.length === 0) {
+      txRowsHTML = '<tr><td colspan="5" style="padding:18px;text-align:center;color:' + GRAY + ';font-size:12pt;">No VAT transactions found for this period.</td></tr>';
+    } else {
+      vatRows.forEach(function(row, i) {
+        var bg = i % 2 === 0 ? "#FFFFFF" : "#F9FAFB";
+        var outCell = row.outAmt !== 0 ? '<span style="color:' + RED + ';font-weight:600;">' + fmt(row.outAmt) + '</span>' : '<span style="color:#9CA3AF;">—</span>';
+        var inCell  = row.inAmt  !== 0 ? '<span style="color:' + GREEN + ';font-weight:600;">' + fmt(row.inAmt) + '</span>'  : '<span style="color:#9CA3AF;">—</span>';
+        txRowsHTML += '<tr style="background:' + bg + ';">' +
+          '<td style="padding:9px 12px;border-bottom:1px solid #F3F4F6;font-size:11pt;">' + fmtDate(row.date) + '</td>' +
+          '<td style="padding:9px 12px;border-bottom:1px solid #F3F4F6;font-size:11pt;color:#374151;">' + (row.ref || '') + '</td>' +
+          '<td style="padding:9px 12px;border-bottom:1px solid #F3F4F6;font-size:11pt;color:#374151;">' + (row.description || '') + '</td>' +
+          '<td style="padding:9px 12px;border-bottom:1px solid #F3F4F6;font-size:11pt;text-align:right;">' + outCell + '</td>' +
+          '<td style="padding:9px 12px;border-bottom:1px solid #F3F4F6;font-size:11pt;text-align:right;">' + inCell + '</td>' +
+          '</tr>';
+      });
+    }
+
+    // Settlement rows HTML
+    var settlHTML = "";
+    if (settlementRows.length > 0) {
+      settlHTML = '<div style="margin-top:28px;page-break-inside:avoid;">' +
+        '<div style="background:' + NAVY + ';padding:10px 18px;border-radius:6px 6px 0 0;">' +
+        '<span style="color:#fff;font-weight:700;font-size:12pt;letter-spacing:0.04em;">VAT SETTLEMENT ENTRIES</span>' +
+        '</div>' +
+        '<table style="width:100%;border-collapse:collapse;">' +
+        '<thead><tr style="background:#F3F4F6;">' +
+        '<th style="padding:9px 12px;text-align:left;font-size:10pt;font-weight:600;color:#374151;border-bottom:2px solid #E5E7EB;">Date</th>' +
+        '<th style="padding:9px 12px;text-align:left;font-size:10pt;font-weight:600;color:#374151;border-bottom:2px solid #E5E7EB;">Ref</th>' +
+        '<th style="padding:9px 12px;text-align:left;font-size:10pt;font-weight:600;color:#374151;border-bottom:2px solid #E5E7EB;">Description</th>' +
+        '<th style="padding:9px 12px;text-align:right;font-size:10pt;font-weight:600;color:#374151;border-bottom:2px solid #E5E7EB;">Output VAT Cleared</th>' +
+        '<th style="padding:9px 12px;text-align:right;font-size:10pt;font-weight:600;color:#374151;border-bottom:2px solid #E5E7EB;">Input VAT Cleared</th>' +
+        '</tr></thead><tbody>';
+      settlementRows.forEach(function(row, i) {
+        var bg = i % 2 === 0 ? "#FFFFFF" : "#F9FAFB";
+        var outCell = row.outAmt !== 0 ? fmt(row.outAmt) : "—";
+        var inCell  = row.inAmt  !== 0 ? fmt(row.inAmt)  : "—";
+        settlHTML += '<tr style="background:' + bg + ';">' +
+          '<td style="padding:9px 12px;border-bottom:1px solid #F3F4F6;font-size:11pt;">' + fmtDate(row.date) + '</td>' +
+          '<td style="padding:9px 12px;border-bottom:1px solid #F3F4F6;font-size:11pt;">' + (row.ref || '') + '</td>' +
+          '<td style="padding:9px 12px;border-bottom:1px solid #F3F4F6;font-size:11pt;">' + (row.description || '') + '</td>' +
+          '<td style="padding:9px 12px;border-bottom:1px solid #F3F4F6;font-size:11pt;text-align:right;">' + outCell + '</td>' +
+          '<td style="padding:9px 12px;border-bottom:1px solid #F3F4F6;font-size:11pt;text-align:right;">' + inCell + '</td>' +
+          '</tr>';
+      });
+      settlHTML += '</tbody></table>' +
+        '<div style="background:#FFF7ED;border:1px solid #FDE68A;border-radius:0 0 6px 6px;padding:10px 14px;font-size:10pt;color:#92400E;">' +
+        'These settlement entries zero out previously reported VAT balances and are excluded from the Output VAT, Input VAT, and Net VAT totals above.' +
+        '</div></div>';
+    }
+
+    var printedOn = new Date().toLocaleDateString("en-AE", { day: "2-digit", month: "long", year: "numeric" });
+
+    return '<div style="font-family:Inter,Arial,Helvetica,sans-serif;max-width:800px;margin:0 auto;color:#0F1623;">' +
+
+      // ── Header ──
+      '<div style="background:' + NAVY + ';padding:28px 32px 22px;border-radius:8px;margin-bottom:24px;-webkit-print-color-adjust:exact;print-color-adjust:exact;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;">' +
+          '<div>' +
+            '<div style="color:' + GOLD + ';font-size:9pt;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:6px;">UAE Value Added Tax</div>' +
+            '<div style="color:#fff;font-size:22pt;font-weight:800;letter-spacing:-0.02em;">VAT Return Report</div>' +
+            '<div style="color:#94A3B8;font-size:10pt;margin-top:6px;">' + company + '</div>' +
+          '</div>' +
+          '<div style="text-align:right;">' +
+            '<div style="color:' + GOLD + ';font-size:8pt;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;">Tax Reg. Number</div>' +
+            '<div style="color:#fff;font-size:14pt;font-weight:700;margin-top:2px;">' + trn + '</div>' +
+            '<div style="color:#94A3B8;font-size:9pt;margin-top:8px;">UAE VAT 5%</div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.12);display:flex;justify-content:space-between;">' +
+          '<div style="color:#94A3B8;font-size:9pt;">' + periodLabel + '</div>' +
+          '<div style="color:#94A3B8;font-size:9pt;">Printed: ' + printedOn + '</div>' +
+        '</div>' +
+      '</div>' +
+
+      // ── VAT Summary ──
+      '<div style="margin-bottom:24px;page-break-inside:avoid;">' +
+        '<div style="background:' + NAVY + ';padding:10px 18px;border-radius:6px 6px 0 0;">' +
+        '<span style="color:#fff;font-weight:700;font-size:12pt;letter-spacing:0.04em;">VAT SUMMARY</span>' +
+        '</div>' +
+        '<table style="width:100%;border-collapse:collapse;border:1px solid #E5E7EB;border-top:none;">' +
+          '<thead><tr style="background:#F8F9FB;">' +
+            '<th style="padding:10px 14px;text-align:left;font-size:10pt;font-weight:600;color:#374151;border-bottom:2px solid #E5E7EB;">Description</th>' +
+            '<th style="padding:10px 14px;text-align:right;font-size:10pt;font-weight:600;color:#374151;border-bottom:2px solid #E5E7EB;">Amount (AED)</th>' +
+            '<th style="padding:10px 14px;text-align:left;font-size:10pt;font-weight:600;color:#374151;border-bottom:2px solid #E5E7EB;">Notes</th>' +
+          '</thead></tr>' +
+          '<tbody>' +
+            '<tr style="background:#FEF2F2;">' +
+              '<td style="padding:12px 14px;border-bottom:1px solid #FEE2E2;font-size:11pt;font-weight:600;color:#1F2937;">Output VAT Collected</td>' +
+              '<td style="padding:12px 14px;border-bottom:1px solid #FEE2E2;font-size:13pt;font-weight:700;color:' + RED + ';text-align:right;">' + fmt(outputVAT) + '</td>' +
+              '<td style="padding:12px 14px;border-bottom:1px solid #FEE2E2;font-size:10pt;color:#6B7280;">VAT charged on sales & revenue</td>' +
+            '</tr>' +
+            '<tr style="background:#F0FDF4;">' +
+              '<td style="padding:12px 14px;border-bottom:1px solid #D1FAE5;font-size:11pt;font-weight:600;color:#1F2937;">Input VAT Recoverable</td>' +
+              '<td style="padding:12px 14px;border-bottom:1px solid #D1FAE5;font-size:13pt;font-weight:700;color:' + GREEN + ';text-align:right;">' + fmt(inputVAT) + '</td>' +
+              '<td style="padding:12px 14px;border-bottom:1px solid #D1FAE5;font-size:10pt;color:#6B7280;">VAT paid on purchases & expenses</td>' +
+            '</tr>' +
+            '<tr style="background:#F8F9FB;">' +
+              '<td style="padding:14px;font-size:12pt;font-weight:700;color:#0F1623;">Net VAT ' + netVatLabel + '</td>' +
+              '<td style="padding:14px;font-size:15pt;font-weight:800;color:' + netColor + ';text-align:right;">' + fmtAbs(netVAT) + '</td>' +
+              '<td style="padding:14px;"><span style="background:' + netColor + ';color:#fff;padding:3px 10px;border-radius:20px;font-size:9pt;font-weight:700;letter-spacing:0.06em;-webkit-print-color-adjust:exact;print-color-adjust:exact;">' + netStatus + '</span></td>' +
+            '</tr>' +
+          '</tbody>' +
+        '</table>' +
+      '</div>' +
+
+      // ── Transaction Detail ──
+      '<div style="margin-bottom:8px;page-break-inside:avoid;">' +
+        '<div style="background:' + NAVY + ';padding:10px 18px;border-radius:6px 6px 0 0;">' +
+        '<span style="color:#fff;font-weight:700;font-size:12pt;letter-spacing:0.04em;">VAT TRANSACTION DETAIL</span>' +
+        '<span style="color:#94A3B8;font-size:9pt;margin-left:12px;">' + vatRows.length + ' transaction' + (vatRows.length !== 1 ? 's' : '') + '</span>' +
+        '</div>' +
+        '<table style="width:100%;border-collapse:collapse;border:1px solid #E5E7EB;border-top:none;">' +
+          '<thead><tr style="background:#F3F4F6;">' +
+            '<th style="padding:9px 12px;text-align:left;font-size:10pt;font-weight:600;color:#374151;border-bottom:2px solid #E5E7EB;white-space:nowrap;">Date</th>' +
+            '<th style="padding:9px 12px;text-align:left;font-size:10pt;font-weight:600;color:#374151;border-bottom:2px solid #E5E7EB;">Ref</th>' +
+            '<th style="padding:9px 12px;text-align:left;font-size:10pt;font-weight:600;color:#374151;border-bottom:2px solid #E5E7EB;">Description</th>' +
+            '<th style="padding:9px 12px;text-align:right;font-size:10pt;font-weight:600;color:' + RED + ';border-bottom:2px solid #E5E7EB;">Output VAT</th>' +
+            '<th style="padding:9px 12px;text-align:right;font-size:10pt;font-weight:600;color:' + GREEN + ';border-bottom:2px solid #E5E7EB;">Input VAT</th>' +
+          '</tr></thead>' +
+          '<tbody>' + txRowsHTML + '</tbody>' +
+          '<tfoot><tr style="background:#F8F9FB;">' +
+            '<td colspan="3" style="padding:11px 12px;font-size:10pt;font-weight:700;color:#374151;border-top:2px solid #E5E7EB;">TOTALS</td>' +
+            '<td style="padding:11px 12px;text-align:right;font-size:11pt;font-weight:700;color:' + RED + ';border-top:2px solid #E5E7EB;">' + fmt(outputVAT) + '</td>' +
+            '<td style="padding:11px 12px;text-align:right;font-size:11pt;font-weight:700;color:' + GREEN + ';border-top:2px solid #E5E7EB;">' + fmt(inputVAT) + '</td>' +
+          '</tr></tfoot>' +
+        '</table>' +
+      '</div>' +
+
+      // ── Settlement entries (conditional) ──
+      settlHTML +
+
+      // ── FTA Compliance Notice ──
+      '<div style="margin-top:28px;padding:14px 18px;background:#F0F4FF;border:1px solid #C7D2FE;border-radius:6px;font-size:9.5pt;color:#1E40AF;page-break-inside:avoid;">' +
+        '<strong>UAE FTA Compliance Notice:</strong> This report is prepared in accordance with Federal Decree-Law No. 8 of 2017 on Value Added Tax. ' +
+        'VAT returns must be filed with the Federal Tax Authority (FTA) through the EmaraTax portal within 28 days of the end of each tax period. ' +
+        'This document is for internal accounting reference. Verify figures independently before official submission.' +
+      '</div>' +
+
+      // ── Footer ──
+      '<div style="margin-top:24px;padding-top:12px;border-top:1px solid #E5E7EB;display:flex;justify-content:space-between;font-size:8.5pt;color:#9CA3AF;">' +
+        '<span>' + company + ' · Accounting System v2</span>' +
+        '<span>Report generated on ' + printedOn + '</span>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function handlePrintVAT() {
+    var el = document.getElementById("rpt-print-area");
+    if (el) el.innerHTML = buildVATReportHTML();
+    rptPrint(false);
+  }
+
+  function handleExportPDFVAT() {
+    handlePrintVAT(); // opens print dialog — user selects "Save as PDF"
+  }
+
   return <div>
-    <PageHeader title="VAT / Taxes" sub={`TRN: ${settings.trn || "Not set"} · UAE VAT 5%`} />
+    <PageHeader title="VAT / Taxes" sub={`TRN: ${settings.trn || "Not set"} · UAE VAT 5%`}>
+      <button onClick={handlePrintVAT} style={{ ...C.btn("secondary"), display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+        Print
+      </button>
+      <button onClick={handleExportPDFVAT} style={{ ...C.btn(), display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Export PDF
+      </button>
+    </PageHeader>
     <DateFilterBar dateFilter={dateFilter} setDateFilter={setDateFilter} />
     {settlementRows.length > 0 && <div style={{ ...C.card, padding: "12px 16px", marginBottom: 14, borderLeft: "4px solid #D97706", background: "#FFF7ED", color: "#9A3412", fontSize: 13 }}>
       {settlementRows.length} VAT settlement {settlementRows.length === 1 ? "entry is" : "entries are"} excluded from Output VAT, Input VAT, and Net VAT totals because {settlementRows.length === 1 ? "it settles" : "they settle"} previously reported VAT balances.
