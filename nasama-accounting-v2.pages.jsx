@@ -2530,46 +2530,23 @@ function VATPage({ accounts, txns, ledger, settings }) {
         '</div>' +
       '</section>' +
 
-      // ══ MAIN CONTENT: Tables + Sidebar ══
+      // ══ PAGE 1: Output VAT + Compliance Sidebar ══
       '<div style="display:flex;gap:24px;">' +
-        // Left: tables
         '<div style="flex:2;min-width:0;">' +
-          // Output VAT table
-          '<div style="margin-bottom:24px;">' +
-            '<h3 style="font-size:7.5pt;text-transform:uppercase;letter-spacing:0.15em;font-weight:900;color:' + INK + ';margin-bottom:10px;">Output VAT Breakdown</h3>' +
-            '<table style="width:100%;border-collapse:collapse;">' +
-              '<thead><tr style="background:' + NAVY + ';-webkit-print-color-adjust:exact;print-color-adjust:exact;">' +
-                '<th style="padding:9px 12px;font-size:7pt;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;color:#fff;text-align:left;">Description</th>' +
-                '<th style="padding:9px 12px;font-size:7pt;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;color:#fff;text-align:right;">Date</th>' +
-                '<th style="padding:9px 12px;font-size:7pt;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;color:#fff;text-align:right;">VAT Amount</th>' +
-              '</tr></thead>' +
-              '<tbody>' + txTableRows(outRows, "outAmt", RED) + '</tbody>' +
-              '<tfoot><tr style="background:' + SURF_HI + ';-webkit-print-color-adjust:exact;print-color-adjust:exact;">' +
-                '<td colspan="2" style="padding:9px 12px;font-size:7.5pt;font-weight:900;text-transform:uppercase;color:' + INK + ';">Total Output Tax</td>' +
-                '<td style="padding:9px 12px;text-align:right;font-size:10pt;font-weight:900;color:' + RED + ';">' + fmt(outputVAT) + '</td>' +
-              '</tr></tfoot>' +
-            '</table>' +
-          '</div>' +
-          // Input VAT table
-          '<div>' +
-            '<h3 style="font-size:7.5pt;text-transform:uppercase;letter-spacing:0.15em;font-weight:900;color:' + INK + ';margin-bottom:10px;">Input VAT Details</h3>' +
-            '<table style="width:100%;border-collapse:collapse;">' +
-              '<thead><tr style="background:' + SURF_MAX + ';-webkit-print-color-adjust:exact;print-color-adjust:exact;">' +
-                '<th style="padding:9px 12px;font-size:7pt;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;color:' + INK + ';text-align:left;">Description</th>' +
-                '<th style="padding:9px 12px;font-size:7pt;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;color:' + INK + ';text-align:right;">Date</th>' +
-                '<th style="padding:9px 12px;font-size:7pt;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;color:' + INK + ';text-align:right;">Recoverable VAT</th>' +
-              '</tr></thead>' +
-              '<tbody>' + txTableRows(inRows, "inAmt", GREEN) + '</tbody>' +
-              '<tfoot><tr style="background:' + SURF_HI + ';-webkit-print-color-adjust:exact;print-color-adjust:exact;">' +
-                '<td colspan="2" style="padding:9px 12px;font-size:7.5pt;font-weight:900;text-transform:uppercase;color:' + INK + ';">Total Input Tax</td>' +
-                '<td style="padding:9px 12px;text-align:right;font-size:10pt;font-weight:900;color:' + GREEN + ';">' + fmt(inputVAT) + '</td>' +
-              '</tr></tfoot>' +
-            '</table>' +
-          '</div>' +
-          settlHTML +
+          '<h3 style="font-size:7.5pt;text-transform:uppercase;letter-spacing:0.15em;font-weight:900;color:' + INK + ';margin-bottom:10px;">Output VAT Breakdown</h3>' +
+          '<table style="width:100%;border-collapse:collapse;">' +
+            '<thead><tr style="background:' + NAVY + ';-webkit-print-color-adjust:exact;print-color-adjust:exact;">' +
+              '<th style="padding:9px 12px;font-size:7pt;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;color:#fff;text-align:left;">Description</th>' +
+              '<th style="padding:9px 12px;font-size:7pt;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;color:#fff;text-align:right;">Date</th>' +
+              '<th style="padding:9px 12px;font-size:7pt;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;color:#fff;text-align:right;">VAT Amount</th>' +
+            '</tr></thead>' +
+            '<tbody>' + txTableRows(outRows, "outAmt", RED) + '</tbody>' +
+            '<tfoot><tr style="background:' + SURF_HI + ';-webkit-print-color-adjust:exact;print-color-adjust:exact;">' +
+              '<td colspan="2" style="padding:9px 12px;font-size:7.5pt;font-weight:900;text-transform:uppercase;color:' + INK + ';">Total Output Tax</td>' +
+              '<td style="padding:9px 12px;text-align:right;font-size:10pt;font-weight:900;color:' + RED + ';">' + fmt(outputVAT) + '</td>' +
+            '</tr></tfoot>' +
+          '</table>' +
         '</div>' +
-
-        // Right: compliance sidebar
         '<aside style="flex:1;min-width:0;">' +
           '<div style="background:' + SURF_LO + ';padding:18px;border-radius:8px;outline:1px solid rgba(196,198,204,0.15);">' +
             '<h4 style="font-size:7pt;font-weight:900;text-transform:uppercase;letter-spacing:0.15em;color:' + NAVY + ';margin-bottom:18px;">Compliance Checklist</h4>' +
@@ -2583,6 +2560,27 @@ function VATPage({ accounts, txns, ledger, settings }) {
             '</div>' +
           '</div>' +
         '</aside>' +
+      '</div>' +
+
+      // ══ PAGE BREAK ══
+      '<div style="page-break-before:always;"></div>' +
+
+      // ══ PAGE 2: Input VAT table (full width) ══
+      '<div>' +
+        '<h3 style="font-size:7.5pt;text-transform:uppercase;letter-spacing:0.15em;font-weight:900;color:' + INK + ';margin-bottom:10px;">Input VAT Details</h3>' +
+        '<table style="width:100%;border-collapse:collapse;">' +
+          '<thead><tr style="background:' + SURF_MAX + ';-webkit-print-color-adjust:exact;print-color-adjust:exact;">' +
+            '<th style="padding:9px 12px;font-size:7pt;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;color:' + INK + ';text-align:left;">Description</th>' +
+            '<th style="padding:9px 12px;font-size:7pt;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;color:' + INK + ';text-align:right;">Date</th>' +
+            '<th style="padding:9px 12px;font-size:7pt;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;color:' + INK + ';text-align:right;">Recoverable VAT</th>' +
+          '</tr></thead>' +
+          '<tbody>' + txTableRows(inRows, "inAmt", GREEN) + '</tbody>' +
+          '<tfoot><tr style="background:' + SURF_HI + ';-webkit-print-color-adjust:exact;print-color-adjust:exact;">' +
+            '<td colspan="2" style="padding:9px 12px;font-size:7.5pt;font-weight:900;text-transform:uppercase;color:' + INK + ';">Total Input Tax</td>' +
+            '<td style="padding:9px 12px;text-align:right;font-size:10pt;font-weight:900;color:' + GREEN + ';">' + fmt(inputVAT) + '</td>' +
+          '</tr></tfoot>' +
+        '</table>' +
+        settlHTML +
       '</div>' +
 
       // ══ FOOTER ══
