@@ -2552,10 +2552,8 @@ function VATPage({ accounts, txns, ledger, settings }) {
             '<h4 style="font-size:7pt;font-weight:900;text-transform:uppercase;letter-spacing:0.15em;color:' + NAVY + ';margin-bottom:18px;">Compliance Checklist</h4>' +
             '<ul style="list-style:none;padding:0;margin:0;">' + checkHTML + '</ul>' +
             '<div style="margin-top:24px;padding-top:16px;border-top:1px solid rgba(196,198,204,0.3);text-align:center;">' +
-              '<div style="height:52px;border:1px dashed #74777D;border-radius:6px;display:flex;align-items:center;justify-content:center;margin-bottom:8px;">' +
-                '<span style="font-size:7.5pt;font-weight:500;color:#74777D;">Internal Audit Seal</span>' +
-              '</div>' +
-              '<div style="font-size:7pt;font-weight:700;text-transform:uppercase;color:' + INK + ';">Certified Auditor</div>' +
+              '<img src="./nasama-stamp.png" alt="Company Stamp" style="width:150px;height:150px;object-fit:contain;display:block;margin:0 auto 8px;-webkit-print-color-adjust:exact;print-color-adjust:exact;" />' +
+              '<div style="font-size:7pt;font-weight:700;text-transform:uppercase;color:' + INK + ';">Company Stamp</div>' +
               '<div style="font-size:7pt;color:' + INK_VAR + ';margin-top:2px;">' + company + '</div>' +
             '</div>' +
           '</div>' +
@@ -2592,10 +2590,9 @@ function VATPage({ accounts, txns, ledger, settings }) {
             '<span style="font-size:7pt;font-weight:600;text-transform:uppercase;color:' + INK_VAR + ';">UAE VAT 5%</span>' +
             '<span style="font-size:7pt;font-weight:600;text-transform:uppercase;color:' + INK_VAR + ';">FTA Registered</span>' +
           '</div>' +
+          '<div style="font-size:7pt;color:#74777D;font-style:italic;margin-top:4px;">Electronically generated. No physical signature required for standard filing.</div>' +
         '</div>' +
-        '<div style="text-align:right;">' +
-          '<div style="font-size:7pt;color:#74777D;font-style:italic;">Electronically generated. No physical signature required for standard filing.</div>' +
-        '</div>' +
+        '<img src="./nasama-stamp.png" alt="Company Stamp" style="width:150px;height:150px;object-fit:contain;flex-shrink:0;margin-left:16px;-webkit-print-color-adjust:exact;print-color-adjust:exact;" />' +
       '</footer>' +
     '</div>'
     );
@@ -2609,6 +2606,7 @@ function VATPage({ accounts, txns, ledger, settings }) {
     iframe.style.cssText = "position:fixed;left:-9999px;top:-9999px;width:210mm;height:297mm;border:0;visibility:hidden;";
     document.body.appendChild(iframe);
     var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+      '<base href="' + document.baseURI + '">' +
       '<link rel="preconnect" href="https://fonts.googleapis.com">' +
       '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,600;14..32,700;14..32,800&display=swap">' +
       '<style>*,*::before,*::after{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;box-sizing:border-box;margin:0;padding:0;}' +

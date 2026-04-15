@@ -287,7 +287,7 @@ function InvoicePreviewDoc({ invoice }) {
     sFLbl: { fontWeight: 800, fontSize: 11.5 },
     sFVal: { fontWeight: 900, fontSize: 14, textAlign: "right", fontVariantNumeric: "tabular-nums" },
     stampRow: { display: "flex", justifyContent: "flex-end", marginTop: 20 },
-    stamp: { width: 238, height: 94, border: "1.5px dashed " + G, background: "rgba(255,255,255,0.74)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 13 },
+    stamp: { width: 188, height: 188, display: "flex", alignItems: "center", justifyContent: "center" },
     stampTxt: { color: CHAR, fontSize: 10, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" },
     stampLine: { width: 132, height: 1, background: LINE },
     foot: { marginTop: 22, paddingTop: 10, borderTop: "1px solid " + LINE, display: "flex", justifyContent: "space-between", gap: 18, color: MUT, fontSize: 9.6, lineHeight: 1.35 },
@@ -393,8 +393,11 @@ function InvoicePreviewDoc({ invoice }) {
             </div>
             <div style={P.stampRow}>
               <div style={P.stamp}>
-                <div style={P.stampLine} />
-                <div style={P.stampTxt}>Company Stamp &amp; Signature</div>
+                <img
+                  src={typeof NASAMA_STAMP_SRC !== "undefined" ? NASAMA_STAMP_SRC : "./nasama-stamp.png"}
+                  alt="Company Stamp"
+                  style={{ width: 188, height: 188, objectFit: "contain", display: "block" }}
+                />
               </div>
             </div>
           </div>
@@ -687,7 +690,7 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
       <div style={card}>
         <div style={sec}>Invoice Details</div>
         <div style={g3}>
-          <div><label style={lbl}>Invoice No.</label><input style={ro} value={inv.invoiceNumber} readOnly /></div>
+          <div><label style={lbl}>Invoice No.</label><input style={ro} value={inv.invoiceNumber || ""} placeholder="Auto-assigned on save" readOnly /></div>
           <div><label style={lbl}>Invoice Date</label><input type="date" style={inp} value={inv.invoiceDate} onChange={e => setPath("invoiceDate", e.target.value)} /></div>
           <div>
             <label style={lbl}>Status</label>
@@ -856,12 +859,19 @@ function InvoicePage({ customers, developers, deals, settings, userEmail }) {
     return () => unsub();
   }, []);
 
-  const handleNew = async () => {
-    const { formatted, raw } = await invGenNumber();
-    const doc = invBlankDoc(settings);
-    doc.invoiceNumber    = formatted;
-    doc.invoiceNumberRaw = raw;
-    setEditing(doc);
+  // One-time counter reset: set lastNumber to 93 so next invoice is 094
+  React.useEffect(() => {
+    const ref = db.collection("meta").doc("invoiceCounter");
+    ref.get().then(snap => {
+      if (!snap.exists || !snap.data().resetTo93Done) {
+        ref.set({ lastNumber: 93, resetTo93Done: true }, { merge: true });
+      }
+    }).catch(() => {});
+  }, []);
+
+  // Number is NOT assigned on New — it is assigned at first Save to avoid gaps
+  const handleNew = () => {
+    setEditing(invBlankDoc(settings));
   };
 
   const handleSave = async (inv, status) => {
@@ -872,6 +882,12 @@ function InvoicePage({ customers, developers, deals, settings, userEmail }) {
     }
     setSaving(true);
     try {
+      // Assign invoice number at first save — never on open, so serial stays clean
+      if (!finalInv.invoiceNumber) {
+        const { formatted, raw } = await invGenNumber();
+        finalInv.invoiceNumber    = formatted;
+        finalInv.invoiceNumberRaw = raw;
+      }
       const payload = { ...finalInv, status, updatedAt: invTs(), createdBy: userEmail };
       if (finalInv.id) {
         await db.collection("invoices").doc(finalInv.id).set(payload, { merge: true });

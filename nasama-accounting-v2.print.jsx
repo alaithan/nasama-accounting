@@ -363,18 +363,32 @@ function PrintNetIncome({ amount }) {
 function PrintDocNote({ company }) {
   return (
     <div style={{
-      marginTop:   40,
-      paddingTop:  10,
-      borderTop:   "0.75px solid " + PD.rule,
-      fontSize:     PD.fXs,
-      color:        PD.inkSub,
-      fontFamily:   PD.sans,
-      display:     "flex",
-      justifyContent:"space-between",
-      lineHeight:   1.5,
+      marginTop:      40,
+      paddingTop:     10,
+      borderTop:      "0.75px solid " + PD.rule,
+      fontFamily:     PD.sans,
+      display:        "flex",
+      justifyContent: "space-between",
+      alignItems:     "flex-end",
+      lineHeight:     1.5,
     }}>
-      <span>Prepared by {company} · Accounting System v2</span>
-      <span>This statement is computer-generated and has not been audited.</span>
+      <div style={{ fontSize: PD.fXs, color: PD.inkSub }}>
+        <div>Prepared by {company} · Accounting System v2</div>
+        <div style={{ marginTop: 3 }}>This statement is computer-generated and has not been audited.</div>
+      </div>
+      <img
+        src={typeof NASAMA_STAMP_SRC !== "undefined" ? NASAMA_STAMP_SRC : "./nasama-stamp.png"}
+        alt="Company Stamp"
+        style={{
+          width:         135,
+          height:        135,
+          objectFit:     "contain",
+          flexShrink:    0,
+          marginLeft:    16,
+          WebkitPrintColorAdjust: "exact",
+          printColorAdjust:       "exact",
+        }}
+      />
     </div>
   );
 }

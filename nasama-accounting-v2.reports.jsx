@@ -39,6 +39,7 @@ function rptPrint(landscape) {
   var html = '<!DOCTYPE html>' +
     '<html><head>' +
     '<meta charset="UTF-8">' +
+    '<base href="' + document.baseURI + '">' +
     '<link rel="preconnect" href="https://fonts.googleapis.com">' +
     '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700;14..32,800;14..32,900&display=swap">' +
     '<style>' +
