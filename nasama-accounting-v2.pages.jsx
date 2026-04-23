@@ -946,14 +946,23 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers })
   const [d, setD] = useState({ ...initial });
   const up = (k, v) => setD(p => {
     const next = { ...p, [k]: v };
-    // Auto-calc commission
-    if (k === "transaction_value" || k === "commission_pct") {
-      const val = k === "transaction_value" ? v : next.transaction_value;
-      const pct = k === "commission_pct" ? v : next.commission_pct;
+    if (next.type === "Secondary") {
+      const val = next.transaction_value || 0;
+      const buyerPct = parseFloat(next.commission_pct) || 0;
+      const sellerPct = parseFloat(next.seller_commission_pct) || 0;
+      const disc = next.discount || 0;
+      const buyerComm = val && buyerPct ? Math.round(val * buyerPct / 100) : 0;
+      const sellerComm = val && sellerPct ? Math.round(val * sellerPct / 100) : 0;
+      next.seller_commission = sellerComm;
+      next.expected_commission_net = buyerComm + sellerComm - disc;
+    } else if (k === "transaction_value" || k === "commission_pct" || k === "type") {
+      const val = next.transaction_value;
+      const pct = next.commission_pct;
       if (val && pct) next.expected_commission_net = Math.round(val * parseFloat(pct) / 100);
     }
     return next;
   });
+  const isSecondary = d.type === "Secondary";
 
   return <div>
     <div style={C.mbdy}>
@@ -970,12 +979,19 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers })
           <option value="">— Select —</option>
           {brokers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
         </Sel></div>
-        <div><label style={C.label}>Client</label><Sel value={d.customer_id} onChange={e => { const c = customers.find(x => x.id === e.target.value); up("customer_id", e.target.value); up("client_name", c ? c.name : ""); }}>
+        <div><label style={C.label}>{isSecondary ? "Buyer Client" : "Client"}</label><Sel value={d.customer_id} onChange={e => { const c = customers.find(x => x.id === e.target.value); up("customer_id", e.target.value); up("client_name", c ? c.name : ""); }}>
           <option value="">— Select —</option>
           {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </Sel></div>
-        <div><label style={C.label}>Transaction Value (AED)</label><Inp type="number" step="0.01" value={d.transaction_value ? fromCents(d.transaction_value) : ""} onChange={e => up("transaction_value", toCents(e.target.value))} placeholder="Optional if you only know the commission amount" /></div>
-        <div><label style={C.label}>Commission %</label><Inp type="number" step="0.01" value={d.commission_pct} onChange={e => up("commission_pct", e.target.value)} placeholder="Optional" /></div>
+        {isSecondary && <div><label style={C.label}>Seller Client</label><Sel value={d.seller_customer_id || ""} onChange={e => { const c = customers.find(x => x.id === e.target.value); up("seller_customer_id", e.target.value); up("seller_name", c ? c.name : ""); }}>
+          <option value="">— Select —</option>
+          {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </Sel></div>}
+        <div><label style={C.label}>Transaction Value (AED)</label><Inp type="number" step="0.01" value={d.transaction_value ? parseFloat(fromCents(d.transaction_value)) : ""} onChange={e => up("transaction_value", toCents(e.target.value))} placeholder="Optional if you only know the commission amount" /></div>
+        <div><label style={C.label}>{isSecondary ? "Buyer Commission %" : "Commission %"}</label><Inp type="number" step="0.01" value={d.commission_pct} onChange={e => up("commission_pct", e.target.value)} placeholder="Optional" /></div>
+        {isSecondary && <div><label style={C.label}>Seller Commission %</label><Inp type="number" step="0.01" value={d.seller_commission_pct} onChange={e => up("seller_commission_pct", e.target.value)} placeholder="Optional" /></div>}
+        {isSecondary && <div><label style={C.label}>Seller Commission (AED)</label><Inp type="number" step="0.01" value={d.seller_commission ? fromCents(d.seller_commission) : ""} disabled style={{ background: "#F3F4F6", color: "#374151", opacity: 1 }} placeholder="Auto-calculated" /></div>}
+        {isSecondary && <div><label style={C.label}>Discount (AED)</label><Inp type="number" step="0.01" value={d.discount ? parseFloat(fromCents(d.discount)) : ""} onChange={e => up("discount", toCents(e.target.value))} placeholder="Optional" /></div>}
         <div><label style={C.label}>Expected Net Commission (AED)</label><Inp type="number" step="0.01" value={d.expected_commission_net ? fromCents(d.expected_commission_net) : ""} onChange={e => up("expected_commission_net", toCents(e.target.value))} placeholder="You can enter this directly from your sheet" /></div>
         <div><label style={C.label}>VAT Applicable</label><Sel value={d.vat_applicable ? "yes" : "no"} onChange={e => up("vat_applicable", e.target.value === "yes")}><option value="yes">Yes (5%)</option><option value="no">No</option></Sel></div>
         <div><label style={C.label}>Date Created</label><Inp type="date" value={d.created_at} onChange={e => up("created_at", e.target.value)} /></div>
@@ -2682,8 +2698,8 @@ function VATPage({ accounts, txns, ledger, settings }) {
 //  PERFORMANCE PAGE
 // ╚══════════════════════════════════════════════════╝
 function PerformancePage({ deals, setPage }) {
-  const DEAL_STAGES = ["Lead", "EOI", "Booking Form Signed", "First Payment Paid", "MOU Signed", "SPA Signed", "Handover", "Commission Earned", "Commission Collected"];
-  const STAGE_COLOR = { "Lead": "#94A3B8", "EOI": "#60A5FA", "Booking Form Signed": "#818CF8", "First Payment Paid": "#A78BFA", "MOU Signed": "#F59E0B", "SPA Signed": "#F97316", "Handover": "#FB923C", "Commission Earned": "#34D399", "Commission Collected": "#059669" };
+  const DEAL_STAGES = ["Lead", "EOI", "Booking Form Signed", "First Payment Paid", "MOU Signed", "SPA Signed", "Handover", "Commission Earned", "Commission Collected", "Cancelled"];
+  const STAGE_COLOR = { "Lead": "#94A3B8", "EOI": "#60A5FA", "Booking Form Signed": "#818CF8", "First Payment Paid": "#A78BFA", "MOU Signed": "#F59E0B", "SPA Signed": "#F97316", "Handover": "#FB923C", "Commission Earned": "#34D399", "Commission Collected": "#059669", "Cancelled": "#EF4444" };
   const TYPE_COLOR = { "Off-Plan": "#2563EB", "Secondary": "#D97706", "Rental": "#059669" };
 
   // ── Core KPIs ────────────────────────────────────

@@ -14,7 +14,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     const DEFAULT_REPORTING_START_DATE = "2025-01-01";
 
     // ── CONSTANTS ─────────────────────────────────────
-    const DEAL_STAGES = ["Lead", "EOI", "Booking Form Signed", "First Payment Paid", "MOU Signed", "SPA Signed", "Handover", "Commission Earned", "Commission Collected"];
+    const DEAL_STAGES = ["Lead", "EOI", "Booking Form Signed", "First Payment Paid", "MOU Signed", "SPA Signed", "Handover", "Commission Earned", "Commission Collected", "Cancelled"];
     const DEAL_TYPES = ["Off-Plan", "Secondary", "Rental"];
     const ACCT_TYPES = ["Asset", "Liability", "Equity", "Revenue", "Expense"];
     const NORMAL_BAL = { Asset: "debit", Expense: "debit", Liability: "credit", Equity: "credit", Revenue: "credit" };
