@@ -4270,7 +4270,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       case "dashboard": return <Dashboard {...shared} kpis={kpis} plannedExpenses={plannedExpenses} />;
       case "deals": return <DealsPage {...shared} />;
       case "receipts": return <ReceiptsPage {...shared} />;
-      case "invoices": return <InvoicePage customers={customers} developers={developers} deals={deals} settings={settings} userEmail={userEmail} />;
+      case "invoices": return <InvoicePage customers={customers} developers={developers} deals={deals} settings={settings} userEmail={userEmail} userRole={accessSubject} />;
       case "payments": return <PaymentsPage {...shared} />;
       case "customers": return <CustomersPage {...shared} />;
       case "brokers": return <BrokersPage {...shared} />;

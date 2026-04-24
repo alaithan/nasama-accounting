@@ -841,7 +841,7 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
 // ═══════════════════════════════════════════════════════════════════
 //  H. InvoicePage — list + orchestration
 // ═══════════════════════════════════════════════════════════════════
-function InvoicePage({ customers, developers, deals, settings, userEmail }) {
+function InvoicePage({ customers, developers, deals, settings, userEmail, userRole }) {
   const [invoices,   setInvoices]   = React.useState([]);
   const [editing,    setEditing]    = React.useState(null);
   const [previewInv, setPreviewInv] = React.useState(null);
@@ -935,7 +935,7 @@ function InvoicePage({ customers, developers, deals, settings, userEmail }) {
           <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "#1A1A2E" }}>Tax Invoices</h2>
           <p style={{ margin: "5px 0 0", fontSize: 13, color: "#6B7280" }}>Create, manage, and export professional UAE tax invoices</p>
         </div>
-        <button style={C.btn()} onClick={handleNew}>+ New Invoice</button>
+        {hasPermission(userRole, 'sales.create') && <button style={C.btn()} onClick={handleNew}>+ New Invoice</button>}
       </div>
 
       {loading ? (
@@ -945,7 +945,7 @@ function InvoicePage({ customers, developers, deals, settings, userEmail }) {
           <div style={{ fontSize: 48, marginBottom: 14 }}>🧾</div>
           <div style={{ fontSize: 16, fontWeight: 600, color: "#374151", marginBottom: 6 }}>No invoices yet</div>
           <div style={{ fontSize: 13, color: "#9CA3AF", marginBottom: 22 }}>Create your first invoice to get started</div>
-          <button style={C.btn()} onClick={handleNew}>+ New Invoice</button>
+          {hasPermission(userRole, 'sales.create') && <button style={C.btn()} onClick={handleNew}>+ New Invoice</button>}
         </div>
       ) : (
         <div style={{ background: "#fff", border: "1px solid #EAECF0", borderRadius: 14, overflow: "hidden", boxShadow: "0 1px 3px rgba(16,24,40,.06)" }}>
@@ -969,9 +969,9 @@ function InvoicePage({ customers, developers, deals, settings, userEmail }) {
                   <td style={C.td}><span style={C.badge(inv.status === "issued" ? "success" : "warning")}>{inv.status === "issued" ? "Issued" : "Draft"}</span></td>
                   <td style={C.td}>
                     <div style={{ display: "flex", gap: 6 }}>
-                      <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12 }} onClick={() => setEditing({ ...inv })}>Edit</button>
+                      {hasPermission(userRole, 'sales.edit') && <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12 }} onClick={() => setEditing({ ...inv })}>Edit</button>}
                       <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12 }} onClick={() => setPreviewInv(inv)}>Preview</button>
-                      <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12, color: "#DC2626" }} onClick={() => handleDelete(inv.id)}>Delete</button>
+                      {hasPermission(userRole, 'sales.edit') && <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12, color: "#DC2626" }} onClick={() => handleDelete(inv.id)}>Delete</button>}
                     </div>
                   </td>
                 </tr>
