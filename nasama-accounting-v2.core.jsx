@@ -32,15 +32,16 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     };
 
     // ── RBAC ──────────────────────────────────────────
-    const USER_ROLES = { ADMIN: 'admin', ACCOUNTANT: 'accountant', SECRETARY: 'secretary' };
+    const USER_ROLES = { ADMIN: 'admin', ACCOUNTANT: 'accountant', SECRETARY: 'secretary', SALES: 'sales' };
     const AUTH_SESSION_KEY = "auth_session";
     const PERMISSIONS = {
       admin: { canCreateTxns: true, canEditTxns: true, canVoidTxns: true, canManageUsers: true, canViewReports: true, canAccessBanking: true, canEditSettings: true, canExportData: true, canManageAccounts: true, canAccessVAT: true },
       accountant: { canCreateTxns: true, canEditTxns: true, canVoidTxns: true, canManageUsers: false, canViewReports: true, canAccessBanking: true, canEditSettings: false, canExportData: true, canManageAccounts: true, canAccessVAT: true },
-      secretary: { canCreateTxns: false, canEditTxns: false, canVoidTxns: false, canManageUsers: false, canViewReports: false, canAccessBanking: false, canEditSettings: false, canExportData: false, canManageAccounts: false, canAccessVAT: false }
+      secretary: { canCreateTxns: false, canEditTxns: false, canVoidTxns: false, canManageUsers: false, canViewReports: false, canAccessBanking: false, canEditSettings: false, canExportData: false, canManageAccounts: false, canAccessVAT: false },
+      sales:     { canCreateTxns: false, canEditTxns: false, canVoidTxns: false, canManageUsers: false, canViewReports: false, canAccessBanking: false, canEditSettings: false, canExportData: false, canManageAccounts: false, canAccessVAT: false }
     };
     const SECURITY_MODULES = [
-      { id: "overview",   label: "OVERVIEW",   pages: ["Dashboard", "Performance"],                                                                 actions: ["read"] },
+      { id: "overview",   label: "OVERVIEW",   pages: ["Dashboard", "Performance"],                                                                 actions: ["read", "performance"] },
       { id: "sales",      label: "SALES",      pages: ["Deals / Pipeline", "Sale Receipts", "Invoices", "Customers", "Brokers", "Developers"],      actions: ["read", "create", "edit"] },
       { id: "expenses",   label: "EXPENSES",   pages: ["Payments", "Vendors", "Future Expenses"],                                                    actions: ["read", "create", "edit"] },
       { id: "accounting", label: "ACCOUNTING", pages: ["Banking", "Journal Entries", "Chart of Accounts", "Reports", "VAT / Taxes"],                actions: ["read", "create", "edit", "import", "reconcile", "void", "export"] },
@@ -88,7 +89,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         description: "Operational accounting access without user administration.",
         legacyRole: "accountant",
         permissions: {
-          "overview.read": true,
+          "overview.read": true, "overview.performance": true,
           "sales.read": true, "sales.create": true, "sales.edit": true,
           "expenses.read": true, "expenses.create": true, "expenses.edit": true,
           "accounting.read": true, "accounting.create": true, "accounting.edit": true, "accounting.import": true, "accounting.reconcile": true, "accounting.void": true, "accounting.export": true,
@@ -101,11 +102,20 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         description: "Front office and master-data access with no posting or approval authority.",
         legacyRole: "secretary",
         permissions: {
-          "overview.read": true,
+          "overview.read": true, "overview.performance": true,
           "sales.read": true, "sales.create": true, "sales.edit": true,
           "expenses.read": true,
           "accounting.read": true,
           "system.read": true,
+        }
+      },
+      {
+        id: "sales",
+        name: "Sales",
+        description: "Performance page only — for sales staff to monitor pipeline and commission KPIs.",
+        legacyRole: "sales",
+        permissions: {
+          "overview.performance": true,
         }
       }
     ];
@@ -124,7 +134,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     };
     const PAGE_ACCESS_BRIDGE = {
       dashboard:      "overview.read",
-      banana2:        "overview.read",
+      banana2:        "overview.performance",
       deals:          "sales.read",
       receipts:       "sales.read",
       invoices:       "sales.read",
@@ -175,7 +185,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         reports: ['admin', 'accountant'], vat: ['admin', 'accountant'],
         manual: ['admin', 'accountant', 'secretary'],
         settings: ['admin', 'accountant'], users: ['admin'],
-        banana2: ['admin', 'accountant', 'secretary']
+        banana2: ['admin', 'accountant', 'secretary', 'sales']
       };
       const role = resolveLegacyRole(subject);
       return map[pg]?.includes(role) || false;
