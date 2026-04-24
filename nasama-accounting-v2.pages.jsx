@@ -2732,14 +2732,15 @@ function PerformancePage({ deals, setPage }) {
   // ── Broker Performance ───────────────────────────
   const brokerMap = new Map();
   deals.forEach(d => {
-    if (!d.broker_name) return;
-    const key = d.broker_id || d.broker_name;
-    if (!brokerMap.has(key)) brokerMap.set(key, { name: d.broker_name, deals: 0, value: 0, commission: 0, collected: 0 });
+    const key = d.broker_id || d.broker_name || "__unassigned__";
+    const name = d.broker_name || "— Unassigned —";
+    if (!brokerMap.has(key)) brokerMap.set(key, { name, deals: 0, value: 0, commission: 0, collected: 0 });
     const b = brokerMap.get(key);
     b.deals++; b.value += (d.transaction_value || 0); b.commission += (d.expected_commission_net || 0);
     if (d.stage === "Commission Collected") b.collected++;
   });
-  const brokerPerf = [...brokerMap.values()].sort((a, b) => b.commission - a.commission).slice(0, 10);
+  const allBrokerPerf = [...brokerMap.values()].sort((a, b) => b.commission - a.commission);
+  const brokerPerf = allBrokerPerf.filter(b => b.name !== "— Unassigned —").slice(0, 10);
   const maxBrokerComm = Math.max(1, ...brokerPerf.map(b => b.commission));
 
   // ── Developer Leaderboard ───────────────────────
@@ -2953,9 +2954,9 @@ function PerformancePage({ deals, setPage }) {
               </tr>
             </thead>
             <tbody>
-              {brokerPerf.map((b, i) => (
+              {allBrokerPerf.map((b, i) => (
                 <tr key={b.name} style={{ background: i % 2 === 0 ? "#fff" : "#FAFAFA" }}>
-                  <td style={{ ...C.td, fontWeight: 600 }}>{b.name}</td>
+                  <td style={{ ...C.td, fontWeight: 600, color: b.name === "— Unassigned —" ? "#9CA3AF" : "inherit" }}>{b.name}</td>
                   <td style={{ ...C.td, textAlign: "right" }}>{b.deals}</td>
                   <td style={{ ...C.td, textAlign: "right" }}>{b.collected}</td>
                   <td style={{ ...C.td, textAlign: "right", color: b.deals > 0 && Math.round((b.collected / b.deals) * 100) >= 50 ? "#059669" : "#D97706", fontWeight: 600 }}>
@@ -2965,19 +2966,19 @@ function PerformancePage({ deals, setPage }) {
                   <td style={{ ...C.td, textAlign: "right", fontWeight: 700, color: "#059669" }}>{fmtAED(b.commission)}</td>
                 </tr>
               ))}
-              {brokerPerf.length === 0 && (
+              {allBrokerPerf.length === 0 && (
                 <tr><td colSpan={6} style={{ ...C.td, textAlign: "center", padding: 30, color: "#9CA3AF" }}>No broker data available.</td></tr>
               )}
             </tbody>
-            {brokerPerf.length > 0 && (
+            {allBrokerPerf.length > 0 && (
               <tfoot>
                 <tr style={{ background: "#F9FAFB", fontWeight: 700 }}>
                   <td style={C.td}>TOTAL</td>
-                  <td style={{ ...C.td, textAlign: "right" }}>{brokerPerf.reduce((s, b) => s + b.deals, 0)}</td>
-                  <td style={{ ...C.td, textAlign: "right" }}>{brokerPerf.reduce((s, b) => s + b.collected, 0)}</td>
+                  <td style={{ ...C.td, textAlign: "right" }}>{allBrokerPerf.reduce((s, b) => s + b.deals, 0)}</td>
+                  <td style={{ ...C.td, textAlign: "right" }}>{allBrokerPerf.reduce((s, b) => s + b.collected, 0)}</td>
                   <td style={{ ...C.td, textAlign: "right" }}>—</td>
-                  <td style={{ ...C.td, textAlign: "right" }}>{fmtAED(brokerPerf.reduce((s, b) => s + b.value, 0))}</td>
-                  <td style={{ ...C.td, textAlign: "right", color: "#059669" }}>{fmtAED(brokerPerf.reduce((s, b) => s + b.commission, 0))}</td>
+                  <td style={{ ...C.td, textAlign: "right" }}>{fmtAED(allBrokerPerf.reduce((s, b) => s + b.value, 0))}</td>
+                  <td style={{ ...C.td, textAlign: "right", color: "#059669" }}>{fmtAED(allBrokerPerf.reduce((s, b) => s + b.commission, 0))}</td>
                 </tr>
               </tfoot>
             )}
