@@ -112,10 +112,11 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       {
         id: "sales",
         name: "Sales",
-        description: "Performance page only — for sales staff to monitor pipeline and commission KPIs.",
+        description: "Performance and Deals/Pipeline access — for sales staff to monitor pipeline and commission KPIs.",
         legacyRole: "sales",
         permissions: {
           "overview.performance": true,
+          "sales.read": true,
         }
       }
     ];
@@ -178,7 +179,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       if (access?.permissions && bridged) return !!access.permissions[bridged];
       const map = {
         dashboard: ['admin', 'accountant'], journal: ['admin', 'accountant'], coa: ['admin', 'accountant'],
-        deals: ['admin', 'accountant', 'secretary'], receipts: ['admin', 'accountant'],
+        deals: ['admin', 'accountant', 'secretary', 'sales'], receipts: ['admin', 'accountant'],
         customers: ['admin', 'accountant', 'secretary'], brokers: ['admin', 'accountant', 'secretary'],
         developers: ['admin', 'accountant', 'secretary'], payments: ['admin', 'accountant'],
         vendors: ['admin', 'accountant'], banking: ['admin', 'accountant'],
