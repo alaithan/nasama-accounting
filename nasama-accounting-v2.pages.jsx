@@ -22,7 +22,7 @@ function computeDateRange(preset) {
       const pqMo = prevQMo < 0 ? prevQMo + 12 : prevQMo;
       return { from: fmt(fd(pqYear, pqMo)), to: fmt(ld(pqYear, pqMo + 2)) };
     }
-    case "last_half": return { from: fmt(fd(y, m - 6)), to: fmt(ld(y, m - 1)) };
+    case "last_half": return { from: fmt(fd(y, m - 5)), to: fmt(today) };
     case "this_year": return { from: `${y}-01-01`, to: fmt(today) };
     case "last_year": return { from: `${y - 1}-01-01`, to: `${y - 1}-12-31` };
     default: return { from: "", to: "" };
