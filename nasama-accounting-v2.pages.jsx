@@ -13,7 +13,7 @@ function computeDateRange(preset) {
   const fd = (yr, mo) => new Date(yr, mo, 1);
   const ld = (yr, mo) => new Date(yr, mo + 1, 0);
   switch (preset) {
-    case "this_month": return { from: fmt(fd(y, m)), to: fmt(today) };
+    case "this_month": return { from: fmt(fd(y, m)), to: fmt(ld(y, m)) };
     case "last_month": return { from: fmt(fd(y, m - 1)), to: fmt(ld(y, m - 1)) };
     case "last_quarter": {
       const curQStart = Math.floor(m / 3) * 3;
@@ -22,8 +22,8 @@ function computeDateRange(preset) {
       const pqMo = prevQMo < 0 ? prevQMo + 12 : prevQMo;
       return { from: fmt(fd(pqYear, pqMo)), to: fmt(ld(pqYear, pqMo + 2)) };
     }
-    case "last_half": return { from: fmt(fd(y, m - 5)), to: fmt(today) };
-    case "this_year": return { from: `${y}-01-01`, to: fmt(today) };
+    case "last_half": return { from: fmt(fd(y, m - 5)), to: fmt(ld(y, m)) };
+    case "this_year": return { from: `${y}-01-01`, to: `${y}-12-31` };
     case "last_year": return { from: `${y - 1}-01-01`, to: `${y - 1}-12-31` };
     default: return { from: "", to: "" };
   }
