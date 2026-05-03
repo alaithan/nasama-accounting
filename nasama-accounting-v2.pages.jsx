@@ -1989,7 +1989,7 @@ function JournalPage({ accounts, txns, setTxns, saveTxn, persistTxn, journal, us
 // ╔══════════════════════════════════════════════════╗
 //  REPORTS PAGE
 // ╚══════════════════════════════════════════════════╝
-function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, journal, userRole }) {
+function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn, journal, userRole }) {
   const [show, setShow] = useState(false);
   const [editTxnId, setEditTxnId] = useState("");
   const [filter, setFilter] = useState("All");
@@ -2012,7 +2012,7 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, journal, 
       totalDr: t.lines?.reduce((s, l) => s + (l.debit || 0), 0) || 0,
       typeLabel: TXN_TYPES[t.txnType]?.label || t.txnType || "?",
       statusLabel: t.isVoid ? "VOID" : "Posted",
-      actionLabel: t.isVoid ? "" : [hasPermission(userRole, 'canEditTxns') ? "Edit" : "", hasPermission(userRole, 'canVoidTxns') ? "Void" : ""].filter(Boolean).join(" / ")
+      actionLabel: t.isVoid ? "" : [hasPermission(userRole, 'canEditTxns') ? "Edit" : "", hasPermission(userRole, 'canVoidTxns') ? "Reverse / Delete" : ""].filter(Boolean).join(" / ")
     }));
     const getVal = (row) => {
       switch (sortKey) {
@@ -2050,12 +2050,21 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, journal, 
     } catch (err) { toast(err.message, "error"); }
   };
 
-  const handleVoid = (txnId) => {
-    if (!confirm("Void this transaction? A reversal entry will be created.")) return;
+  const handleReverse = async (txnId) => {
+    if (!confirm("Create a reversal entry? The original will be marked as VOID.")) return;
     try {
-      journal.reverseTransaction(txnId);
-      setTxns(prev => prev.map(t => t.id === txnId ? { ...t, isVoid: true } : t));
-      toast("Transaction voided and reversed", "success");
+      const reversalTxn = journal.reverseTransaction(txnId, todayStr(), "Reversal", false);
+      const original = txns.find(t => t.id === txnId);
+      await persistTxn({ ...original, isVoid: true });
+      await persistTxn(reversalTxn);
+      toast("Transaction reversed and voided", "success");
+    } catch (err) { toast(err.message, "error"); }
+  };
+  const handleDelete = async (txnId) => {
+    if (!confirm("Permanently delete this transaction? This cannot be undone.")) return;
+    try {
+      await deleteTxn(txnId);
+      toast("Transaction deleted", "success");
     } catch (err) { toast(err.message, "error"); }
   };
   const handleSaveEdit = (updatedTxn) => {
@@ -2083,7 +2092,7 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, journal, 
     party: { width: 180, verticalAlign: "top", whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.45 },
     amount: { width: 120, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap", verticalAlign: "top" },
     status: { width: 92, whiteSpace: "nowrap", verticalAlign: "top" },
-    actions: { width: 130, whiteSpace: "nowrap", verticalAlign: "top" },
+    actions: { width: 190, whiteSpace: "nowrap", verticalAlign: "top" },
   };
 
   return <div>
@@ -2126,8 +2135,11 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, journal, 
                 <td style={{ ...C.td, ...journalCol.amount }}>{fmtAED(t.totalDr)}</td>
                 <td style={{ ...C.td, ...journalCol.status }}>{t.isVoid ? <span style={C.badge("danger")}>VOID</span> : <span style={C.badge("success")}>Posted</span>}</td>
                 <td style={{ ...C.td, ...journalCol.actions }}>
-                  {!t.isVoid && hasPermission(userRole, 'canEditTxns') && <button style={{ ...C.btn("secondary", true), marginRight: hasPermission(userRole, 'canVoidTxns') ? 6 : 0 }} onClick={() => setEditTxnId(t.id)}>Edit</button>}
-                  {!t.isVoid && hasPermission(userRole, 'canVoidTxns') && <button style={C.btn("danger", true)} onClick={() => handleVoid(t.id)}>Void</button>}
+                  {!t.isVoid && hasPermission(userRole, 'canEditTxns') && <button style={{ ...C.btn("secondary", true), marginRight: 4 }} onClick={() => setEditTxnId(t.id)}>Edit</button>}
+                  {!t.isVoid && hasPermission(userRole, 'canVoidTxns') && <>
+                    <button style={{ ...C.btn("danger", true), marginRight: 4, background: "#D97706" }} onClick={() => handleReverse(t.id)}>Reverse</button>
+                    <button style={C.btn("danger", true)} onClick={() => handleDelete(t.id)}>Delete</button>
+                  </>}
                 </td>
               </tr>;
             })}
@@ -4064,6 +4076,15 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     }
   }, []);
   const saveTxn = useCallback((txn) => { persistTxn(txn).catch(e => toast(`Save error: ${e.message}`, "error")); }, [persistTxn]);
+  const deleteTxn = useCallback(async (txnId) => {
+    if (!navigator.onLine) throw new Error("Offline — changes not saved");
+    await window.fsDeleteDoc('transactions', txnId);
+    setTxns(prev => {
+      const next = prev.filter(t => t.id !== txnId);
+      ls_set('transactions', next);
+      return next;
+    });
+  }, []);
   const journal = useMemo(() => createJournalEngine({ accounts, txns, saveTxn }), [accounts, txns, saveTxn]);
 
   // KPIs
@@ -4255,7 +4276,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     <style>{`@keyframes npLoad{0%{width:0%}60%{width:90%}100%{width:100%}}`}</style>
   </div>;
 
-  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta };
+  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta };
 
   const addMap = { deals: () => document.dispatchEvent(new CustomEvent("add-deal")), receipts: () => document.dispatchEvent(new CustomEvent("add-receipt")), payments: () => document.dispatchEvent(new CustomEvent("add-payment")), journal: () => document.dispatchEvent(new CustomEvent("add-txn")), customers: () => document.dispatchEvent(new CustomEvent("add-customer")), brokers: () => document.dispatchEvent(new CustomEvent("add-broker")), developers: () => document.dispatchEvent(new CustomEvent("add-developer")), vendors: () => document.dispatchEvent(new CustomEvent("add-vendor")), coa: () => document.dispatchEvent(new CustomEvent("add-account")), futureExpenses: () => document.dispatchEvent(new CustomEvent("add-planned-expense")), banana2: () => toast("Banana 2 action triggered!", "success") };
 

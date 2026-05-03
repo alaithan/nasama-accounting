@@ -49,6 +49,9 @@
       window.fsSetDoc = async function(collName, docId, data) {
         await db.collection(collName).doc(docId).set(sanitizeFirestoreData(data), { merge: true });
       };
+      window.fsDeleteDoc = async function(collName, docId) {
+        await db.collection(collName).doc(docId).delete();
+      };
       window.fsSaveSettings = async function(data) {
         await db.collection('settings').doc('company').set(sanitizeFirestoreData(data));
       };
