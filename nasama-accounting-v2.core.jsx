@@ -150,6 +150,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       coa:            "accounting.read",
       reports:        "accounting.read",
       vat:            "accounting.read",
+      budget:         "accounting.read",
       users:          "system.read",
       settings:       "system.read",
       manual:         "system.read",
@@ -184,6 +185,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         developers: ['admin', 'accountant', 'secretary'], payments: ['admin', 'accountant'],
         vendors: ['admin', 'accountant'], banking: ['admin', 'accountant'],
         reports: ['admin', 'accountant'], vat: ['admin', 'accountant'],
+        budget: ['admin', 'accountant'],
         manual: ['admin', 'accountant', 'secretary'],
         settings: ['admin', 'accountant'], users: ['admin'],
         banana2: ['admin', 'accountant', 'secretary', 'sales']
@@ -1763,6 +1765,6 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       { s: "OVERVIEW" }, { id: "dashboard", label: "Dashboard", icon: "🏠" }, { id: "banana2", label: "Performance", icon: "📊" },
       { s: "SALES" }, { id: "deals", label: "Deals / Pipeline", icon: "🤝" }, { id: "receipts", label: "Sale Receipts", icon: "💰" }, { id: "invoices", label: "Invoices", icon: "🧾" }, { id: "customers", label: "Customers", icon: "👥" }, { id: "brokers", label: "Brokers", icon: "👔" }, { id: "developers", label: "Developers", icon: "🏗️" },
       { s: "EXPENSES" }, { id: "payments", label: "Payments", icon: "💳" }, { id: "vendors", label: "Vendors", icon: "🏭" }, { id: "futureExpenses", label: "Future Expenses", icon: "📅" },
-      { s: "ACCOUNTING" }, { id: "banking", label: "Banking", icon: "🏦" }, { id: "journal", label: "Journal Entries", icon: "📒" }, { id: "coa", label: "Chart of Accounts", icon: "🗂" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "vat", label: "VAT / Taxes", icon: "🧾" },
+      { s: "ACCOUNTING" }, { id: "banking", label: "Banking", icon: "🏦" }, { id: "journal", label: "Journal Entries", icon: "📒" }, { id: "coa", label: "Chart of Accounts", icon: "🗂" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "vat", label: "VAT / Taxes", icon: "🧾" }, { id: "budget", label: "Budget", icon: "🎯" },
       { s: "SYSTEM" }, { id: "users", label: "User Management", icon: "👥" }, { id: "settings", label: "Settings", icon: "⚙️" }, { id: "manual", label: "User Manual", icon: "📖" },
     ];

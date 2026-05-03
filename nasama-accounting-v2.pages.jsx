@@ -3001,6 +3001,332 @@ function PerformancePage({ deals, setPage }) {
   );
 }
 
+// ╔══════════════════════════════════════════════════╗
+//  BUDGET PAGE
+// ╚══════════════════════════════════════════════════╝
+function BudgetPage({ accounts, txns, budgets, setBudgets, userRole, userEmail }) {
+  const today = new Date();
+  const [selYear, setSelYear] = useState(today.getFullYear());
+  const [selQ, setSelQ] = useState(Math.floor(today.getMonth() / 3) + 1);
+  const [showModal, setShowModal] = useState(false);
+
+  const expenseAccounts = accounts.filter(a => a.type === "Expense").sort((a, b) => a.code.localeCompare(b.code));
+
+  const quarterRange = (year, q) => ({
+    from: `${year}-${String((q - 1) * 3 + 1).padStart(2, "0")}-01`,
+    to: new Date(year, q * 3, 0).toISOString().slice(0, 10),
+  });
+
+  const actualsByAccount = (year, q) => {
+    const { from, to } = quarterRange(year, q);
+    const byCode = {};
+    txns.filter(t => !t.isVoid && t.date >= from && t.date <= to).forEach(t =>
+      (t.lines || []).forEach(l => {
+        const acc = accounts.find(a => a.id === l.accountId);
+        if (acc && acc.type === "Expense") byCode[acc.code] = (byCode[acc.code] || 0) + (l.debit || 0);
+      })
+    );
+    return byCode;
+  };
+
+  const budgetId = `budget-${selYear}-Q${selQ}`;
+  const currentBudget = budgets.find(b => b.id === budgetId) || null;
+  const actuals = actualsByAccount(selYear, selQ);
+
+  const totalBudget = currentBudget ? currentBudget.lines.reduce((s, l) => s + (l.amount || 0), 0) : 0;
+  const totalSpent = Object.values(actuals).reduce((s, v) => s + v, 0);
+  const totalRemaining = totalBudget - totalSpent;
+  const utilPct = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
+
+  const barColor = (pct) => pct >= 100 ? "#DC2626" : pct >= 80 ? "#D97706" : "#059669";
+  const statusBadge = (pct) => {
+    if (pct >= 100) return { label: "Over Budget", color: "danger" };
+    if (pct >= 80) return { label: "Near Limit", color: "warning" };
+    return { label: "On Track", color: "success" };
+  };
+
+  const { from: qFrom, to: qTo } = quarterRange(selYear, selQ);
+  const qLabel = `Q${selQ} ${selYear} (${fmtDate(qFrom)} — ${fmtDate(qTo)})`;
+
+  const budgetLines = currentBudget ? currentBudget.lines : [];
+  const budgetByCode = Object.fromEntries(budgetLines.map(l => [l.accountCode, l.amount]));
+
+  const unbudgetedAccounts = expenseAccounts.filter(a => !budgetByCode[a.code] && actuals[a.code] > 0);
+
+  return (
+    <div>
+      <PageHeader title="Budget" sub={`Quarterly expense budget — ${qLabel}`}>
+        {hasPermission(userRole, 'canCreateTxns') && (
+          <button style={C.btn()} onClick={() => setShowModal(true)}>
+            {currentBudget ? "Edit Budget" : "+ Setup Budget"}
+          </button>
+        )}
+      </PageHeader>
+
+      {/* Quarter selector */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+        <button style={{ ...C.btn("secondary", true), padding: "5px 10px" }} onClick={() => setSelYear(y => y - 1)}>◀</button>
+        <span style={{ fontWeight: 700, fontSize: 14, color: NAVY, minWidth: 48, textAlign: "center" }}>{selYear}</span>
+        <button style={{ ...C.btn("secondary", true), padding: "5px 10px" }} onClick={() => setSelYear(y => y + 1)}>▶</button>
+        <div style={{ display: "flex", gap: 6, marginLeft: 8 }}>
+          {[1, 2, 3, 4].map(q => {
+            const hasBudget = budgets.some(b => b.id === `budget-${selYear}-Q${q}`);
+            return (
+              <button key={q} onClick={() => setSelQ(q)} style={{
+                ...C.btn(selQ === q ? "primary" : "secondary", true),
+                position: "relative",
+              }}>
+                Q{q}
+                {hasBudget && <span style={{ position: "absolute", top: -4, right: -4, width: 8, height: 8, borderRadius: "50%", background: "#059669", border: "2px solid #fff" }} />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {!currentBudget ? (
+        <div style={{ ...C.card, padding: 60, textAlign: "center" }}>
+          <div style={{ fontSize: 40, marginBottom: 16 }}>🎯</div>
+          <div style={{ fontWeight: 700, fontSize: 18, color: NAVY, marginBottom: 8 }}>No budget set for Q{selQ} {selYear}</div>
+          <div style={{ fontSize: 13, color: "#6B7280", marginBottom: 24 }}>Set a budget to track spending against targets for each expense account.</div>
+          {hasPermission(userRole, 'canCreateTxns') && (
+            <button style={C.btn()} onClick={() => setShowModal(true)}>+ Setup Q{selQ} {selYear} Budget</button>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* Summary cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 14, marginBottom: 22 }}>
+            <div style={{ ...C.card, padding: "18px 20px", borderTop: "3px solid #175CD3" }}>
+              <div style={{ fontSize: 11, textTransform: "uppercase", color: "#6B7280", fontWeight: 600 }}>Total Budget</div>
+              <div style={{ fontSize: 22, fontWeight: 700, marginTop: 6, color: NAVY }}>{fmtAED(totalBudget)}</div>
+            </div>
+            <div style={{ ...C.card, padding: "18px 20px", borderTop: "3px solid #D97706" }}>
+              <div style={{ fontSize: 11, textTransform: "uppercase", color: "#6B7280", fontWeight: 600 }}>Total Spent</div>
+              <div style={{ fontSize: 22, fontWeight: 700, marginTop: 6, color: "#D97706" }}>{fmtAED(totalSpent)}</div>
+            </div>
+            <div style={{ ...C.card, padding: "18px 20px", borderTop: `3px solid ${totalRemaining < 0 ? "#DC2626" : "#059669"}` }}>
+              <div style={{ fontSize: 11, textTransform: "uppercase", color: "#6B7280", fontWeight: 600 }}>Remaining</div>
+              <div style={{ fontSize: 22, fontWeight: 700, marginTop: 6, color: totalRemaining < 0 ? "#DC2626" : "#059669" }}>{fmtAED(totalRemaining)}</div>
+            </div>
+            <div style={{ ...C.card, padding: "18px 20px", borderTop: `3px solid ${barColor(utilPct)}` }}>
+              <div style={{ fontSize: 11, textTransform: "uppercase", color: "#6B7280", fontWeight: 600 }}>Utilization</div>
+              <div style={{ fontSize: 22, fontWeight: 700, marginTop: 6, color: barColor(utilPct) }}>{utilPct.toFixed(1)}%</div>
+              <div style={{ marginTop: 8, height: 6, background: "#F3F4F6", borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${Math.min(utilPct, 100)}%`, background: barColor(utilPct), borderRadius: 3, transition: "width .4s" }} />
+              </div>
+            </div>
+          </div>
+
+          {/* Account breakdown */}
+          <div style={C.card}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid #EAECF0", fontWeight: 700, fontSize: 14, color: NAVY }}>
+              Expense Account Breakdown
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    <th style={C.th}>Account</th>
+                    <th style={{ ...C.th, textAlign: "right" }}>Budget</th>
+                    <th style={{ ...C.th, textAlign: "right" }}>Spent</th>
+                    <th style={{ ...C.th, textAlign: "right" }}>Remaining</th>
+                    <th style={{ ...C.th, width: 160 }}>Progress</th>
+                    <th style={C.th}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {budgetLines.map(line => {
+                    const acc = expenseAccounts.find(a => a.code === line.accountCode);
+                    if (!acc) return null;
+                    const spent = actuals[line.accountCode] || 0;
+                    const remaining = (line.amount || 0) - spent;
+                    const pct = line.amount > 0 ? (spent / line.amount) * 100 : 0;
+                    const badge = statusBadge(pct);
+                    return (
+                      <tr key={line.accountCode} style={{ opacity: line.amount === 0 ? 0.5 : 1 }}>
+                        <td style={C.td}><span style={{ fontFamily: "monospace", fontWeight: 600 }}>{acc.code}</span> — {acc.name}</td>
+                        <td style={{ ...C.td, textAlign: "right" }}>{fmtAED(line.amount)}</td>
+                        <td style={{ ...C.td, textAlign: "right", color: spent > 0 ? "#374151" : "#9CA3AF" }}>{fmtAED(spent)}</td>
+                        <td style={{ ...C.td, textAlign: "right", color: remaining < 0 ? "#DC2626" : "#374151", fontWeight: remaining < 0 ? 700 : 400 }}>{fmtAED(remaining)}</td>
+                        <td style={C.td}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div style={{ flex: 1, height: 8, background: "#F3F4F6", borderRadius: 4, overflow: "hidden" }}>
+                              <div style={{ height: "100%", width: `${Math.min(pct, 100)}%`, background: barColor(pct), borderRadius: 4, transition: "width .4s" }} />
+                            </div>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: barColor(pct), minWidth: 38, textAlign: "right" }}>{pct.toFixed(0)}%</span>
+                          </div>
+                        </td>
+                        <td style={C.td}><span style={C.badge(badge.color)}>{badge.label}</span></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {unbudgetedAccounts.length > 0 && (
+              <>
+                <div style={{ padding: "10px 18px", background: "#FFFAEB", borderTop: "1px solid #EAECF0", fontSize: 12, fontWeight: 600, color: "#B54708" }}>
+                  Unbudgeted — Spending detected but no budget set
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <tbody>
+                    {unbudgetedAccounts.map(acc => (
+                      <tr key={acc.code}>
+                        <td style={{ ...C.td, width: "40%" }}><span style={{ fontFamily: "monospace", fontWeight: 600 }}>{acc.code}</span> — {acc.name}</td>
+                        <td style={{ ...C.td, textAlign: "right", width: "15%" }}>—</td>
+                        <td style={{ ...C.td, textAlign: "right", width: "15%", color: "#D97706", fontWeight: 600 }}>{fmtAED(actuals[acc.code] || 0)}</td>
+                        <td style={{ ...C.td, textAlign: "right", width: "15%", color: "#D97706" }}>—</td>
+                        <td style={{ ...C.td, width: 160 }}><span style={{ fontSize: 11, color: "#9CA3AF" }}>No budget set</span></td>
+                        <td style={C.td}><span style={C.badge("warning")}>Unbudgeted</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+        </>
+      )}
+
+      {showModal && (
+        <BudgetSetupModal
+          accounts={expenseAccounts}
+          txns={txns}
+          year={selYear}
+          quarter={selQ}
+          existing={currentBudget}
+          actualsByAccount={actualsByAccount}
+          quarterRange={quarterRange}
+          userEmail={userEmail}
+          onSave={(budget) => {
+            setBudgets(prev => {
+              const exists = prev.some(b => b.id === budget.id);
+              return exists ? prev.map(b => b.id === budget.id ? budget : b) : [...prev, budget];
+            });
+            setShowModal(false);
+          }}
+          onClose={() => setShowModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function BudgetSetupModal({ accounts, txns, year, quarter, existing, actualsByAccount, quarterRange, userEmail, onSave, onClose }) {
+  const lastYearActuals = actualsByAccount(year - 1, quarter);
+  const initAmounts = () => {
+    if (existing) return Object.fromEntries(existing.lines.map(l => [l.accountCode, (l.amount / 100).toFixed(2)]));
+    return Object.fromEntries(accounts.map(a => [a.code, ""]));
+  };
+  const [amounts, setAmounts] = useState(initAmounts);
+  const { from: qFrom, to: qTo } = quarterRange(year, quarter);
+
+  const autoFill = () => {
+    const next = { ...amounts };
+    accounts.forEach(a => {
+      const ly = lastYearActuals[a.code] || 0;
+      if (ly > 0) next[a.code] = (ly / 100).toFixed(2);
+    });
+    setAmounts(next);
+  };
+
+  const handleSave = () => {
+    const lines = accounts
+      .map(a => ({ accountCode: a.code, amount: Math.round((parseFloat(amounts[a.code]) || 0) * 100) }))
+      .filter(l => l.amount > 0);
+    if (lines.length === 0) { toast("Enter at least one budget amount", "warning"); return; }
+    const budget = {
+      id: `budget-${year}-Q${quarter}`,
+      year, quarter, lines,
+      updatedBy: userEmail || "",
+      updatedAt: new Date().toISOString(),
+      ...(existing ? {} : { createdBy: userEmail || "", createdAt: new Date().toISOString() }),
+    };
+    onSave(budget);
+    toast(`Q${quarter} ${year} budget saved`, "success");
+  };
+
+  const totalBudget = accounts.reduce((s, a) => s + (parseFloat(amounts[a.code]) || 0), 0);
+  const totalLastYear = Object.values(lastYearActuals).reduce((s, v) => s + v, 0) / 100;
+  const hasLastYearData = Object.values(lastYearActuals).some(v => v > 0);
+
+  return (
+    <div style={C.modal} onClick={onClose}>
+      <div style={C.mbox(780)} onClick={e => e.stopPropagation()}>
+        <div style={C.mhdr}>
+          <span style={{ fontWeight: 700, fontSize: 16 }}>
+            {existing ? "Edit" : "Setup"} Budget — Q{quarter} {year}
+            <span style={{ fontWeight: 400, fontSize: 13, color: "#6B7280", marginLeft: 10 }}>{fmtDate(qFrom)} — {fmtDate(qTo)}</span>
+          </span>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>×</button>
+        </div>
+        <div style={C.mbdy}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+            <div style={{ fontSize: 12, color: "#6B7280" }}>
+              {hasLastYearData
+                ? `Q${quarter} ${year - 1} actuals available — use as starting point`
+                : `No Q${quarter} ${year - 1} data found — enter amounts manually`}
+            </div>
+            {hasLastYearData && (
+              <button style={C.btn("secondary", true)} onClick={autoFill}>
+                Auto-fill from Q{quarter} {year - 1}
+              </button>
+            )}
+          </div>
+          <div style={{ overflowX: "auto", maxHeight: "55vh", overflowY: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr>
+                  <th style={C.th}>Account</th>
+                  <th style={{ ...C.th, textAlign: "right" }}>Q{quarter} {year - 1} Actual</th>
+                  <th style={{ ...C.th, textAlign: "right", width: 160 }}>Budget Amount (AED)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {accounts.map(a => {
+                  const ly = lastYearActuals[a.code] || 0;
+                  return (
+                    <tr key={a.code}>
+                      <td style={C.td}><span style={{ fontFamily: "monospace", fontWeight: 600, marginRight: 6 }}>{a.code}</span>{a.name}</td>
+                      <td style={{ ...C.td, textAlign: "right", color: ly > 0 ? "#374151" : "#9CA3AF" }}>
+                        {ly > 0 ? fmtAED(ly) : "—"}
+                      </td>
+                      <td style={C.td}>
+                        <Inp
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="0.00"
+                          value={amounts[a.code] || ""}
+                          onChange={e => setAmounts(prev => ({ ...prev, [a.code]: e.target.value }))}
+                          style={{ textAlign: "right" }}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr style={{ background: "#F9FAFB" }}>
+                  <td style={{ ...C.td, fontWeight: 700 }}>Total</td>
+                  <td style={{ ...C.td, textAlign: "right", fontWeight: 600, color: "#6B7280" }}>{totalLastYear > 0 ? fmtAED(totalLastYear * 100) : "—"}</td>
+                  <td style={{ ...C.td, textAlign: "right", fontWeight: 700, color: NAVY }}>{fmtAED(totalBudget * 100)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+        <div style={C.mftr}>
+          <button style={C.btn("secondary")} onClick={onClose}>Cancel</button>
+          <button style={C.btn()} onClick={handleSave}>Save Budget</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn, persistTxn }) {
   const [s, setS] = useState(() => normalizeSettings(settings));
   const [backupStatus, setBackupStatus]     = useState("idle"); // idle | loading | done | error
@@ -3908,6 +4234,7 @@ function SidebarIcon({ id, active }) {
     coa:            <svg {...p}><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>,
     reports:        <svg {...p}><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg>,
     vat:            <svg {...p}><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><circle cx="9" cy="14" r="1.5"/><circle cx="15" cy="14" r="1.5"/><line x1="9" y1="16" x2="15" y2="12"/></svg>,
+    budget:         <svg {...p}><circle cx="12" cy="12" r="9"/><polyline points="12 6 12 12 15.5 15.5"/><line x1="3.5" y1="3.5" x2="5" y2="5"/></svg>,
     manual:         <svg {...p}><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="13" y2="13"/><line x1="9" y1="17" x2="11" y2="17"/></svg>,
     users:          <svg {...p}><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>,
     settings:       <svg {...p}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
@@ -3929,6 +4256,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
   const [vendors, setVendors] = useState(() => ls_get("vendors", SEED_VENDORS));
   const [brokers, setBrokers] = useState(() => ls_get("brokers", SEED_BROKERS));
   const [plannedExpenses, setPlannedExpenses] = useState(() => ls_get("planned_expenses", []));
+  const [budgets, setBudgets] = useState(() => ls_get("budgets", []));
   const [developers, setDevelopers] = useState(() => ls_get("developers", SEED_DEVELOPERS));
   const [settings, setSettings] = useState(() => ls_get("settings", { company: "Nasama Properties Company LLC", trn: "", vatRate: 5, currency: "AED", openingBalance: 0, openingBalanceDate: DEFAULT_REPORTING_START_DATE }));
   const [page, setPage] = useState(() => canAccessPage(userAccess || userRole, "dashboard") ? "dashboard" : "deals");
@@ -3991,6 +4319,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     unsubs.push(listen('brokers', setBrokers, 'brokers', SEED_BROKERS));
     unsubs.push(listen('developers', setDevelopers, 'developers', SEED_DEVELOPERS));
     unsubs.push(listen('planned_expenses', setPlannedExpenses, 'planned_expenses', []));
+    unsubs.push(listen('budgets', setBudgets, 'budgets', []));
 
     // Settings (single doc) — always counts toward done()
     const u8 = db.collection('settings').doc('company').onSnapshot(snap => {
@@ -4039,6 +4368,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
   const setBrokersFS = fsUpdate('brokers', setBrokers, 'brokers');
   const setDevelopersFS = fsUpdate('developers', setDevelopers, 'developers');
   const setPlannedExpensesFS = fsUpdate('planned_expenses', setPlannedExpenses, 'planned_expenses');
+  const setBudgetsFS = fsUpdate('budgets', setBudgets, 'budgets');
   const setSettingsFS = (s) => {
     const nextSettings = normalizeSettings(s);
     setSettings(nextSettings);
@@ -4276,7 +4606,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     <style>{`@keyframes npLoad{0%{width:0%}60%{width:90%}100%{width:100%}}`}</style>
   </div>;
 
-  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta };
+  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, budgets, setBudgets: setBudgetsFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta };
 
   const addMap = { deals: () => document.dispatchEvent(new CustomEvent("add-deal")), receipts: () => document.dispatchEvent(new CustomEvent("add-receipt")), payments: () => document.dispatchEvent(new CustomEvent("add-payment")), journal: () => document.dispatchEvent(new CustomEvent("add-txn")), customers: () => document.dispatchEvent(new CustomEvent("add-customer")), brokers: () => document.dispatchEvent(new CustomEvent("add-broker")), developers: () => document.dispatchEvent(new CustomEvent("add-developer")), vendors: () => document.dispatchEvent(new CustomEvent("add-vendor")), coa: () => document.dispatchEvent(new CustomEvent("add-account")), futureExpenses: () => document.dispatchEvent(new CustomEvent("add-planned-expense")), banana2: () => toast("Banana 2 action triggered!", "success") };
 
@@ -4302,6 +4632,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       case "journal": return <JournalPageV2 {...shared} />;
       case "reports": return <ReportsPage {...shared} />;
       case "vat": return <VATPage {...shared} />;
+      case "budget": return <BudgetPage {...shared} />;
       case "manual": return <ManualPage />;
       case "settings": return <SettingsPage {...shared} />;
       case "futureExpenses": return <FutureExpensesPage {...shared} />;
