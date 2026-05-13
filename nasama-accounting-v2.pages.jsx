@@ -1768,6 +1768,12 @@ function COAPage({ accounts, setAccounts, ledger, userRole }) {
     toast("Account saved", "success");
   };
 
+  const deleteAccount = (a) => {
+    if (!confirm(`Delete account "${a.code} — ${a.name}"? This cannot be undone.`)) return;
+    setAccounts(prev => prev.filter(x => x.id !== a.id));
+    toast("Account deleted", "success");
+  };
+
   const sorted = [...accounts].sort((a, b) => a.code.localeCompare(b.code));
   const filtered = filter === "All" ? sorted : sorted.filter(a => a.type === filter);
 
@@ -1793,7 +1799,15 @@ function COAPage({ accounts, setAccounts, ledger, userRole }) {
               <td style={C.td}><span style={C.badge(a.type === "Asset" || a.type === "Revenue" ? "success" : a.type === "Liability" ? "danger" : a.type === "Expense" ? "warning" : "info")}>{a.type}</span></td>
               <td style={C.td}>{flags.length > 0 ? flags.map((f, i) => <span key={i} style={{ ...C.badge("gold"), marginRight: 4 }}>{f}</span>) : "—"}</td>
               <td style={{ ...C.td, textAlign: "right", fontWeight: 600, color: bal !== 0 ? (bal > 0 ? "#059669" : "#DC2626") : "#9CA3AF" }}>{fmtAED(bal)}</td>
-              <td style={C.td}>{hasPermission(userRole, 'canManageAccounts') && <button style={C.btn("secondary", true)} onClick={() => { setEdit(a); setShow(true); }}>Edit</button>}</td>
+              <td style={{ ...C.td, whiteSpace: "nowrap" }}>
+                {hasPermission(userRole, 'canManageAccounts') && <>
+                  <button style={C.btn("secondary", true)} onClick={() => { setEdit(a); setShow(true); }}>Edit</button>
+                  {bal === 0
+                    ? <button style={{ ...C.btn("danger", true), marginLeft: 6 }} onClick={() => deleteAccount(a)}>Delete</button>
+                    : <button disabled title="Cannot delete: account has a non-zero balance" style={{ ...C.btn("danger", true), marginLeft: 6, opacity: 0.35, cursor: "not-allowed" }}>Delete</button>
+                  }
+                </>}
+              </td>
             </tr>;
           })}
         </tbody>
