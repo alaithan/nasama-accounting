@@ -4284,6 +4284,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("na2_sidebar_collapsed") === "true");
   const [connected, setConnected] = useState(true);
+  const [onlineUsers, setOnlineUsers] = useState([]);
 
   // Mobile detection
   useEffect(() => {
@@ -4351,6 +4352,41 @@ function App({ userRole, userAccess, userEmail, signOut }) {
 
     return () => { mounted = false; clearTimeout(safety); unsubs.forEach(u => { try { u(); } catch { } }); };
   }, []);
+
+  // User presence tracking
+  useEffect(() => {
+    if (!userEmail || typeof db === 'undefined') return;
+    const myRef = db.collection('user_presence').doc(userEmail);
+    const ts = () => firebase.firestore.FieldValue.serverTimestamp();
+
+    myRef.set({ email: userEmail, role: userRole, online: true, lastSeen: ts() }, { merge: true }).catch(() => {});
+
+    const hb = setInterval(() => {
+      myRef.set({ lastSeen: ts() }, { merge: true }).catch(() => {});
+    }, 60000);
+
+    const handleUnload = () => { myRef.set({ online: false }, { merge: true }).catch(() => {}); };
+    window.addEventListener('beforeunload', handleUnload);
+
+    const cutoffMs = 3 * 60 * 1000;
+    const unsub = db.collection('user_presence').onSnapshot(snap => {
+      const now = Date.now();
+      setOnlineUsers(
+        snap.docs.map(d => d.data()).filter(u => {
+          if (!u.online || !u.lastSeen) return false;
+          const t = u.lastSeen.toDate ? u.lastSeen.toDate().getTime() : new Date(u.lastSeen).getTime();
+          return (now - t) < cutoffMs;
+        })
+      );
+    }, () => {});
+
+    return () => {
+      clearInterval(hb);
+      window.removeEventListener('beforeunload', handleUnload);
+      myRef.set({ online: false, lastSeen: ts() }, { merge: true }).catch(() => {});
+      unsub();
+    };
+  }, [userEmail, userRole]);
 
   const showSync = () => { setSyncing(true); syncCount.current++; const n = syncCount.current; setTimeout(() => { if (syncCount.current === n) setSyncing(false); }, 1800); };
 
@@ -4756,6 +4792,50 @@ function App({ userRole, userAccess, userEmail, signOut }) {
             );
           })}
         </div>
+
+        {/* ── Online Users ── */}
+        {onlineUsers.length > 0 && (
+          <div style={{ flexShrink: 0, padding: sidebarCollapsed ? "4px 0 6px" : "4px 10px 6px" }}>
+            <div style={{ height: 1, background: "rgba(255,255,255,.05)", margin: sidebarCollapsed ? "0 14px 8px" : "0 4px 8px" }} />
+            {sidebarCollapsed
+              ? <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
+                  <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: "0.14em", color: "#252E50", textTransform: "uppercase", marginBottom: 2 }}>●</div>
+                  {onlineUsers.slice(0, 5).map(u => (
+                    <div key={u.email} title={u.email + " · online"} style={{ position: "relative" }}>
+                      <div style={{ width: 28, height: 28, borderRadius: "50%", background: "linear-gradient(135deg, #1E3A5F 0%, #2D4A7F 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "#8AAAD8" }}>
+                        {u.email[0].toUpperCase()}
+                      </div>
+                      <div style={{ position: "absolute", bottom: 0, right: 0, width: 8, height: 8, borderRadius: "50%", background: "#22C55E", border: "1.5px solid #07090F" }} />
+                    </div>
+                  ))}
+                  {onlineUsers.length > 5 && <div style={{ fontSize: 9, color: "#3A4A68" }}>+{onlineUsers.length - 5}</div>}
+                </div>
+              : <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 6px 6px" }}>
+                    <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#22C55E", flexShrink: 0 }} />
+                    <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: "0.16em", color: "#252E50", textTransform: "uppercase" }}>Online Now</span>
+                    <span style={{ fontSize: 9.5, color: "#22C55E", fontWeight: 700 }}>{onlineUsers.length}</span>
+                  </div>
+                  {onlineUsers.map(u => (
+                    <div key={u.email} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 6px", borderRadius: 7, marginBottom: 1 }}>
+                      <div style={{ position: "relative", flexShrink: 0 }}>
+                        <div style={{ width: 26, height: 26, borderRadius: "50%", background: u.email === userEmail ? "linear-gradient(135deg, #C9A044 0%, #6E4912 100%)" : "linear-gradient(135deg, #1E3A5F 0%, #2D4A7F 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff" }}>
+                          {u.email[0].toUpperCase()}
+                        </div>
+                        <div style={{ position: "absolute", bottom: 0, right: 0, width: 7, height: 7, borderRadius: "50%", background: "#22C55E", border: "1.5px solid #07090F" }} />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 11, color: u.email === userEmail ? "#8998C8" : "#617098", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {u.email === userEmail ? u.email + " (you)" : u.email}
+                        </div>
+                        {u.role && <div style={{ fontSize: 9.5, color: "#3A4A68", textTransform: "capitalize" }}>{u.role}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+            }
+          </div>
+        )}
 
         {/* ── Footer: user profile ── */}
         <div style={{ padding: sidebarCollapsed ? "8px 0 16px" : "8px 10px 16px", flexShrink: 0 }}>
