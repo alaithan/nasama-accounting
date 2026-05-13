@@ -689,7 +689,7 @@ function TBPrintDoc({ accounts, filteredLedger, dateFilter, settings }) {
 /* ════════════════════════════════════════════════════════
    GENERAL LEDGER PRINT DOCUMENT
    ════════════════════════════════════════════════════════ */
-function GLPrintDoc({ accounts, txns, filteredTxns, dateFilter, settings }) {
+function GLPrintDoc({ accounts, txns, filteredTxns, dateFilter, settings, selectedId, typeFilter, searchText }) {
   const company  = settings?.company  || "Nasama Properties";
   const currency = settings?.currency || "AED";
   const trn      = settings?.trn;
@@ -750,6 +750,19 @@ function GLPrintDoc({ accounts, txns, filteredTxns, dateFilter, settings }) {
       });
   }, [accounts, txns, filteredTxns, dateFilter.from]);
 
+  // Apply the same account filters that the screen is showing
+  const filteredGroups = React.useMemo(() => {
+    return groups.filter(g => {
+      if (selectedId && g.acct.id !== selectedId) return false;
+      if (typeFilter && typeFilter !== "All" && g.acct.type !== typeFilter) return false;
+      if (searchText && searchText.trim()) {
+        const q = searchText.trim().toLowerCase();
+        if (!g.acct.code.toLowerCase().includes(q) && !g.acct.name.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+  }, [groups, selectedId, typeFilter, searchText]);
+
   const thGL = (extra = {}) => ({
     padding:       "5px 8px 5px 0",
     fontSize:       PD.fXs,
@@ -779,13 +792,13 @@ function GLPrintDoc({ accounts, txns, filteredTxns, dateFilter, settings }) {
         periodLine={periodLine} currency={currency} trn={trn}
       />
 
-      {groups.length === 0 && (
+      {filteredGroups.length === 0 && (
         <div style={{ padding: "20px 0", color: PD.inkSub, fontStyle: "italic" }}>
           No transactions found for the selected period.
         </div>
       )}
 
-      {groups.map((g, gi) => {
+      {filteredGroups.map((g, gi) => {
         const totalDr = g.rows.reduce((s, r) => s + r.debit,  0);
         const totalCr = g.rows.reduce((s, r) => s + r.credit, 0);
 

@@ -1081,13 +1081,16 @@ function GLReport(props) {
   var dateFilter   = props.dateFilter   || {};
   var settings     = props.settings     || {};
 
-  // ── Account filter state (screen-only, not printed)
+  // ── Account filter state — controlled by parent when props are provided
   var _sf = React.useState("All");
-  var typeFilter = _sf[0], setTypeFilter = _sf[1];
+  var typeFilter    = props.typeFilter    !== undefined ? props.typeFilter    : _sf[0];
+  var setTypeFilter = props.setTypeFilter || _sf[1];
   var _ss = React.useState("");
-  var searchText = _ss[0], setSearchText = _ss[1];
+  var searchText    = props.searchText    !== undefined ? props.searchText    : _ss[0];
+  var setSearchText = props.setSearchText || _ss[1];
   var _sa = React.useState(null);
-  var selectedId = _sa[0], setSelectedId = _sa[1];
+  var selectedId    = props.selectedId    !== undefined ? props.selectedId    : _sa[0];
+  var setSelectedId = props.setSelectedId || _sa[1];
 
   var groups = React.useMemo(function () {
     var acctIds = new Set(

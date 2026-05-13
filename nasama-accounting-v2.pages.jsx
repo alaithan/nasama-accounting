@@ -2230,6 +2230,11 @@ function ReportsPage({ accounts, txns, settings }) {
   const bsNetExp  = expenses.reduce((s, a) => s + accountBalance(a, toDateLedger), 0);
   const netIncome = bsNetRev - bsNetExp;
 
+  // GL account filter state (lifted so GLPrintDoc can apply same filters on print)
+  const [glSelectedId,  setGlSelectedId]  = useState(null);
+  const [glTypeFilter,  setGlTypeFilter]  = useState("All");
+  const [glSearchText,  setGlSearchText]  = useState("");
+
   // GL and TB look better in landscape (wider columns)
   const isWide = tab === "gl" || tab === "tb";
   const handlePrint = () => rptPrint(isWide);
@@ -2281,6 +2286,12 @@ function ReportsPage({ accounts, txns, settings }) {
         filteredTxns={filteredTxns}
         dateFilter={dateFilter}
         settings={settings}
+        selectedId={glSelectedId}
+        setSelectedId={setGlSelectedId}
+        typeFilter={glTypeFilter}
+        setTypeFilter={setGlTypeFilter}
+        searchText={glSearchText}
+        setSearchText={setGlSearchText}
       />}
       {tab === "cf" && <CFReport
         accounts={accounts}
@@ -2347,6 +2358,9 @@ function ReportsPage({ accounts, txns, settings }) {
         filteredTxns={filteredTxns}
         dateFilter={dateFilter}
         settings={settings}
+        selectedId={glSelectedId}
+        typeFilter={glTypeFilter}
+        searchText={glSearchText}
       />}
       {tab === "cf" && <CFPrintDoc
         accounts={accounts}
