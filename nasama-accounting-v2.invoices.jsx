@@ -418,117 +418,6 @@ function InvoicePreviewDoc({ invoice }) {
       </div>
     </div>
   );
-
-  const partyFields = [["Company Name", "companyName"], ["Address", "address"], ["Email", "email"], ["Contact No.", "contactNo"], ["TRN", "trn"]];
-  const invToLabels = [["Developer / Client Name", "companyName"], ["Address", "address"], ["Email", "email"], ["Contact No.", "contactNo"], ["TRN", "trn"]];
-
-  return (
-    <div style={S.root}>
-      {/* Gold bar */}
-      <div style={S.goldBar} />
-
-      {/* Header */}
-      <div style={S.hdr}>
-        <div>
-          {logoSrc
-            ? <img src={logoSrc} alt="Nasama Properties" style={{ height: 58, maxWidth: 210, display: "block" }} crossOrigin="anonymous" />
-            : <div style={{ fontWeight: 800, fontSize: 19, color: G, letterSpacing: "0.08em", lineHeight: 1.3 }}>NASAMA<br /><span style={{ fontSize: 11, fontWeight: 400, color: SL, letterSpacing: "0.2em" }}>PROPERTIES</span></div>
-          }
-        </div>
-        <div style={S.rBlock}>
-          <div style={S.title}>TAX INVOICE</div>
-          <div style={S.mGrid}>
-            <span style={S.mLbl}>Invoice Date</span><span style={S.mVal}>{invFmtDate(invoiceDate)}</span>
-            <span style={S.mLbl}>Invoice No.</span><span style={S.mVal}>{invoiceNumber || "—"}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Parties */}
-      <div style={S.parties}>
-        <div style={S.pL}>
-          <div style={S.pSec}>Bill From</div>
-          {partyFields.map(([l, k]) => <div key={k} style={S.pRow}><span style={S.pLbl}>{l}</span><span style={S.pVal}>{billFrom[k] || "—"}</span></div>)}
-        </div>
-        <div style={S.pR}>
-          <div style={S.pSec}>Invoiced To</div>
-          {invToLabels.map(([l, k]) => <div key={k} style={S.pRow}><span style={S.pLbl}>{l}</span><span style={S.pVal}>{invoicedTo[k] || "—"}</span></div>)}
-        </div>
-      </div>
-
-      {/* Description table */}
-      <div style={S.tWrap}>
-        <div style={S.tTitle}>Description</div>
-        <table style={S.tbl}>
-          <thead>
-            <tr>
-              <th style={{ ...S.th, textAlign: "left", width: "16%" }}>Project | Unit</th>
-              <th style={{ ...S.th, textAlign: "left", width: "24%" }}>Specification</th>
-              <th style={{ ...S.th, width: "13%" }}>Deal Value</th>
-              <th style={{ ...S.th, width: "10%" }}>Commission %</th>
-              <th style={{ ...S.th, width: "13%" }}>Commission Amount</th>
-              <th style={{ ...S.th, width: "10%" }}>Vat 5%</th>
-              <th style={{ ...S.th, width: "14%" }}>Total Amount Incl. Vat</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lineItems.map((li, i) => {
-              const c = invLineCalc(li);
-              const pct = li.commissionPct ?? li.commission_pct;
-              return (
-                <tr key={li._id || i}>
-                  <td style={S.td}>{li.projectUnit}</td>
-                  <td style={S.td}>{li.specification}</td>
-                  <td style={{ ...S.td, ...S.tdR }}>{li.dealValue ? invFmt(li.dealValue) : "—"}</td>
-                  <td style={{ ...S.td, ...S.tdR }}>{pct ? `${invNum(pct)}%` : "--"}</td>
-                  <td style={{ ...S.td, ...S.tdR }}>{invFmt(c.commissionAmount)}</td>
-                  <td style={{ ...S.td, ...S.tdR }}>{invFmt(c.vat)}</td>
-                  <td style={{ ...S.td, ...S.tdR }}>{invFmt(c.total)}</td>
-                </tr>
-              );
-            })}
-            {lineItems.length < 2 && <tr><td colSpan={7} style={{ ...S.td, height: 32, background: "#FAFAFA" }} /></tr>}
-            <tr style={S.totRow}>
-              <td colSpan={2} style={S.totLbl}>Total Amount</td>
-              <td style={{ ...S.totCell, color: "#AAAAAA" }} />
-              <td style={{ ...S.totCell, color: "#AAAAAA" }} />
-              <td style={S.totCell}>{invFmt(T.excl)}</td>
-              <td style={S.totCell}>{invFmt(T.vat)}</td>
-              <td style={S.totCell}>{invFmt(T.incl)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      {/* Bank Details + Summary */}
-      <div style={S.bottom}>
-        <div style={S.bBox}>
-          <div style={S.pSec}>Bank Details <span style={{ fontStyle: "italic", textTransform: "none", fontSize: 9, fontWeight: 400, color: "#999", letterSpacing: 0 }}>(for Cheque Preparation)</span></div>
-          {[["Account Beneficiary Name","beneficiaryName"],["Bank Name","bankName"],["Bank Branch Address","branchAddress"],["Account Number","accountNumber"],["IBAN","iban"],["Swift Code","swiftCode"]].map(([l,k]) => (
-            <div key={k} style={S.bRow}><span style={S.bLbl}>{l}</span><span style={S.bVal}>{bankDetails[k] || "—"}</span></div>
-          ))}
-        </div>
-        <div style={S.sBox}>
-          <div style={S.pSec}>Tax Invoice Summary: AED</div>
-          <div style={S.sRow}><span style={S.sLbl}>Total Amount Excl. Vat</span><span style={S.sVal}>{invFmt(T.excl)}</span></div>
-          <div style={{ ...S.sRow, borderBottom: "none" }}><span style={S.sLbl}>Vat (5%)</span><span style={S.sVal}>{invFmt(T.vat)}</span></div>
-          <div style={S.sFinal}><span style={S.sFLbl}>Total Amount Incl. Vat</span><span style={S.sFVal}>{invFmt(T.incl)}</span></div>
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            <div style={S.stamp}>
-              <div style={S.sTxt}>Company Stamp &amp; Signature</div>
-              <div style={{ width: 100, height: 1, background: "#E8DCC8" }} />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Footer */}
-      <div style={S.foot}>
-        <span>NASAMA PROPERTIES LLC · Office 218, Binghatti Emerald, JVC, Dubai, UAE</span>
-        <span>TRN: {billFrom.trn || "—"}</span>
-      </div>
-    </div>
-  );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -878,9 +767,11 @@ function InvoicePage({ customers, developers, deals, settings, userEmail, userRo
 
   const handleSave = async (inv, status) => {
     const finalInv = invWithDerivedTotals(inv);
+    const errs = invValidate(finalInv);
     if (status === "issued") {
-      const errs = invValidate(finalInv);
       if (errs.length) { errs.forEach(e => toast(e, "error")); return; }
+    } else {
+      errs.forEach(e => toast(e, "warning"));
     }
     setSaving(true);
     try {

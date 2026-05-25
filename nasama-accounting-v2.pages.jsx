@@ -2747,7 +2747,6 @@ function VATPage({ accounts, txns, ledger, settings }) {
 //  PERFORMANCE PAGE
 // ╚══════════════════════════════════════════════════╝
 function PerformancePage({ deals, setPage }) {
-  const DEAL_STAGES = ["Lead", "EOI", "Booking Form Signed", "First Payment Paid", "MOU Signed", "SPA Signed", "Handover", "Commission Earned", "Commission Collected", "Cancelled"];
   const STAGE_COLOR = { "Lead": "#94A3B8", "EOI": "#60A5FA", "Booking Form Signed": "#818CF8", "First Payment Paid": "#A78BFA", "MOU Signed": "#F59E0B", "SPA Signed": "#F97316", "Handover": "#FB923C", "Commission Earned": "#34D399", "Commission Collected": "#059669", "Cancelled": "#EF4444" };
   const TYPE_COLOR = { "Off-Plan": "#2563EB", "Secondary": "#D97706", "Rental": "#059669" };
 
@@ -4501,7 +4500,6 @@ function App({ userRole, userAccess, userEmail, signOut }) {
         setConnected(true); // Connected if snapshot received
         if (snap.empty) {
           setter(seed); ls_set(cacheKey, seed);
-          if (seed.length > 0) fsSetCollection(col, seed).catch(console.error);
         } else {
           const data = snap.docs.map(d => d.data());
           setter(data); ls_set(cacheKey, data);
