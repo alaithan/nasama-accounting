@@ -137,6 +137,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       dashboard:      "overview.read",
       banana2:        "overview.performance",
       deals:          "sales.read",
+      auditDeals:     "sales.read",
       receipts:       "sales.read",
       invoices:       "sales.read",
       customers:      "sales.read",
@@ -474,6 +475,30 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
           userRole, action, details, success: true
         });
       } catch (err) { console.error('Audit log error:', err); }
+    };
+    const logDealStageChange = async (deal, fromStage, toStage, userRole, userEmail) => {
+      try {
+        await db.collection('deal_stage_changes').add({
+          timestamp: new Date().toISOString(),
+          date: todayStr(),
+          deal_id: deal.id || "",
+          property_name: deal.property_name || "",
+          unit_no: deal.unit_no || "",
+          developer: deal.developer || "",
+          deal_type: deal.type || "",
+          client_name: deal.client_name || "",
+          broker_name: deal.broker_name || "",
+          transaction_value: deal.transaction_value || 0,
+          commission_pct: deal.commission_pct || "",
+          expected_commission_net: deal.expected_commission_net || 0,
+          vat_applicable: deal.vat_applicable || false,
+          from_stage: fromStage || null,
+          to_stage: toStage || "",
+          changed_by_email: userEmail || auth.currentUser?.email || "",
+          changed_by_role: typeof userRole === "string" ? userRole : (userRole?.role || userRole?.legacyRole || ""),
+          notes: deal.notes || "",
+        });
+      } catch (err) { console.error('Deal stage change log error:', err); }
     };
     const archiveDeletedDeals = async (deals, reason, userRole, userEmail, extra = {}) => {
       if (!deals || !deals.length) return;
@@ -1763,7 +1788,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     // ── NAV ────────────────────────────────────────────
     const NAV = [
       { s: "OVERVIEW" }, { id: "dashboard", label: "Dashboard", icon: "🏠" }, { id: "banana2", label: "Performance", icon: "📊" },
-      { s: "SALES" }, { id: "deals", label: "Deals / Pipeline", icon: "🤝" }, { id: "receipts", label: "Sale Receipts", icon: "💰" }, { id: "invoices", label: "Invoices", icon: "🧾" }, { id: "customers", label: "Customers", icon: "👥" }, { id: "brokers", label: "Brokers", icon: "👔" }, { id: "developers", label: "Developers", icon: "🏗️" },
+      { s: "SALES" }, { id: "deals", label: "Deals / Pipeline", icon: "🤝" }, { id: "auditDeals", label: "Auditing Deals", icon: "📋" }, { id: "receipts", label: "Sale Receipts", icon: "💰" }, { id: "invoices", label: "Invoices", icon: "🧾" }, { id: "customers", label: "Customers", icon: "👥" }, { id: "brokers", label: "Brokers", icon: "👔" }, { id: "developers", label: "Developers", icon: "🏗️" },
       { s: "EXPENSES" }, { id: "payments", label: "Payments", icon: "💳" }, { id: "vendors", label: "Vendors", icon: "🏭" }, { id: "futureExpenses", label: "Future Expenses", icon: "📅" },
       { s: "ACCOUNTING" }, { id: "banking", label: "Banking", icon: "🏦" }, { id: "journal", label: "Journal Entries", icon: "📒" }, { id: "coa", label: "Chart of Accounts", icon: "🗂" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "vat", label: "VAT / Taxes", icon: "🧾" }, { id: "budget", label: "Budget", icon: "🎯" },
       { s: "SYSTEM" }, { id: "users", label: "User Management", icon: "👥" }, { id: "settings", label: "Settings", icon: "⚙️" }, { id: "manual", label: "User Manual", icon: "📖" },

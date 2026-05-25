@@ -748,13 +748,22 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, user
 
   const save = (d) => {
     const normalized = normalizeLinkedDealRefs(d);
-    const actionLabel = normalized.id ? "Deal update" : "Deal creation";
-    setDealMutationLabel(actionLabel);
-    if (normalized.id) setDeals(prev => prev.map(x => x.id === normalized.id ? normalized : x));
-    else setDeals(prev => [...prev, { ...normalized, id: uid() }]);
+    const isUpdate = !!normalized.id;
+    setDealMutationLabel(isUpdate ? "Deal update" : "Deal creation");
+    if (isUpdate) {
+      const existing = deals.find(x => x.id === normalized.id);
+      if (existing && existing.stage !== normalized.stage) {
+        logDealStageChange(normalized, existing.stage, normalized.stage, userRole, userEmail);
+      }
+      setDeals(prev => prev.map(x => x.id === normalized.id ? normalized : x));
+    } else {
+      const newDeal = { ...normalized, id: uid() };
+      setDeals(prev => [...prev, newDeal]);
+      logDealStageChange(newDeal, null, newDeal.stage, userRole, userEmail);
+    }
     setShow(false); setEdit(null);
-    toast(normalized.id ? "Deal updated" : "Deal created", "success");
-    logAudit(normalized.id ? "deal_update" : "deal_create", { dealId: normalized.id || null, deal: normalized }, userRole, userEmail);
+    toast(isUpdate ? "Deal updated" : "Deal created", "success");
+    logAudit(isUpdate ? "deal_update" : "deal_create", { dealId: normalized.id || null, deal: normalized }, userRole, userEmail);
   };
   const seedMissingPipelineDeals = () => {
     if (!DEAL_RESEED_ENABLED) { toast("Deal reseed is disabled. Firestore is now the source of truth for deals.", "warning"); return; }
@@ -4271,6 +4280,170 @@ function SidebarIcon({ id, active }) {
   return icons[id] || <svg {...p}><circle cx="12" cy="12" r="9"/></svg>;
 }
 
+function AuditingDealsPage({ dealStageChanges, userRole }) {
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [filterType, setFilterType] = useState("All");
+  const [filterStage, setFilterStage] = useState("All");
+  const [searchText, setSearchText] = useState("");
+  const [sortDir, setSortDir] = useState("desc");
+
+  const STAGE_BADGE = {
+    "Lead":                 { bg: "#EFF6FF", cl: "#1D4ED8" },
+    "EOI":                  { bg: "#F0F9FF", cl: "#0369A1" },
+    "Booking Form Signed":  { bg: "#FFF7ED", cl: "#C2410C" },
+    "First Payment Paid":   { bg: "#FDF4FF", cl: "#7E22CE" },
+    "MOU Signed":           { bg: "#ECFEFF", cl: "#0E7490" },
+    "SPA Signed":           { bg: "#FFF1F2", cl: "#BE123C" },
+    "Handover":             { bg: "#ECFDF5", cl: "#065F46" },
+    "Commission Earned":    { bg: "#FFFBEB", cl: "#92400E" },
+    "Commission Collected": { bg: "#F0FDF4", cl: "#14532D" },
+    "Cancelled":            { bg: "#FEF2F2", cl: "#7F1D1D" },
+  };
+  const stagePill = (stage) => {
+    if (!stage) return <span style={{ color: "#9CA3AF", fontSize: 11 }}>—</span>;
+    const s = STAGE_BADGE[stage] || { bg: "#F3F4F6", cl: "#374151" };
+    return <span style={{ display: "inline-block", padding: "2px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: s.bg, color: s.cl, whiteSpace: "nowrap" }}>{stage}</span>;
+  };
+
+  const today = todayStr();
+  const all = dealStageChanges || [];
+
+  const filtered = useMemo(() => {
+    let rows = all;
+    if (dateFrom) rows = rows.filter(r => (r.date || "") >= dateFrom);
+    if (dateTo) rows = rows.filter(r => (r.date || "") <= dateTo);
+    if (filterType !== "All") rows = rows.filter(r => r.deal_type === filterType);
+    if (filterStage !== "All") rows = rows.filter(r => r.to_stage === filterStage || r.from_stage === filterStage);
+    if (searchText.trim()) {
+      const q = searchText.toLowerCase();
+      rows = rows.filter(r =>
+        (r.property_name || "").toLowerCase().includes(q) ||
+        (r.client_name || "").toLowerCase().includes(q) ||
+        (r.broker_name || "").toLowerCase().includes(q) ||
+        (r.developer || "").toLowerCase().includes(q) ||
+        (r.unit_no || "").toLowerCase().includes(q) ||
+        (r.changed_by_email || "").toLowerCase().includes(q)
+      );
+    }
+    return sortDir === "desc"
+      ? [...rows].sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""))
+      : [...rows].sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
+  }, [all, dateFrom, dateTo, filterType, filterStage, searchText, sortDir]);
+
+  const todayChanges = all.filter(r => r.date === today).length;
+  const uniqueDeals = new Set(filtered.map(r => r.deal_id).filter(Boolean)).size;
+  const uniqueUsers = new Set(filtered.map(r => r.changed_by_email).filter(Boolean)).size;
+  const hasFilters = dateFrom || dateTo || filterType !== "All" || filterStage !== "All" || searchText.trim();
+
+  return (
+    <div>
+      <PageHeader title="Auditing Deals" sub={`${filtered.length} stage change${filtered.length !== 1 ? "s" : ""} recorded${all.length !== filtered.length ? ` (${all.length} total, filtered)` : ""}`}>
+        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={{ ...C.input, width: 145 }} title="From date" />
+        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={{ ...C.input, width: 145 }} title="To date" />
+        <Sel value={filterType} onChange={e => setFilterType(e.target.value)}>
+          <option value="All">All Types</option>
+          {DEAL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+        </Sel>
+        <Sel value={filterStage} onChange={e => setFilterStage(e.target.value)}>
+          <option value="All">All Stages</option>
+          {DEAL_STAGES.map(s => <option key={s} value={s}>{s}</option>)}
+        </Sel>
+        {hasFilters && <button style={C.btn("secondary")} onClick={() => { setDateFrom(""); setDateTo(""); setFilterType("All"); setFilterStage("All"); setSearchText(""); }}>Clear</button>}
+      </PageHeader>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
+        <input type="text" placeholder="Search property, client, broker, developer, unit…" value={searchText} onChange={e => setSearchText(e.target.value)} style={{ ...C.input, maxWidth: 380 }} />
+        <button style={C.btn("secondary")} onClick={() => setSortDir(d => d === "desc" ? "asc" : "desc")}>{sortDir === "desc" ? "Newest First ▼" : "Oldest First ▲"}</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginBottom: 22 }}>
+        {[
+          { label: "Total Changes", value: all.length, color: NAVY },
+          { label: "Today", value: todayChanges, color: "#059669" },
+          { label: "Deals Affected", value: uniqueDeals, color: "#7C3AED" },
+          { label: "Users Active", value: uniqueUsers, color: GOLD_D },
+        ].map(k => (
+          <div key={k.label} style={{ ...C.card, padding: "14px 18px", textAlign: "center" }}>
+            <div style={{ fontSize: 26, fontWeight: 800, color: k.color, lineHeight: 1.1 }}>{k.value}</div>
+            <div style={{ fontSize: 11, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", marginTop: 4 }}>{k.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div style={{ ...C.card, padding: "48px 24px", textAlign: "center" }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>📋</div>
+          <div style={{ fontWeight: 600, color: "#374151", marginBottom: 6 }}>No stage changes recorded yet</div>
+          <div style={{ fontSize: 13, color: "#9CA3AF" }}>Every time a deal stage is updated, the full change will appear here.</div>
+        </div>
+      ) : (
+        <div style={{ ...C.card, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th style={C.th}>Date / Time</th>
+                <th style={C.th}>Property</th>
+                <th style={C.th}>Client</th>
+                <th style={C.th}>Broker</th>
+                <th style={C.th}>Type</th>
+                <th style={C.th}>Stage Change</th>
+                <th style={{ ...C.th, textAlign: "right" }}>Deal Value</th>
+                <th style={{ ...C.th, textAlign: "right" }}>Net Commission</th>
+                <th style={C.th}>Comm %</th>
+                <th style={C.th}>VAT</th>
+                <th style={C.th}>Changed By</th>
+                <th style={C.th}>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((ch, i) => {
+                const isNew = !ch.from_stage;
+                const time = ch.timestamp ? new Date(ch.timestamp).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "";
+                return (
+                  <tr key={ch.id || i} style={{ background: i % 2 === 0 ? "#fff" : "#F9FAFB" }}>
+                    <td style={C.td}>
+                      <div style={{ fontWeight: 600, fontSize: 12 }}>{fmtDate(ch.date)}</div>
+                      {time && <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 2 }}>{time}</div>}
+                    </td>
+                    <td style={C.td}>
+                      <div style={{ fontWeight: 600 }}>{ch.property_name || "—"}</div>
+                      {ch.unit_no && <div style={{ fontSize: 11, color: "#6B7280" }}>Unit: {ch.unit_no}</div>}
+                      {ch.developer && <div style={{ fontSize: 11, color: "#9CA3AF" }}>{ch.developer}</div>}
+                    </td>
+                    <td style={C.td}>{ch.client_name || "—"}</td>
+                    <td style={C.td}>{ch.broker_name || "—"}</td>
+                    <td style={C.td}>
+                      <span style={C.badge(ch.deal_type === "Off-Plan" ? "info" : ch.deal_type === "Secondary" ? "warning" : "success")}>{ch.deal_type || "—"}</span>
+                    </td>
+                    <td style={C.td}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        {isNew
+                          ? <><span style={{ fontSize: 10, color: "#9CA3AF", fontStyle: "italic" }}>New</span><span style={{ color: "#D1D5DB" }}>→</span>{stagePill(ch.to_stage)}</>
+                          : <>{stagePill(ch.from_stage)}<span style={{ color: "#D1D5DB", fontWeight: 700 }}>→</span>{stagePill(ch.to_stage)}</>
+                        }
+                      </div>
+                    </td>
+                    <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(ch.transaction_value)}</td>
+                    <td style={{ ...C.td, textAlign: "right", fontWeight: 600, color: "#059669" }}>{fmtAED(ch.expected_commission_net)}</td>
+                    <td style={C.td}>{ch.commission_pct ? `${ch.commission_pct}%` : "—"}</td>
+                    <td style={C.td}><span style={C.badge(ch.vat_applicable ? "success" : "neutral")}>{ch.vat_applicable ? "Yes" : "No"}</span></td>
+                    <td style={C.td}>
+                      <div style={{ fontSize: 12 }}>{ch.changed_by_email || "—"}</div>
+                      {ch.changed_by_role && <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 2, textTransform: "capitalize" }}>{ch.changed_by_role}</div>}
+                    </td>
+                    <td style={{ ...C.td, maxWidth: 200, color: "#6B7280", fontSize: 12 }}>{ch.notes || "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ╔══════════════════════════════════════════════════╗
 //  MAIN APP
 // ╚══════════════════════════════════════════════════╝
@@ -4285,6 +4458,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
   const [brokers, setBrokers] = useState(() => ls_get("brokers", SEED_BROKERS));
   const [plannedExpenses, setPlannedExpenses] = useState(() => ls_get("planned_expenses", []));
   const [budgets, setBudgets] = useState(() => ls_get("budgets", []));
+  const [dealStageChanges, setDealStageChanges] = useState([]);
   const [developers, setDevelopers] = useState(() => ls_get("developers", SEED_DEVELOPERS));
   const [settings, setSettings] = useState(() => ls_get("settings", { company: "Nasama Properties Company LLC", trn: "", vatRate: 5, currency: "AED", openingBalance: 0, openingBalanceDate: DEFAULT_REPORTING_START_DATE }));
   const [page, setPage] = useState(() => canAccessPage(userAccess || userRole, "dashboard") ? "dashboard" : "deals");
@@ -4349,6 +4523,13 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     unsubs.push(listen('developers', setDevelopers, 'developers', SEED_DEVELOPERS));
     unsubs.push(listen('planned_expenses', setPlannedExpenses, 'planned_expenses', []));
     unsubs.push(listen('budgets', setBudgets, 'budgets', []));
+
+    // deal_stage_changes — read-only audit log, does not block loading or seed
+    const uDSC = db.collection('deal_stage_changes').orderBy('timestamp', 'desc').onSnapshot(snap => {
+      if (!mounted) return;
+      setDealStageChanges(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, err => console.error('deal_stage_changes', err));
+    unsubs.push(uDSC);
 
     // Settings (single doc) — always counts toward done()
     const u8 = db.collection('settings').doc('company').onSnapshot(snap => {
@@ -4670,7 +4851,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     <style>{`@keyframes npLoad{0%{width:0%}60%{width:90%}100%{width:100%}}`}</style>
   </div>;
 
-  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, budgets, setBudgets: setBudgetsFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta };
+  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, budgets, setBudgets: setBudgetsFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta, dealStageChanges };
 
   const addMap = { deals: () => document.dispatchEvent(new CustomEvent("add-deal")), receipts: () => document.dispatchEvent(new CustomEvent("add-receipt")), payments: () => document.dispatchEvent(new CustomEvent("add-payment")), journal: () => document.dispatchEvent(new CustomEvent("add-txn")), customers: () => document.dispatchEvent(new CustomEvent("add-customer")), brokers: () => document.dispatchEvent(new CustomEvent("add-broker")), developers: () => document.dispatchEvent(new CustomEvent("add-developer")), vendors: () => document.dispatchEvent(new CustomEvent("add-vendor")), coa: () => document.dispatchEvent(new CustomEvent("add-account")), futureExpenses: () => document.dispatchEvent(new CustomEvent("add-planned-expense")), banana2: () => toast("Banana 2 action triggered!", "success") };
 
@@ -4684,6 +4865,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     switch (page) {
       case "dashboard": return <Dashboard {...shared} kpis={kpis} plannedExpenses={plannedExpenses} />;
       case "deals": return <DealsPage {...shared} />;
+      case "auditDeals": return <AuditingDealsPage dealStageChanges={dealStageChanges} userRole={accessSubject} />;
       case "receipts": return <ReceiptsPage {...shared} />;
       case "invoices": return <InvoicePage customers={customers} developers={developers} deals={deals} settings={settings} userEmail={userEmail} userRole={accessSubject} />;
       case "payments": return <PaymentsPage {...shared} />;

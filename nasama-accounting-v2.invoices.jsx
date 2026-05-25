@@ -847,6 +847,8 @@ function InvoicePage({ customers, developers, deals, settings, userEmail, userRo
   const [previewInv, setPreviewInv] = React.useState(null);
   const [loading,    setLoading]    = React.useState(true);
   const [saving,     setSaving]     = React.useState(false);
+  const [sortKey,    setSortKey]    = React.useState("date");
+  const [sortDir,    setSortDir]    = React.useState("desc");
 
   // Real-time Firestore listener
   React.useEffect(() => {
@@ -947,18 +949,38 @@ function InvoicePage({ customers, developers, deals, settings, userEmail, userRo
           <div style={{ fontSize: 13, color: "#9CA3AF", marginBottom: 22 }}>Create your first invoice to get started</div>
           {hasPermission(userRole, 'sales.create') && <button style={C.btn()} onClick={handleNew}>+ New Invoice</button>}
         </div>
-      ) : (
+      ) : (() => {
+        const toggleSort = (key) => {
+          if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
+          else { setSortKey(key); setSortDir("asc"); }
+        };
+        const arrow = (key) => sortKey === key ? (sortDir === "asc" ? " ▲" : " ▼") : " ↕";
+        const sortBtnStyle = (key) => ({ background: "none", border: "none", padding: 0, margin: 0, font: "inherit", color: sortKey === key ? "#C9A044" : "inherit", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.07em" });
+        const sorted = [...invoices].sort((a, b) => {
+          let av, bv;
+          if (sortKey === "number") {
+            av = a.invoiceNumberRaw ?? 0;
+            bv = b.invoiceNumberRaw ?? 0;
+            return sortDir === "asc" ? av - bv : bv - av;
+          }
+          av = a.invoiceDate || "";
+          bv = b.invoiceDate || "";
+          return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+        });
+        return (
         <div style={{ background: "#fff", border: "1px solid #EAECF0", borderRadius: 14, overflow: "hidden", boxShadow: "0 1px 3px rgba(16,24,40,.06)" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "#F9FAFB", borderBottom: "1px solid #EAECF0" }}>
-                {[["Invoice No.",""],["Date",""],["Developer / Client",""],["Excl. VAT","right"],["VAT","right"],["Total Incl. VAT","right"],["Status",""],["Actions",""]].map(([h,a]) => (
+                <th style={C.th}><button style={sortBtnStyle("number")} onClick={() => toggleSort("number")}>Invoice No.{arrow("number")}</button></th>
+                <th style={C.th}><button style={sortBtnStyle("date")} onClick={() => toggleSort("date")}>Date{arrow("date")}</button></th>
+                {[["Developer / Client",""],["Excl. VAT","right"],["VAT","right"],["Total Incl. VAT","right"],["Status",""],["Actions",""]].map(([h,a]) => (
                   <th key={h} style={{ ...C.th, textAlign: a || "left" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {invoices.map(inv => (
+              {sorted.map(inv => (
                 <tr key={inv.id} style={{ borderTop: "1px solid #F2F4F7" }}>
                   <td style={C.td}><strong style={{ color: "#C9A044", fontFamily: "monospace", fontSize: 13 }}>{inv.invoiceNumber}</strong></td>
                   <td style={C.td}>{invFmtDate(inv.invoiceDate)}</td>
@@ -979,7 +1001,8 @@ function InvoicePage({ customers, developers, deals, settings, userEmail, userRo
             </tbody>
           </table>
         </div>
-      )}
+        );
+      })()}
 
       {previewInv && <InvoicePreviewModal invoice={previewInv} onClose={() => setPreviewInv(null)} />}
     </div>
