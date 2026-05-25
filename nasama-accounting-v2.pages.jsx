@@ -76,6 +76,53 @@ function DateFilterBar({ dateFilter, setDateFilter }) {
   );
 }
 
+// Shared period-KPI calculator — used by filteredKpis and priorFilteredKpis
+function computePeriodKpis(ft, accounts) {
+  const accountById = new Map(accounts.map(a => [a.id, a]));
+  const outputVATA = accounts.find(a => a.isOutputVAT);
+  const inputVATA  = accounts.find(a => a.isInputVAT);
+  let rev = 0, exp = 0, brokerPayout = 0, opCashIn = 0, opCashOut = 0;
+  const expByAccount = new Map();
+  for (const t of ft) {
+    const lines = t.lines || [];
+    for (const l of lines) {
+      const a = accountById.get(l.accountId);
+      if (!a) continue;
+      if (a.type === "Revenue") rev += (l.credit || 0) - (l.debit || 0);
+      if (a.type === "Expense") {
+        const amt = (l.debit || 0) - (l.credit || 0);
+        exp += amt;
+        expByAccount.set(a.id, (expByAccount.get(a.id) || 0) + amt);
+        if ((a.name || "").toLowerCase().includes("broker") || (a.code || "").startsWith("55")) brokerPayout += amt;
+      }
+    }
+    const bankLines    = lines.filter(l => { const a = accountById.get(l.accountId); return a && (a.isBank || a.code === "1001"); });
+    const nonBankLines = lines.filter(l => { const a = accountById.get(l.accountId); return a && !(a.isBank || a.code === "1001"); });
+    const isTransfer   = bankLines.length > 0 && nonBankLines.length === 0;
+    const isOp         = bankLines.length > 0 && !isTransfer && !["CI", "OD", "BT"].includes(t.txnType) && !(t.tags || "").includes("opening-balance");
+    if (isOp) {
+      opCashIn  += bankLines.reduce((s, l) => s + (l.debit  || 0), 0);
+      opCashOut += bankLines.reduce((s, l) => s + (l.credit || 0), 0);
+    }
+  }
+  const vat = ft.filter(t => !isVATSettlementTxn(t, accounts)).reduce((sum, t) => {
+    const out = (t.lines || []).filter(l => l.accountId === outputVATA?.id).reduce((s, l) => s + (l.credit || 0) - (l.debit || 0), 0);
+    const inp = (t.lines || []).filter(l => l.accountId === inputVATA?.id).reduce((s, l) => s + (l.debit || 0) - (l.credit || 0), 0);
+    return sum + (out - inp);
+  }, 0);
+  const topExpenseCategories = accounts.filter(a => a.type === "Expense")
+    .map(a => ({ id: a.id, name: a.name, amount: expByAccount.get(a.id) || 0 }))
+    .filter(e => e.amount > 0).sort((a, b) => b.amount - a.amount).slice(0, 5);
+  return {
+    rev, exp,
+    grossCommissionCollected: rev,
+    brokerShare: brokerPayout,
+    companyNetCommissionRetained: rev - brokerPayout,
+    operatingCashFlow: opCashIn - opCashOut,
+    vat, topExpenseCategories,
+  };
+}
+
 // ╔══════════════════════════════════════════════════╗
 //  DASHBOARD
 // ╚══════════════════════════════════════════════════╝
@@ -102,49 +149,7 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
   // KPIs recomputed for the selected date period (responds to date filter)
   const filteredKpis = useMemo(() => {
     const ft = txns.filter(t => !t.isVoid && (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to));
-    const accountById = new Map(accounts.map(a => [a.id, a]));
-    const outputVATA = accounts.find(a => a.isOutputVAT);
-    const inputVATA = accounts.find(a => a.isInputVAT);
-    let rev = 0, exp = 0, brokerPayout = 0, opCashIn = 0, opCashOut = 0;
-    const expByAccount = new Map();
-    for (const t of ft) {
-      const lines = t.lines || [];
-      for (const l of lines) {
-        const a = accountById.get(l.accountId);
-        if (!a) continue;
-        if (a.type === "Revenue") rev += (l.credit || 0) - (l.debit || 0);
-        if (a.type === "Expense") {
-          const amt = (l.debit || 0) - (l.credit || 0);
-          exp += amt;
-          expByAccount.set(a.id, (expByAccount.get(a.id) || 0) + amt);
-          if ((a.name || "").toLowerCase().includes("broker") || (a.code || "").startsWith("55")) brokerPayout += amt;
-        }
-      }
-      const bankLines = lines.filter(l => { const a = accountById.get(l.accountId); return a && (a.isBank || a.code === "1001"); });
-      const nonBankLines = lines.filter(l => { const a = accountById.get(l.accountId); return a && !(a.isBank || a.code === "1001"); });
-      const isTransfer = bankLines.length > 0 && nonBankLines.length === 0;
-      const isOp = bankLines.length > 0 && !isTransfer && !["CI", "OD", "BT"].includes(t.txnType) && !(t.tags || "").includes("opening-balance");
-      if (isOp) {
-        opCashIn += bankLines.reduce((s, l) => s + (l.debit || 0), 0);
-        opCashOut += bankLines.reduce((s, l) => s + (l.credit || 0), 0);
-      }
-    }
-    const vat = ft.filter(t => !isVATSettlementTxn(t, accounts)).reduce((sum, t) => {
-      const out = (t.lines || []).filter(l => l.accountId === outputVATA?.id).reduce((s, l) => s + (l.credit || 0) - (l.debit || 0), 0);
-      const inp = (t.lines || []).filter(l => l.accountId === inputVATA?.id).reduce((s, l) => s + (l.debit || 0) - (l.credit || 0), 0);
-      return sum + (out - inp);
-    }, 0);
-    const topExpenseCategories = accounts.filter(a => a.type === "Expense")
-      .map(a => ({ id: a.id, name: a.name, amount: expByAccount.get(a.id) || 0 }))
-      .filter(e => e.amount > 0).sort((a, b) => b.amount - a.amount).slice(0, 5);
-    return {
-      rev, exp,
-      grossCommissionCollected: rev,
-      brokerShare: brokerPayout,
-      companyNetCommissionRetained: rev - brokerPayout,
-      operatingCashFlow: opCashIn - opCashOut,
-      vat, topExpenseCategories,
-    };
+    return computePeriodKpis(ft, accounts);
   }, [txns, accounts, dateFilter]);
 
   // ── Prior-year same period (YoY comparator) ──────────────────────────────
@@ -157,30 +162,7 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     if (!priorDateRange.from || !priorDateRange.to)
       return { rev: 0, exp: 0, brokerShare: 0, companyNetCommissionRetained: 0, operatingCashFlow: 0 };
     const ft = txns.filter(t => !t.isVoid && (t.date || "") >= priorDateRange.from && (t.date || "") <= priorDateRange.to);
-    const accountById = new Map(accounts.map(a => [a.id, a]));
-    let rev = 0, exp = 0, brokerPayout = 0, opCashIn = 0, opCashOut = 0;
-    for (const t of ft) {
-      const lines = t.lines || [];
-      for (const l of lines) {
-        const a = accountById.get(l.accountId);
-        if (!a) continue;
-        if (a.type === "Revenue") rev += (l.credit || 0) - (l.debit || 0);
-        if (a.type === "Expense") {
-          const amt = (l.debit || 0) - (l.credit || 0);
-          exp += amt;
-          if ((a.name || "").toLowerCase().includes("broker") || (a.code || "").startsWith("55")) brokerPayout += amt;
-        }
-      }
-      const bankLines = lines.filter(l => { const a = accountById.get(l.accountId); return a && (a.isBank || a.code === "1001"); });
-      const nonBankLines = lines.filter(l => { const a = accountById.get(l.accountId); return a && !(a.isBank || a.code === "1001"); });
-      const isTransfer = bankLines.length > 0 && nonBankLines.length === 0;
-      const isOp = bankLines.length > 0 && !isTransfer && !["CI", "OD", "BT"].includes(t.txnType) && !(t.tags || "").includes("opening-balance");
-      if (isOp) {
-        opCashIn += bankLines.reduce((s, l) => s + (l.debit || 0), 0);
-        opCashOut += bankLines.reduce((s, l) => s + (l.credit || 0), 0);
-      }
-    }
-    return { rev, exp, brokerShare: brokerPayout, companyNetCommissionRetained: rev - brokerPayout, operatingCashFlow: opCashIn - opCashOut };
+    return computePeriodKpis(ft, accounts);
   }, [txns, accounts, priorDateRange.from, priorDateRange.to]);
 
   const priorCash = useMemo(() => {
@@ -2747,7 +2729,7 @@ function VATPage({ accounts, txns, ledger, settings }) {
 //  PERFORMANCE PAGE
 // ╚══════════════════════════════════════════════════╝
 function PerformancePage({ deals, setPage }) {
-  const STAGE_COLOR = { "Lead": "#94A3B8", "EOI": "#60A5FA", "Booking Form Signed": "#818CF8", "First Payment Paid": "#A78BFA", "MOU Signed": "#F59E0B", "SPA Signed": "#F97316", "Handover": "#FB923C", "Commission Earned": "#34D399", "Commission Collected": "#059669", "Cancelled": "#EF4444" };
+  const STAGE_COLOR = { "Lead": "#94A3B8", "EOI": "#60A5FA", "Booking Form Signed": "#818CF8", "First Payment Paid": "#A78BFA", "MOU Signed": "#F59E0B", "SPA Signed": "#F97316", "Handover": "#FB923C", "Commission Earned": "#34D399", "Commission Collected": "#059669", "Cancelled": "#EF4444", "Booked": "#818CF8" };
   const TYPE_COLOR = { "Off-Plan": "#2563EB", "Secondary": "#D97706", "Rental": "#059669" };
 
   // ── Core KPIs ────────────────────────────────────
@@ -2766,7 +2748,7 @@ function PerformancePage({ deals, setPage }) {
   // ── By Stage ────────────────────────────────────
   const byStage = DEAL_STAGES.map(stage => {
     const ds = deals.filter(d => d.stage === stage);
-    return { stage, count: ds.length, commission: ds.reduce((s, d) => s + (d.expected_commission_net || 0), 0) };
+    return { stage, count: ds.length, commission: ds.reduce((s, d) => s + (d.expected_commission_net || 0), 0), color: STAGE_COLOR[stage] || "#94A3B8" };
   });
   const maxStageCount = Math.max(1, ...byStage.map(r => r.count));
 
@@ -4492,35 +4474,33 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     const unsubs = [];
     const safety = setTimeout(() => { if (mounted) setFbLoaded(true); }, 10000);
 
-    let loaded = 0; const total = 8;
+    let loaded = 0; const total = 10; // 9 collection listeners + 1 settings listener
     const done = () => { loaded++; if (loaded >= total && mounted) setFbLoaded(true); };
 
-    const listen = (col, setter, cacheKey, seed) => {
+    const listen = (col, setter, cacheKey) => {
       return db.collection(col).onSnapshot(snap => {
-        setConnected(true); // Connected if snapshot received
-        if (snap.empty) {
-          setter(seed); ls_set(cacheKey, seed);
-        } else {
+        setConnected(true);
+        if (!snap.empty) {
           const data = snap.docs.map(d => d.data());
           setter(data); ls_set(cacheKey, data);
         }
         done();
       }, err => {
         console.error(col, err);
-        setConnected(false); // Disconnected on error
+        setConnected(false);
         done();
       });
     };
 
-    unsubs.push(listen('accounts', setAccounts, 'accounts', SEED_ACCOUNTS));
-    unsubs.push(listen('transactions', setTxns, 'transactions', SEED_TXNS));
-    unsubs.push(listen('deals', setDeals, 'deals', []));
-    unsubs.push(listen('customers', setCustomers, 'customers', SEED_CUSTOMERS));
-    unsubs.push(listen('vendors', setVendors, 'vendors', SEED_VENDORS));
-    unsubs.push(listen('brokers', setBrokers, 'brokers', SEED_BROKERS));
-    unsubs.push(listen('developers', setDevelopers, 'developers', SEED_DEVELOPERS));
-    unsubs.push(listen('planned_expenses', setPlannedExpenses, 'planned_expenses', []));
-    unsubs.push(listen('budgets', setBudgets, 'budgets', []));
+    unsubs.push(listen('accounts', setAccounts, 'accounts'));
+    unsubs.push(listen('transactions', setTxns, 'transactions'));
+    unsubs.push(listen('deals', setDeals, 'deals'));
+    unsubs.push(listen('customers', setCustomers, 'customers'));
+    unsubs.push(listen('vendors', setVendors, 'vendors'));
+    unsubs.push(listen('brokers', setBrokers, 'brokers'));
+    unsubs.push(listen('developers', setDevelopers, 'developers'));
+    unsubs.push(listen('planned_expenses', setPlannedExpenses, 'planned_expenses'));
+    unsubs.push(listen('budgets', setBudgets, 'budgets'));
 
     // deal_stage_changes — read-only audit log, does not block loading or seed
     const uDSC = db.collection('deal_stage_changes').orderBy('timestamp', 'desc').onSnapshot(snap => {
