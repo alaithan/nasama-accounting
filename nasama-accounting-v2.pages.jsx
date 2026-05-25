@@ -29,6 +29,7 @@ function computeDateRange(preset) {
   }
 }
 function DateFilterBar({ dateFilter, setDateFilter }) {
+  const { isMobile } = useWindowSize();
   const PRESETS = [
     { id: "this_month", label: "This Month" },
     { id: "last_month", label: "Last Month" },
@@ -39,7 +40,7 @@ function DateFilterBar({ dateFilter, setDateFilter }) {
     { id: "custom", label: "Custom" },
   ];
   return (
-    <div style={{ display: "flex", gap: 3, flexWrap: window.innerWidth <= 768 ? "nowrap" : "wrap", overflowX: window.innerWidth <= 768 ? "auto" : "visible", WebkitOverflowScrolling: "touch", msOverflowStyle: "none", scrollbarWidth: "none", alignItems: "center", marginBottom: 18, padding: "7px 8px", background: "#ffffff", borderRadius: 12, border: "1px solid #EAECF0", boxShadow: "0 1px 3px rgba(16,24,40,.05)" }}>
+    <div style={{ display: "flex", gap: 3, flexWrap: isMobile ? "nowrap" : "wrap", overflowX: isMobile ? "auto" : "visible", WebkitOverflowScrolling: "touch", msOverflowStyle: "none", scrollbarWidth: "none", alignItems: "center", marginBottom: 18, padding: "7px 8px", background: "#ffffff", borderRadius: 12, border: "1px solid #EAECF0", boxShadow: "0 1px 3px rgba(16,24,40,.05)" }}>
       <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: "#98A2B3", letterSpacing: "0.12em", marginRight: 6, paddingLeft: 6, flexShrink: 0 }}>Period</span>
       {PRESETS.map(p => {
         const active = dateFilter.preset === p.id;
@@ -127,8 +128,7 @@ function computePeriodKpis(ft, accounts) {
 //  DASHBOARD
 // ╚══════════════════════════════════════════════════╝
 function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, plannedExpenses }) {
-  const isMobile = window.innerWidth <= 768;
-  const isTablet = window.innerWidth <= 1120;
+  const { isMobile, isTablet } = useWindowSize();
   const reportingStartLabel = fmtDate(kpis.reportingStartDate || DEFAULT_REPORTING_START_DATE);
   const [dateFilter, setDateFilter] = useState(() => { const r = computeDateRange("this_month"); return { preset: "this_month", ...r }; });
   const inRange = t => (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to);
@@ -4449,18 +4449,16 @@ function App({ userRole, userAccess, userEmail, signOut }) {
   const [syncError, setSyncError] = useState(false);
   const [writeMeta, setWriteMeta] = useState({});
   const syncCount = useRef(0);
-  const [isMobile, setIsMobile] = useState(false);
+  const { isMobile } = useWindowSize();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("na2_sidebar_collapsed") === "true");
   const [connected, setConnected] = useState(true);
   const [onlineUsers, setOnlineUsers] = useState([]);
 
-  // Mobile detection
+  // Close mobile menu on resize to desktop
   useEffect(() => {
-    const h = () => { setIsMobile(window.innerWidth <= 768); if (window.innerWidth > 768) setMobileMenuOpen(false); };
-    h(); window.addEventListener('resize', h);
-    return () => window.removeEventListener('resize', h);
-  }, []);
+    if (!isMobile) setMobileMenuOpen(false);
+  }, [isMobile]);
 
   useEffect(() => {
     if (canAccessPage(accessSubject, page)) return;
@@ -4640,186 +4638,8 @@ function App({ userRole, userAccess, userEmail, signOut }) {
   }, []);
   const journal = useMemo(() => createJournalEngine({ accounts, txns, saveTxn }), [accounts, txns, saveTxn]);
 
-  // KPIs
-  const kpis = useMemo(() => {
-    const now = new Date();
-    const reportingStartDate = normalizeReportingStartDate(settings?.openingBalanceDate);
-    const reportingStartMonthKey = reportingStartDate.slice(0, 7);
-    const currentYear = now.getFullYear();
-    const currentMonthKey = `${currentYear}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const accountById = new Map(accounts.map(a => [a.id, a]));
-    const banks = accounts.filter(a => a.isBank || a.code === "1001");
-    const cash = banks.reduce((s, a) => s + accountBalance(a, ledger), 0);
-    const outputVATA = accounts.find(a => a.isOutputVAT);
-    const inputVATA = accounts.find(a => a.isInputVAT);
-    const vat = txns
-      .filter(t => !t.isVoid && !isVATSettlementTxn(t, accounts) && t.lines?.some(l => l.accountId === outputVATA?.id || l.accountId === inputVATA?.id))
-      .reduce((sum, t) => {
-        const outAmt = (t.lines || []).filter(l => l.accountId === outputVATA?.id).reduce((s, l) => s + (l.credit || 0) - (l.debit || 0), 0);
-        const inAmt = (t.lines || []).filter(l => l.accountId === inputVATA?.id).reduce((s, l) => s + (l.debit || 0) - (l.credit || 0), 0);
-        return sum + (outAmt - inAmt);
-      }, 0);
-    const totalAssets = accounts.filter(a => a.type === "Asset").reduce((s, a) => s + accountBalance(a, ledger), 0);
-    const totalLiabilities = accounts.filter(a => a.type === "Liability").reduce((s, a) => s + accountBalance(a, ledger), 0);
-    const totalEquity = accounts.filter(a => a.type === "Equity").reduce((s, a) => s + accountBalance(a, ledger), 0);
-    const netWorth = totalAssets - totalLiabilities;
-    let rev = 0, exp = 0;
-    let brokerPayoutYTD = 0;
-    let operatingCashFlowMTD = 0;
-    let operatingCashFlowYTD = 0;
-    const expenseYTDByAccount = new Map();
-
-    const makeMonthKey = dateStr => (dateStr || "").slice(0, 7);
-    const monthLabel = key => {
-      const [year, month] = key.split("-").map(Number);
-      return new Date(year, month - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
-    };
-    const last6MonthKeys = Array.from({ length: 6 }, (_, i) => {
-      const d = new Date(currentYear, now.getMonth() - (5 - i), 1);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    }).filter(key => key >= reportingStartMonthKey);
-    const perfMap = new Map(last6MonthKeys.map(key => [key, { revenue: 0, expense: 0 }]));
-    const cashMap = new Map(last6MonthKeys.map(key => [key, { inflow: 0, outflow: 0 }]));
-
-    for (let i = 0; i < txns.length; i++) {
-      const t = txns[i];
-      if (t.isVoid) continue;
-
-      const monthKey = makeMonthKey(t.date);
-      const lines = t.lines || [];
-      const inReportingPeriod = (t.date || "") >= reportingStartDate;
-      const monthPerf = perfMap.get(monthKey);
-      let txnRevenue = 0;
-      let txnExpense = 0;
-
-      lines.forEach(l => {
-        const a = accountById.get(l.accountId);
-        if (!a) return;
-        if (a.type === "Revenue") {
-          const amount = (l.credit || 0) - (l.debit || 0);
-          txnRevenue += amount;
-          if (inReportingPeriod) rev += amount;
-        }
-        if (a.type === "Expense") {
-          const amount = (l.debit || 0) - (l.credit || 0);
-          txnExpense += amount;
-          if (inReportingPeriod) {
-            exp += amount;
-            expenseYTDByAccount.set(a.id, (expenseYTDByAccount.get(a.id) || 0) + amount);
-            if ((a.name || "").toLowerCase().includes("broker") || (a.code || "").startsWith("55")) brokerPayoutYTD += amount;
-          }
-        }
-      });
-      if (monthPerf) {
-        monthPerf.revenue += txnRevenue;
-        monthPerf.expense += txnExpense;
-      }
-
-      const financingTagText = (t.tags || "").toLowerCase();
-      const cashBucket = cashMap.get(monthKey);
-      const bankLines = lines.filter(l => {
-        const a = accountById.get(l.accountId);
-        return a && (a.isBank || a.code === "1001");
-      });
-      const nonBankOperationalLines = lines.filter(l => {
-        const a = accountById.get(l.accountId);
-        return a && !(a.isBank || a.code === "1001");
-      });
-      const isInternalTransfer = bankLines.length > 0 && nonBankOperationalLines.length === 0;
-      if (cashBucket) {
-        if (!isInternalTransfer) {
-          bankLines.forEach(l => {
-            cashBucket.inflow += (l.debit || 0);
-            cashBucket.outflow += (l.credit || 0);
-          });
-        }
-      }
-
-      const isOperatingCashTxn = bankLines.length > 0
-        && !isInternalTransfer
-        && !["CI", "OD", "BT"].includes(t.txnType)
-        && !financingTagText.includes("opening-balance");
-      if (isOperatingCashTxn) {
-        const operatingNet = bankLines.reduce((sum, l) => sum + (l.debit || 0) - (l.credit || 0), 0);
-        if (monthKey === currentMonthKey) operatingCashFlowMTD += operatingNet;
-        if (inReportingPeriod) operatingCashFlowYTD += operatingNet;
-      }
-    }
-
-    const monthlyPerformance = last6MonthKeys.map(key => {
-      const item = perfMap.get(key) || { revenue: 0, expense: 0 };
-      return { key, label: monthLabel(key), revenue: item.revenue, expense: item.expense, net: item.revenue - item.expense };
-    });
-    const cashFlowSeries = last6MonthKeys.map(key => {
-      const item = cashMap.get(key) || { inflow: 0, outflow: 0 };
-      return { key, label: monthLabel(key), inflow: item.inflow, outflow: item.outflow, net: item.inflow - item.outflow };
-    });
-
-    const operatingMargin = rev > 0 ? ((rev - exp) / rev) * 100 : 0;
-    const grossCommissionCollected = rev;
-    const brokerShare = brokerPayoutYTD;
-    const companyNetCommissionRetained = grossCommissionCollected - brokerShare;
-
-    const currentMonthPerf = monthlyPerformance.find(item => item.key === currentMonthKey) || { revenue: 0, expense: 0, net: 0 };
-    const currentMonthCash = cashFlowSeries.find(item => item.key === currentMonthKey) || { inflow: 0, outflow: 0, net: 0 };
-
-    const avgMonthlyExpense = monthlyPerformance.length > 0 ? monthlyPerformance.reduce((sum, item) => sum + item.expense, 0) / monthlyPerformance.length : 0;
-    const runwayMonths = avgMonthlyExpense > 0 ? cash / avgMonthlyExpense : Infinity;
-
-    const pendingPipelineCommission = (deals || []).filter(d => d.stage !== "Commission Collected").reduce((sum, d) => sum + (d.expected_commission_net || 0), 0);
-    const pipelineByType = DEAL_TYPES.map(type => {
-      const group = (deals || []).filter(d => d.type === type && d.stage !== "Commission Collected");
-      return { type, count: group.length, expected: group.reduce((sum, d) => sum + (d.expected_commission_net || 0), 0) };
-    });
-    const pipelineStageValue = DEAL_STAGES.map(stage => {
-      const group = (deals || []).filter(d => d.stage === stage);
-      return { stage, count: group.length, expected: group.reduce((sum, d) => sum + (d.expected_commission_net || 0), 0) };
-    }).filter(row => row.count > 0 || row.expected > 0);
-    const collectedDealsCount = (deals || []).filter(d => d.stage === "Commission Collected").length;
-    const openDealsCount = (deals || []).filter(d => d.stage !== "Commission Collected").length;
-    const topExpenseCategories = [...expenseYTDByAccount.entries()]
-      .map(([id, amount]) => ({ id, name: accountById.get(id)?.name || id, amount }))
-      .sort((a, b) => b.amount - a.amount)
-      .slice(0, 5);
-
-    return {
-      cash,
-      vat,
-      rev,
-      exp,
-      totalAssets,
-      operatingMargin,
-      grossCommissionCollected,
-      brokerShare,
-      companyNetCommissionRetained,
-      totalLiabilities,
-      totalEquity,
-      netWorth,
-      monthlyPerformance,
-      cashFlowSeries,
-      currentMonth: {
-        label: currentMonthPerf.label,
-        revenue: currentMonthPerf.revenue,
-        expense: currentMonthPerf.expense,
-        net: currentMonthPerf.net,
-        cashIn: currentMonthCash.inflow,
-        cashOut: currentMonthCash.outflow,
-        cashNet: currentMonthCash.net,
-      },
-      avgMonthlyExpense,
-      runwayMonths,
-      operatingCashFlowMTD,
-      operatingCashFlowYTD,
-      pendingPipelineCommission,
-      pipelineByType,
-      pipelineStageValue,
-      collectedDealsCount,
-      openDealsCount,
-      brokerPayoutYTD,
-      topExpenseCategories,
-      reportingStartDate,
-    };
-  }, [accounts, txns, deals, ledger, settings]);
+  // KPIs — pure calculation lives in core.jsx: calculateAppKpis
+  const kpis = useMemo(() => calculateAppKpis({ accounts, txns, deals, ledger, settings }), [accounts, txns, deals, ledger, settings]);
 
   // Loading
   if (!fbLoaded || !userRole) return <div style={{ position: "fixed", inset: 0, background: NAVY, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20 }}>
