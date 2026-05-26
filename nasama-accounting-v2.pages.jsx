@@ -9,7 +9,7 @@ function computeDateRange(preset) {
   const today = new Date();
   const y = today.getFullYear();
   const m = today.getMonth();
-  const fmt = d => d.toISOString().slice(0, 10);
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   const fd = (yr, mo) => new Date(yr, mo, 1);
   const ld = (yr, mo) => new Date(yr, mo + 1, 0);
   switch (preset) {
@@ -2063,10 +2063,23 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
   const handleReverse = async (txnId) => {
     if (!confirm("Create a reversal entry? The original will be marked as VOID.")) return;
     try {
-      const reversalTxn = journal.reverseTransaction(txnId, todayStr(), "Reversal", false);
-      const original = txns.find(t => t.id === txnId);
-      await persistTxn({ ...original, isVoid: true });
-      await persistTxn(reversalTxn);
+      const reversalTxn  = journal.reverseTransaction(txnId, todayStr(), "Reversal", false);
+      const original     = txns.find(t => t.id === txnId);
+      const voidedOrig   = JSON.parse(JSON.stringify({ ...original, isVoid: true }));
+      const cleanReversal = JSON.parse(JSON.stringify(reversalTxn));
+      // Single atomic batch — either both write or neither does
+      await window.fsBatchWrite([
+        { col: 'transactions', id: voidedOrig.id,    data: voidedOrig },
+        { col: 'transactions', id: cleanReversal.id, data: cleanReversal },
+      ]);
+      setTxns(prev => {
+        const next = prev.map(t => t.id === voidedOrig.id ? voidedOrig : t);
+        const withRev = next.some(t => t.id === cleanReversal.id)
+          ? next.map(t => t.id === cleanReversal.id ? cleanReversal : t)
+          : [...next, cleanReversal];
+        ls_set('transactions', withRev);
+        return withRev;
+      });
       toast("Transaction reversed and voided", "success");
     } catch (err) { toast(err.message, "error"); }
   };
@@ -2461,14 +2474,17 @@ function VATPage({ accounts, txns, ledger, settings }) {
     var outRows = vatRows.filter(function(r) { return r.outAmt > 0; });
     var inRows  = vatRows.filter(function(r) { return r.inAmt  > 0; });
 
+    function escHtml(s) {
+      return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
     function txTableRows(rows, amtKey, color) {
       if (!rows.length) return '<tr><td colspan="3" style="padding:14px 12px;text-align:center;color:' + INK_VAR + ';font-size:10pt;">No transactions found.</td></tr>';
       return rows.map(function(row, i) {
         var bg = i % 2 === 0 ? WHITE : SURF_LO;
         return '<tr style="background:' + bg + ';-webkit-print-color-adjust:exact;print-color-adjust:exact;">' +
-          '<td style="padding:9px 12px;font-size:10pt;font-weight:500;color:' + INK + ';">' + (row.description || row.ref || "\u2014") + '</td>' +
-          '<td style="padding:9px 12px;font-size:9.5pt;text-align:right;color:' + INK_VAR + ';">' + fmtDate(row.date) + '</td>' +
-          '<td style="padding:9px 12px;font-size:10pt;text-align:right;font-weight:700;color:' + color + ';">' + fmt(row[amtKey]) + '</td>' +
+          '<td style="padding:9px 12px;font-size:10pt;font-weight:500;color:' + INK + ';">' + escHtml(row.description || row.ref || "\u2014") + '</td>' +
+          '<td style="padding:9px 12px;font-size:9.5pt;text-align:right;color:' + INK_VAR + ';">' + escHtml(fmtDate(row.date)) + '</td>' +
+          '<td style="padding:9px 12px;font-size:10pt;text-align:right;font-weight:700;color:' + color + ';">' + escHtml(fmt(row[amtKey])) + '</td>' +
           '</tr>';
       }).join("");
     }

@@ -109,7 +109,7 @@ function invBlankDoc(settings) {
   return {
     invoiceNumber:    "",
     invoiceNumberRaw: 0,
-    invoiceDate:      new Date().toISOString().split("T")[0],
+    invoiceDate:      todayStr(),
     status:           "draft",
     billFrom: {
       companyName: settings?.company    || "NASAMA PROPERTIES LLC",

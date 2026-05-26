@@ -205,7 +205,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     };
     const fromCents = c => ((c || 0) / 100).toFixed(2);
     const uid = () => "_" + Math.random().toString(36).substr(2, 9);
-    const todayStr = () => new Date().toISOString().split("T")[0];
+    const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
     const fmtDate = d => { if (!d) return "—"; try { return new Date(d + "T12:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); } catch { return d; } };
     const ls_get = (k, fb) => { try { const v = localStorage.getItem("na2_" + k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
     const ls_set = (k, v) => { try { localStorage.setItem("na2_" + k, JSON.stringify(v)); } catch { } };

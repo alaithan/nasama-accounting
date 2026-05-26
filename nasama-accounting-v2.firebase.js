@@ -49,6 +49,14 @@
       window.fsSetDoc = async function(collName, docId, data) {
         await db.collection(collName).doc(docId).set(sanitizeFirestoreData(data), { merge: true });
       };
+      // Atomic multi-doc write — all succeed or all fail
+      window.fsBatchWrite = async function(ops) {
+        const batch = db.batch();
+        ops.forEach(({ col, id, data }) => {
+          batch.set(db.collection(col).doc(id), sanitizeFirestoreData(data));
+        });
+        await batch.commit();
+      };
       window.fsDeleteDoc = async function(collName, docId) {
         await db.collection(collName).doc(docId).delete();
       };
