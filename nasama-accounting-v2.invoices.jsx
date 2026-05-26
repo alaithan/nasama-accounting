@@ -730,7 +730,7 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
 // ═══════════════════════════════════════════════════════════════════
 //  H. InvoicePage — list + orchestration
 // ═══════════════════════════════════════════════════════════════════
-function InvoicePage({ customers, developers, deals, settings, userEmail, userRole }) {
+function InvoicePage({ customers, developers, deals, settings, userEmail, userRole, preselectedDeal, onClearPreselected }) {
   const [invoices,   setInvoices]   = React.useState([]);
   const [editing,    setEditing]    = React.useState(null);
   const [previewInv, setPreviewInv] = React.useState(null);
@@ -750,15 +750,34 @@ function InvoicePage({ customers, developers, deals, settings, userEmail, userRo
     return () => unsub();
   }, []);
 
-  // One-time counter reset: set lastNumber to 93 so next invoice is 094
+  // Only initialise the counter when the doc does not exist yet
   React.useEffect(() => {
     const ref = db.collection("meta").doc("invoiceCounter");
     ref.get().then(snap => {
-      if (!snap.exists || !snap.data().resetTo93Done) {
-        ref.set({ lastNumber: 93, resetTo93Done: true }, { merge: true });
-      }
+      if (!snap.exists) ref.set({ lastNumber: 93, resetTo93Done: true });
     }).catch(() => {});
   }, []);
+
+  // Open a pre-filled new invoice when navigated from the Deals table
+  React.useEffect(() => {
+    if (!preselectedDeal) return;
+    const blank = invBlankDoc(settings);
+    blank.invoicedTo = {
+      ...blank.invoicedTo,
+      companyName: preselectedDeal.developer || preselectedDeal.client_name || "",
+      partyType: "developer",
+    };
+    blank.lineItems = [{
+      ...invBlankLine(),
+      projectUnit:    [preselectedDeal.property_name, preselectedDeal.unit_no].filter(Boolean).join(" – "),
+      specification:  `${preselectedDeal.type || ""} commission — ${preselectedDeal.client_name || ""}`.trim(),
+      dealValue:      preselectedDeal.transaction_value || "",
+      commissionPct:  preselectedDeal.commission_pct   || "",
+      dealId:         preselectedDeal.id               || "",
+    }];
+    setEditing(blank);
+    if (onClearPreselected) onClearPreselected();
+  }, [preselectedDeal]);
 
   // Number is NOT assigned on New — it is assigned at first Save to avoid gaps
   const handleNew = () => {

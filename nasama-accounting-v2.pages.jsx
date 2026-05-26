@@ -658,7 +658,7 @@ function ManualPage() {
 // ╔══════════════════════════════════════════════════╗
 //  DEALS PAGE
 // ╚══════════════════════════════════════════════════╝
-function DealsPage({ deals, setDeals, customers, brokers, developers, txns, userRole, userEmail, writeMeta }) {
+function DealsPage({ deals, setDeals, customers, brokers, developers, txns, userRole, userEmail, writeMeta, setInvoiceDeal, setPage }) {
   const [show, setShow] = useState(false);
   const [edit, setEdit] = useState(null);
   const [filter, setFilter] = useState("All");
@@ -915,7 +915,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, user
             <td style={C.td}>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {hasPermission(userRole, 'sales.create') && (
-                  <button style={{ ...C.btn("secondary", true), borderColor: GOLD, color: GOLD_D }} onClick={e => { e.stopPropagation(); shared.setInvoiceDeal(d); setPage("invoices"); }}>
+                  <button style={{ ...C.btn("secondary", true), borderColor: GOLD, color: GOLD_D }} onClick={e => { e.stopPropagation(); setInvoiceDeal(d); setPage("invoices"); }}>
                     Invoice
                   </button>
                 )}
@@ -4484,7 +4484,9 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     const listen = (col, setter, cacheKey) => {
       return db.collection(col).onSnapshot(snap => {
         setConnected(true);
-        if (!snap.empty) {
+        if (snap.empty) {
+          setter([]); ls_set(cacheKey, []);
+        } else {
           const data = snap.docs.map(d => d.data());
           setter(data); ls_set(cacheKey, data);
         }
@@ -4567,7 +4569,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
 
   const showSync = () => { setSyncing(true); syncCount.current++; const n = syncCount.current; setTimeout(() => { if (syncCount.current === n) setSyncing(false); }, 1800); };
 
-  // Firestore write wrappers
+  // Firestore write wrappers — doc-level writes to avoid whole-collection overwrites
   const fsUpdate = (col, setter, cacheKey) => (updater) => {
     setter(prev => {
       const next = typeof updater === 'function' ? updater(prev) : updater;
@@ -4575,7 +4577,18 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       const startedAt = new Date().toISOString();
       setWriteMeta(meta => ({ ...meta, [col]: { status: "saving", startedAt, completedAt: meta[col]?.completedAt || "", error: "" } }));
       ls_set(cacheKey, next); showSync();
-      fsSetCollection(col, next).then(() => {
+      // Diff prev → next: only write/delete the changed doc(s)
+      const prevMap = new Map((prev || []).map(d => [d.id, d]));
+      const nextMap = new Map((next || []).map(d => [d.id, d]));
+      const ops = [];
+      for (const [id, item] of nextMap) {
+        const old = prevMap.get(id);
+        if (!old || JSON.stringify(old) !== JSON.stringify(item)) ops.push(window.fsSetDoc(col, id, item));
+      }
+      for (const [id] of prevMap) {
+        if (!nextMap.has(id)) ops.push(window.fsDeleteDoc(col, id));
+      }
+      Promise.all(ops).then(() => {
         setSyncError(false);
         setWriteMeta(meta => ({ ...meta, [col]: { status: "saved", startedAt, completedAt: new Date().toISOString(), error: "" } }));
       }).catch(e => {
@@ -4655,7 +4668,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     <style>{`@keyframes npLoad{0%{width:0%}60%{width:90%}100%{width:100%}}`}</style>
   </div>;
 
-  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, budgets, setBudgets: setBudgetsFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta, dealStageChanges };
+  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, budgets, setBudgets: setBudgetsFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta, dealStageChanges, setInvoiceDeal };
 
   const addMap = { deals: () => document.dispatchEvent(new CustomEvent("add-deal")), receipts: () => document.dispatchEvent(new CustomEvent("add-receipt")), payments: () => document.dispatchEvent(new CustomEvent("add-payment")), journal: () => document.dispatchEvent(new CustomEvent("add-txn")), customers: () => document.dispatchEvent(new CustomEvent("add-customer")), brokers: () => document.dispatchEvent(new CustomEvent("add-broker")), developers: () => document.dispatchEvent(new CustomEvent("add-developer")), vendors: () => document.dispatchEvent(new CustomEvent("add-vendor")), coa: () => document.dispatchEvent(new CustomEvent("add-account")), futureExpenses: () => document.dispatchEvent(new CustomEvent("add-planned-expense")), banana2: () => toast("Banana 2 action triggered!", "success") };
 
