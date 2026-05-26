@@ -2899,7 +2899,7 @@ function VATPage({ accounts, txns, ledger, settings }) {
 // ╔══════════════════════════════════════════════════╗
 //  PERFORMANCE PAGE
 // ╚══════════════════════════════════════════════════╝
-function PerformancePage({ deals, setPage }) {
+function PerformancePage({ deals, txns, accounts, budgets, setPage }) {
   const STAGE_COLOR = { "Lead": "#94A3B8", "EOI": "#60A5FA", "Booking Form Signed": "#818CF8", "First Payment Paid": "#A78BFA", "MOU Signed": "#F59E0B", "SPA Signed": "#F97316", "Handover": "#FB923C", "Commission Earned": "#34D399", "Commission Collected": "#059669", "Cancelled": "#EF4444", "Booked": "#818CF8" };
   const TYPE_COLOR = { "Off-Plan": "#2563EB", "Secondary": "#D97706", "Rental": "#059669" };
 
@@ -2957,6 +2957,83 @@ function PerformancePage({ deals, setPage }) {
 
   // ── Top Deals ───────────────────────────────────
   const topDeals = [...deals].sort((a, b) => (b.expected_commission_net || 0) - (a.expected_commission_net || 0)).slice(0, 6);
+
+  // ── Financial P&L from transactions ─────────────
+  const accountById = new Map((accounts || []).map(a => [a.id, a]));
+  const dealPnlMap = new Map();
+  deals.forEach(d => {
+    const dTxns = (txns || []).filter(t => !t.isVoid && t.deal_id === d.id);
+    const cashIn = dTxns.filter(t => t.txnType === "SR").reduce((s, t) =>
+      s + (t.lines || []).reduce((ss, l) => {
+        const a = accountById.get(l.accountId);
+        return ss + (a && (a.isBank || a.isCash || a.code === "1001" || a.code === "1002") ? (l.debit || 0) : 0);
+      }, 0), 0);
+    const brokerPaid = dTxns.filter(t => t.txnType === "BP").reduce((s, t) =>
+      s + (t.lines || []).reduce((ss, l) => {
+        const a = accountById.get(l.accountId);
+        return ss + (a && a.type === "Expense" ? (l.debit || 0) : 0);
+      }, 0), 0);
+    dealPnlMap.set(d.id, { cashIn, brokerPaid, net: cashIn - brokerPaid });
+  });
+  const topPnlDeals = [...deals]
+    .filter(d => (d.expected_commission_net || 0) > 0)
+    .sort((a, b) => (b.expected_commission_net || 0) - (a.expected_commission_net || 0))
+    .slice(0, 15)
+    .map(d => ({ ...d, ...dealPnlMap.get(d.id) }));
+
+  // ── Enhanced broker data (adds broker paid from BP txns) ─────
+  const enhBrokerMap = new Map();
+  deals.forEach(d => {
+    const key = d.broker_id || d.broker_name || "__unassigned__";
+    const name = d.broker_name || "— Unassigned —";
+    if (!enhBrokerMap.has(key)) enhBrokerMap.set(key, { name, deals: 0, value: 0, commission: 0, collected: 0, brokerPaid: 0, commPcts: [] });
+    const b = enhBrokerMap.get(key);
+    b.deals++; b.value += (d.transaction_value || 0); b.commission += (d.expected_commission_net || 0);
+    if (d.stage === "Commission Collected") b.collected++;
+    if (d.commission_pct) b.commPcts.push(parseFloat(d.commission_pct));
+    const pnl = dealPnlMap.get(d.id);
+    if (pnl) b.brokerPaid += pnl.brokerPaid;
+  });
+  const enhBrokerPerf = [...enhBrokerMap.values()]
+    .map(b => ({ ...b, netContribution: b.commission - b.brokerPaid, avgCommPct: b.commPcts.length > 0 ? b.commPcts.reduce((s, p) => s + p, 0) / b.commPcts.length : 0 }))
+    .sort((a, b) => b.commission - a.commission);
+
+  // ── Enhanced developer data ──────────────────────
+  const enhDevMap = new Map();
+  deals.forEach(d => {
+    if (!d.developer) return;
+    if (!enhDevMap.has(d.developer)) enhDevMap.set(d.developer, { name: d.developer, deals: 0, value: 0, commission: 0, collected: 0, commPcts: [], uncollected: 0 });
+    const dv = enhDevMap.get(d.developer);
+    dv.deals++; dv.value += (d.transaction_value || 0); dv.commission += (d.expected_commission_net || 0);
+    if (d.commission_pct) dv.commPcts.push(parseFloat(d.commission_pct));
+    if (d.stage === "Commission Collected") dv.collected++;
+    else if (d.stage !== "Cancelled") dv.uncollected += (d.expected_commission_net || 0);
+  });
+  const enhDevPerf = [...enhDevMap.values()]
+    .map(dv => ({ ...dv, avgCommPct: dv.commPcts.length > 0 ? dv.commPcts.reduce((s, p) => s + p, 0) / dv.commPcts.length : 0, convRate: dv.deals > 0 ? Math.round((dv.collected / dv.deals) * 100) : 0 }))
+    .sort((a, b) => b.commission - a.commission);
+
+  // ── Expense control (this month vs prev month vs 3M avg vs budget) ──
+  const now = new Date(todayStr() + "T12:00:00");
+  const mFmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const currMonth = mFmt(now);
+  const prevMDate = new Date(now); prevMDate.setMonth(prevMDate.getMonth() - 1);
+  const prevMonth = mFmt(prevMDate);
+  const last3 = [0, 1, 2].map(i => { const d = new Date(now); d.setMonth(d.getMonth() - i); return mFmt(d); });
+  const currQ = Math.floor(now.getMonth() / 3) + 1;
+  const qBudget = (budgets || []).find(b => b.id === `budget-${now.getFullYear()}-Q${currQ}`);
+  const budgetByCode = qBudget ? Object.fromEntries(qBudget.lines.map(l => [l.accountCode, Math.round(l.amount / 3)])) : {};
+  const monthExpByAcc = (accId, prefix) =>
+    (txns || []).filter(t => !t.isVoid && (t.date || "").startsWith(prefix))
+      .reduce((s, t) => s + (t.lines || []).reduce((ss, l) => l.accountId === accId && l.debit > 0 ? ss + l.debit : ss, 0), 0);
+  const expenseAccounts = (accounts || []).filter(a => a.type === "Expense").sort((a, b) => a.code.localeCompare(b.code));
+  const expenseControl = expenseAccounts.map(acc => {
+    const thisM = monthExpByAcc(acc.id, currMonth);
+    const prevM = monthExpByAcc(acc.id, prevMonth);
+    const avg3M = last3.reduce((s, m) => s + monthExpByAcc(acc.id, m), 0) / 3;
+    const budget = budgetByCode[acc.code] || 0;
+    return { acc, thisM, prevM, avg3M, budget, vsLast: prevM > 0 ? ((thisM - prevM) / prevM) * 100 : null, vsBudget: budget > 0 ? ((thisM - budget) / budget) * 100 : null };
+  }).filter(r => r.thisM > 0 || r.prevM > 0);
 
   const kpiTile = (label, value, sub, accent, wide) => (
     <div style={{ background: "#fff", border: "1px solid #EAECF0", borderRadius: 14, boxShadow: "0 1px 3px rgba(16,24,40,.06)", padding: "20px 20px 16px", position: "relative", overflow: "hidden", gridColumn: wide ? "span 2" : undefined }}>
@@ -3099,26 +3176,70 @@ function PerformancePage({ deals, setPage }) {
 
       <div style={{ marginBottom: 16 }} />
 
-      {/* ── Developer Leaderboard + Top Deals ── */}
+      {/* ── Deal Profitability Table ── */}
+      {sectionCard("Deal Profitability", "Top deals — expected commission vs cash collected vs broker paid vs net retained",
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: "#F9FAFB" }}>
+                {["Property", "Stage", "Broker", "Expected Comm.", "Cash Collected", "Broker Paid", "Net Retained", "Margin"].map(h => (
+                  <th key={h} style={{ ...C.th, textAlign: ["Expected Comm.", "Cash Collected", "Broker Paid", "Net Retained", "Margin"].includes(h) ? "right" : "left" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {topPnlDeals.map((d, i) => {
+                const margin = d.cashIn > 0 ? ((d.net / d.cashIn) * 100) : null;
+                return (
+                  <tr key={d.id} style={{ background: i % 2 === 0 ? "#fff" : "#FAFAFA", borderTop: "1px solid #F2F4F7" }}>
+                    <td style={C.td}><div style={{ fontWeight: 600, color: NAVY }}>{d.property_name || "—"}</div>{d.unit_no && <div style={{ fontSize: 11, color: "#9CA3AF" }}>Unit {d.unit_no}</div>}</td>
+                    <td style={C.td}><span style={C.badge(d.stage?.includes("Collected") ? "success" : d.stage?.includes("Earned") ? "gold" : "neutral")}>{d.stage}</span></td>
+                    <td style={C.td}>{d.broker_name || <span style={{ color: "#9CA3AF" }}>—</span>}</td>
+                    <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(d.expected_commission_net || 0)}</td>
+                    <td style={{ ...C.td, textAlign: "right", color: d.cashIn > 0 ? "#059669" : "#9CA3AF" }}>{d.cashIn > 0 ? fmtAED(d.cashIn) : "—"}</td>
+                    <td style={{ ...C.td, textAlign: "right", color: d.brokerPaid > 0 ? "#D97706" : "#9CA3AF" }}>{d.brokerPaid > 0 ? fmtAED(d.brokerPaid) : "—"}</td>
+                    <td style={{ ...C.td, textAlign: "right", fontWeight: 700, color: d.net > 0 ? "#059669" : d.net < 0 ? "#DC2626" : "#9CA3AF" }}>{d.cashIn > 0 ? fmtAED(d.net) : "—"}</td>
+                    <td style={{ ...C.td, textAlign: "right" }}>
+                      {margin !== null ? <span style={{ fontWeight: 700, color: margin >= 50 ? "#059669" : margin >= 25 ? "#D97706" : "#DC2626" }}>{margin.toFixed(0)}%</span> : <span style={{ color: "#9CA3AF" }}>—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+              {topPnlDeals.length === 0 && <tr><td colSpan={8} style={{ ...C.td, textAlign: "center", padding: 30, color: "#9CA3AF" }}>No deals with commission data yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div style={{ marginBottom: 16 }} />
+
+      {/* ── Developer Performance + Top Deals ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1.1fr", gap: 16, marginBottom: 16 }}>
-        {sectionCard("Developer Leaderboard", "Ranked by total transaction value",
-          <div>
-            {devPerf.map((d, i) => (
-              <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: i < devPerf.length - 1 ? "1px solid #F3F4F6" : "none" }}>
-                <div style={{ width: 28, height: 28, borderRadius: 8, background: i === 0 ? "linear-gradient(135deg, #C9A044, #F5D78E)" : "#F3F4F6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: i === 0 ? "#fff" : "#6B7280", flexShrink: 0 }}>{i + 1}</div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: NAVY, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</div>
-                  <div style={{ height: 5, borderRadius: 999, background: "#F3F4F6", overflow: "hidden", marginTop: 5 }}>
-                    <div style={{ width: `${Math.max(3, (d.value / maxDevValue) * 100)}%`, height: "100%", background: i === 0 ? GOLD : "#2563EB", borderRadius: 999 }} />
-                  </div>
-                </div>
-                <div style={{ textAlign: "right", flexShrink: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#2563EB" }}>{d.deals} deal{d.deals !== 1 ? "s" : ""}</div>
-                  <div style={{ fontSize: 11, color: "#6B7280" }}>{fmtAED(d.value)}</div>
-                </div>
-              </div>
-            ))}
-            {devPerf.length === 0 && <div style={{ color: "#9CA3AF", fontSize: 13, textAlign: "center", padding: "20px 0" }}>No developer data.</div>}
+        {sectionCard("Developer Performance", "Ranked by expected commission — conversion rate and uncollected exposure",
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead><tr style={{ background: "#F9FAFB" }}>
+                {["#", "Developer", "Deals", "Conv. %", "Avg Comm. %", "Total Comm.", "Uncollected"].map(h => (
+                  <th key={h} style={{ ...C.th, fontSize: 11, textAlign: ["Total Comm.", "Uncollected", "Avg Comm. %", "Conv. %"].includes(h) ? "right" : "left" }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {enhDevPerf.map((d, i) => (
+                  <tr key={d.name} style={{ background: i % 2 === 0 ? "#fff" : "#FAFAFA", borderTop: "1px solid #F2F4F7" }}>
+                    <td style={{ ...C.td, width: 28 }}>
+                      <div style={{ width: 22, height: 22, borderRadius: 6, background: i === 0 ? "linear-gradient(135deg,#C9A044,#F5D78E)" : "#F3F4F6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: i === 0 ? "#fff" : "#6B7280" }}>{i + 1}</div>
+                    </td>
+                    <td style={{ ...C.td, fontWeight: 600, color: NAVY, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</td>
+                    <td style={{ ...C.td, textAlign: "right" }}>{d.deals}</td>
+                    <td style={{ ...C.td, textAlign: "right", fontWeight: 600, color: d.convRate >= 50 ? "#059669" : "#D97706" }}>{d.convRate}%</td>
+                    <td style={{ ...C.td, textAlign: "right", color: "#6B7280" }}>{d.avgCommPct > 0 ? `${d.avgCommPct.toFixed(1)}%` : "—"}</td>
+                    <td style={{ ...C.td, textAlign: "right", fontWeight: 700, color: "#059669" }}>{fmtAED(d.commission)}</td>
+                    <td style={{ ...C.td, textAlign: "right", color: d.uncollected > 0 ? "#D97706" : "#9CA3AF", fontWeight: d.uncollected > 0 ? 600 : 400 }}>{d.uncollected > 0 ? fmtAED(d.uncollected) : "—"}</td>
+                  </tr>
+                ))}
+                {enhDevPerf.length === 0 && <tr><td colSpan={7} style={{ ...C.td, textAlign: "center", padding: 20, color: "#9CA3AF" }}>No developer data.</td></tr>}
+              </tbody>
+            </table>
           </div>
         )}
 
@@ -3143,43 +3264,103 @@ function PerformancePage({ deals, setPage }) {
         )}
       </div>
 
-      {/* ── Additional KPIs: Broker Summary Table ── */}
-      {sectionCard("Broker Summary Table", "Full breakdown of all active brokers",
+      <div style={{ marginBottom: 16 }} />
+
+      {/* ── Expense Control ── */}
+      {sectionCard(
+        "Expense Control",
+        `This month vs last month vs 3-month average${qBudget ? " vs monthly budget (quarterly ÷ 3)" : " — no budget set for current quarter"}`,
+        <div style={{ overflowX: "auto" }}>
+          {expenseControl.length === 0
+            ? <div style={{ textAlign: "center", padding: 30, color: "#9CA3AF", fontSize: 13 }}>No expense activity recorded yet.</div>
+            : <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: "#F9FAFB" }}>
+                    {["Account", "This Month", "Last Month", "vs Last", "3M Avg", ...(qBudget ? ["Monthly Budget", "vs Budget"] : [])].map(h => (
+                      <th key={h} style={{ ...C.th, textAlign: h === "Account" ? "left" : "right" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {expenseControl.map((r, i) => (
+                    <tr key={r.acc.id} style={{ background: i % 2 === 0 ? "#fff" : "#FAFAFA", borderTop: "1px solid #F2F4F7" }}>
+                      <td style={C.td}><span style={{ fontFamily: "monospace", fontSize: 11, color: "#6B7280", marginRight: 6 }}>{r.acc.code}</span>{r.acc.name}</td>
+                      <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{r.thisM > 0 ? fmtAED(r.thisM) : <span style={{ color: "#9CA3AF" }}>—</span>}</td>
+                      <td style={{ ...C.td, textAlign: "right", color: "#6B7280" }}>{r.prevM > 0 ? fmtAED(r.prevM) : <span style={{ color: "#9CA3AF" }}>—</span>}</td>
+                      <td style={{ ...C.td, textAlign: "right" }}>
+                        {r.vsLast !== null ? <span style={{ fontWeight: 600, color: r.vsLast > 20 ? "#DC2626" : r.vsLast > 0 ? "#D97706" : "#059669" }}>{r.vsLast > 0 ? "+" : ""}{r.vsLast.toFixed(0)}%</span> : <span style={{ color: "#9CA3AF" }}>—</span>}
+                      </td>
+                      <td style={{ ...C.td, textAlign: "right", color: "#6B7280" }}>{r.avg3M > 0 ? fmtAED(Math.round(r.avg3M)) : "—"}</td>
+                      {qBudget && <>
+                        <td style={{ ...C.td, textAlign: "right", color: "#6B7280" }}>{r.budget > 0 ? fmtAED(r.budget) : <span style={{ color: "#9CA3AF" }}>—</span>}</td>
+                        <td style={{ ...C.td, textAlign: "right" }}>
+                          {r.vsBudget !== null ? <span style={{ fontWeight: 700, color: r.vsBudget >= 100 ? "#DC2626" : r.vsBudget >= 80 ? "#D97706" : "#059669" }}>{r.vsBudget > 0 ? "+" : ""}{r.vsBudget.toFixed(0)}%</span> : <span style={{ color: "#9CA3AF" }}>—</span>}
+                        </td>
+                      </>}
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background: "#F0F9FF", fontWeight: 700, borderTop: "2px solid #BFDBFE" }}>
+                    <td style={C.td}>TOTAL</td>
+                    <td style={{ ...C.td, textAlign: "right" }}>{fmtAED(expenseControl.reduce((s, r) => s + r.thisM, 0))}</td>
+                    <td style={{ ...C.td, textAlign: "right" }}>{fmtAED(expenseControl.reduce((s, r) => s + r.prevM, 0))}</td>
+                    <td style={{ ...C.td, textAlign: "right" }}>—</td>
+                    <td style={{ ...C.td, textAlign: "right" }}>{fmtAED(Math.round(expenseControl.reduce((s, r) => s + r.avg3M, 0)))}</td>
+                    {qBudget && <>
+                      <td style={{ ...C.td, textAlign: "right" }}>{fmtAED(expenseControl.reduce((s, r) => s + r.budget, 0))}</td>
+                      <td style={{ ...C.td, textAlign: "right" }}>—</td>
+                    </>}
+                  </tr>
+                </tfoot>
+              </table>
+          }
+        </div>,
+        <button style={C.btn("ghost", true)} onClick={() => setPage("budget")}>Open Budget →</button>
+      )}
+
+      <div style={{ marginBottom: 16 }} />
+
+      {/* ── Enhanced Broker Performance Table ── */}
+      {sectionCard("Broker Performance", "Full breakdown — commission generated, broker fees paid, and net contribution to company",
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: "#F9FAFB" }}>
-                {["Broker", "Deals", "Collected", "Conv. Rate", "Transaction Value", "Expected Commission"].map(h => (
+                {["Broker", "Deals", "Collected", "Conv. %", "Avg Comm. %", "Expected Comm.", "Broker Paid", "Net Contribution"].map(h => (
                   <th key={h} style={{ ...C.th, textAlign: h === "Broker" ? "left" : "right" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {allBrokerPerf.map((b, i) => (
-                <tr key={b.name} style={{ background: i % 2 === 0 ? "#fff" : "#FAFAFA" }}>
-                  <td style={{ ...C.td, fontWeight: 600, color: b.name === "— Unassigned —" ? "#9CA3AF" : "inherit" }}>{b.name}</td>
-                  <td style={{ ...C.td, textAlign: "right" }}>{b.deals}</td>
-                  <td style={{ ...C.td, textAlign: "right" }}>{b.collected}</td>
-                  <td style={{ ...C.td, textAlign: "right", color: b.deals > 0 && Math.round((b.collected / b.deals) * 100) >= 50 ? "#059669" : "#D97706", fontWeight: 600 }}>
-                    {b.deals > 0 ? `${Math.round((b.collected / b.deals) * 100)}%` : "—"}
-                  </td>
-                  <td style={{ ...C.td, textAlign: "right" }}>{fmtAED(b.value)}</td>
-                  <td style={{ ...C.td, textAlign: "right", fontWeight: 700, color: "#059669" }}>{fmtAED(b.commission)}</td>
-                </tr>
-              ))}
-              {allBrokerPerf.length === 0 && (
-                <tr><td colSpan={6} style={{ ...C.td, textAlign: "center", padding: 30, color: "#9CA3AF" }}>No broker data available.</td></tr>
-              )}
+              {enhBrokerPerf.map((b, i) => {
+                const convPct = b.deals > 0 ? Math.round((b.collected / b.deals) * 100) : 0;
+                return (
+                  <tr key={b.name} style={{ background: i % 2 === 0 ? "#fff" : "#FAFAFA", borderTop: "1px solid #F2F4F7" }}>
+                    <td style={{ ...C.td, fontWeight: 600, color: b.name === "— Unassigned —" ? "#9CA3AF" : NAVY }}>{b.name}</td>
+                    <td style={{ ...C.td, textAlign: "right" }}>{b.deals}</td>
+                    <td style={{ ...C.td, textAlign: "right" }}>{b.collected}</td>
+                    <td style={{ ...C.td, textAlign: "right", fontWeight: 600, color: convPct >= 50 ? "#059669" : "#D97706" }}>{b.deals > 0 ? `${convPct}%` : "—"}</td>
+                    <td style={{ ...C.td, textAlign: "right", color: "#6B7280" }}>{b.avgCommPct > 0 ? `${b.avgCommPct.toFixed(1)}%` : "—"}</td>
+                    <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(b.commission)}</td>
+                    <td style={{ ...C.td, textAlign: "right", color: b.brokerPaid > 0 ? "#D97706" : "#9CA3AF" }}>{b.brokerPaid > 0 ? fmtAED(b.brokerPaid) : "—"}</td>
+                    <td style={{ ...C.td, textAlign: "right", fontWeight: 700, color: b.netContribution > 0 ? "#059669" : "#DC2626" }}>{fmtAED(b.netContribution)}</td>
+                  </tr>
+                );
+              })}
+              {enhBrokerPerf.length === 0 && <tr><td colSpan={8} style={{ ...C.td, textAlign: "center", padding: 30, color: "#9CA3AF" }}>No broker data available.</td></tr>}
             </tbody>
-            {allBrokerPerf.length > 0 && (
+            {enhBrokerPerf.length > 0 && (
               <tfoot>
-                <tr style={{ background: "#F9FAFB", fontWeight: 700 }}>
+                <tr style={{ background: "#F0F9FF", fontWeight: 700, borderTop: "2px solid #BFDBFE" }}>
                   <td style={C.td}>TOTAL</td>
-                  <td style={{ ...C.td, textAlign: "right" }}>{allBrokerPerf.reduce((s, b) => s + b.deals, 0)}</td>
-                  <td style={{ ...C.td, textAlign: "right" }}>{allBrokerPerf.reduce((s, b) => s + b.collected, 0)}</td>
+                  <td style={{ ...C.td, textAlign: "right" }}>{enhBrokerPerf.reduce((s, b) => s + b.deals, 0)}</td>
+                  <td style={{ ...C.td, textAlign: "right" }}>{enhBrokerPerf.reduce((s, b) => s + b.collected, 0)}</td>
                   <td style={{ ...C.td, textAlign: "right" }}>—</td>
-                  <td style={{ ...C.td, textAlign: "right" }}>{fmtAED(allBrokerPerf.reduce((s, b) => s + b.value, 0))}</td>
-                  <td style={{ ...C.td, textAlign: "right", color: "#059669" }}>{fmtAED(allBrokerPerf.reduce((s, b) => s + b.commission, 0))}</td>
+                  <td style={{ ...C.td, textAlign: "right" }}>—</td>
+                  <td style={{ ...C.td, textAlign: "right" }}>{fmtAED(enhBrokerPerf.reduce((s, b) => s + b.commission, 0))}</td>
+                  <td style={{ ...C.td, textAlign: "right", color: "#D97706" }}>{fmtAED(enhBrokerPerf.reduce((s, b) => s + b.brokerPaid, 0))}</td>
+                  <td style={{ ...C.td, textAlign: "right", color: "#059669" }}>{fmtAED(enhBrokerPerf.reduce((s, b) => s + b.netContribution, 0))}</td>
                 </tr>
               </tfoot>
             )}
@@ -4884,7 +5065,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       case "settings": return <SettingsPage {...shared} />;
       case "futureExpenses": return <FutureExpensesPage {...shared} />;
       case "users": return <SecurityAdminPage userRole={userRole} userEmail={userEmail} settings={settings} />;
-      case "banana2": return <PerformancePage deals={deals} setPage={setPage} />;
+      case "banana2": return <PerformancePage deals={deals} txns={txns} accounts={accounts} budgets={budgets} setPage={setPage} />;
       default: return <div style={{ textAlign: "center", padding: 60, color: "#6B7280" }}>🚧 Coming soon</div>;
     }
   };
