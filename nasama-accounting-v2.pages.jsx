@@ -766,6 +766,17 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, user
   const [sortKey, setSortKey] = useState("property");
   const [sortDir, setSortDir] = useState("asc");
   const [dealMutationLabel, setDealMutationLabel] = useState("");
+  const [invoicedDealIds, setInvoicedDealIds] = useState(new Set());
+  useEffect(() => {
+    const unsub = db.collection("invoices").onSnapshot(snap => {
+      const ids = new Set();
+      snap.docs.forEach(doc => {
+        (doc.data().lineItems || []).forEach(li => { if (li.dealId) ids.add(li.dealId); });
+      });
+      setInvoicedDealIds(ids);
+    }, err => console.error("Invoice listener error:", err));
+    return () => unsub();
+  }, []);
   const empty = { type: "Off-Plan", stage: "Lead", property_name: "", developer: "", developer_id: "", broker_id: "", broker_name: "", customer_id: "", client_name: "", transaction_value: 0, commission_pct: "", expected_commission_net: 0, vat_applicable: true, unit_no: "", notes: "", created_at: todayStr() };
   const pipelineSeedDeals = window.PASTED_DEALS || [];
   const dealWriteState = writeMeta?.deals || { status: "idle" };
@@ -1015,11 +1026,14 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, user
             <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(d.expected_commission_net || 0)}</td>
             <td style={C.td}>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {hasPermission(userRole, 'sales.create') && (
-                  <button style={{ ...C.btn("secondary", true), borderColor: GOLD, color: GOLD_D }} onClick={e => { e.stopPropagation(); setInvoiceDeal(d); setPage("invoices"); }}>
-                    Invoice
-                  </button>
-                )}
+                {hasPermission(userRole, 'sales.create') && (() => {
+                  const isDone = d.stage === "Commission Collected" || d.stage === "Cancelled";
+                  if (isDone) return null;
+                  if (invoicedDealIds.has(d.id)) return (
+                    <span title="An invoice already exists for this deal" style={{ fontSize: 11, color: "#059669", padding: "4px 8px", borderRadius: 4, border: "1px solid #D1FAE5", background: "#ECFDF5", whiteSpace: "nowrap", cursor: "default" }}>✓ Invoiced</span>
+                  );
+                  return <button style={{ ...C.btn("secondary", true), borderColor: GOLD, color: GOLD_D }} onClick={e => { e.stopPropagation(); setInvoiceDeal(d); setPage("invoices"); }}>Invoice</button>;
+                })()}
                 {hasPermission(userRole, 'sales.edit') && <button style={C.btn("secondary", true)} onClick={e => { e.stopPropagation(); setEdit(d); setShow(true); }}>Edit</button>}
                 {hasPermission(userRole, 'sales.edit') && <button style={C.btn("danger", true)} onClick={e => { e.stopPropagation(); handleDelete(d); }}>Delete</button>}
               </div>
