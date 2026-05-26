@@ -888,7 +888,7 @@ function InvoicePage({ customers, developers, deals, settings, userEmail, userRo
               <tr style={{ background: "#F9FAFB", borderBottom: "1px solid #EAECF0" }}>
                 <th style={C.th}><button style={sortBtnStyle("number")} onClick={() => toggleSort("number")}>Invoice No.{arrow("number")}</button></th>
                 <th style={C.th}><button style={sortBtnStyle("date")} onClick={() => toggleSort("date")}>Date{arrow("date")}</button></th>
-                {[["Developer / Client",""],["Excl. VAT","right"],["VAT","right"],["Total Incl. VAT","right"],["Status",""],["Actions",""]].map(([h,a]) => (
+                {[["Developer / Client",""],["Broker",""],["Excl. VAT","right"],["VAT","right"],["Total Incl. VAT","right"],["Status",""],["Actions",""]].map(([h,a]) => (
                   <th key={h} style={{ ...C.th, textAlign: a || "left" }}>{h}</th>
                 ))}
               </tr>
@@ -899,6 +899,11 @@ function InvoicePage({ customers, developers, deals, settings, userEmail, userRo
                   <td style={C.td}><strong style={{ color: "#C9A044", fontFamily: "monospace", fontSize: 13 }}>{inv.invoiceNumber}</strong></td>
                   <td style={C.td}>{invFmtDate(inv.invoiceDate)}</td>
                   <td style={C.td}>{inv.invoicedTo?.companyName || "—"}</td>
+                  <td style={C.td}>{(() => {
+                    const ids = [...new Set((inv.lineItems || []).map(li => li.dealId).filter(Boolean))];
+                    const names = [...new Set(ids.map(id => (deals || []).find(d => d.id === id)?.broker_name).filter(Boolean))];
+                    return names.length > 0 ? names.join(", ") : <span style={{ color: "#9CA3AF" }}>—</span>;
+                  })()}</td>
                   <td style={{ ...C.td, textAlign: "right" }}>{invFmt(inv.totals?.excl)}</td>
                   <td style={{ ...C.td, textAlign: "right", color: "#6B7280" }}>{invFmt(inv.totals?.vat)}</td>
                   <td style={{ ...C.td, textAlign: "right", fontWeight: 700, color: "#C9A044" }}>{invFmt(inv.totals?.incl)}</td>
