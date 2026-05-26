@@ -914,6 +914,11 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, user
             <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(d.expected_commission_net || 0)}</td>
             <td style={C.td}>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {hasPermission(userRole, 'sales.create') && (
+                  <button style={{ ...C.btn("secondary", true), borderColor: GOLD, color: GOLD_D }} onClick={e => { e.stopPropagation(); shared.setInvoiceDeal(d); setPage("invoices"); }}>
+                    Invoice
+                  </button>
+                )}
                 {hasPermission(userRole, 'sales.edit') && <button style={C.btn("secondary", true)} onClick={e => { e.stopPropagation(); setEdit(d); setShow(true); }}>Edit</button>}
                 {hasPermission(userRole, 'sales.edit') && <button style={C.btn("danger", true)} onClick={e => { e.stopPropagation(); handleDelete(d); }}>Delete</button>}
               </div>
@@ -4443,6 +4448,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
   const [developers, setDevelopers] = useState(() => ls_get("developers", SEED_DEVELOPERS));
   const [settings, setSettings] = useState(() => ls_get("settings", { company: "Nasama Properties Company LLC", trn: "", vatRate: 5, currency: "AED", openingBalance: 0, openingBalanceDate: DEFAULT_REPORTING_START_DATE }));
   const [page, setPage] = useState(() => canAccessPage(userAccess || userRole, "dashboard") ? "dashboard" : "deals");
+  const [invoiceDeal, setInvoiceDeal] = useState(null);
   const [dark, setDark] = useState(false);
   const [fbLoaded, setFbLoaded] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -4665,7 +4671,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       case "deals": return <DealsPage {...shared} />;
       case "auditDeals": return <AuditingDealsPage dealStageChanges={dealStageChanges} userRole={accessSubject} />;
       case "receipts": return <ReceiptsPage {...shared} />;
-      case "invoices": return <InvoicePage customers={customers} developers={developers} deals={deals} settings={settings} userEmail={userEmail} userRole={accessSubject} />;
+      case "invoices": return <InvoicePage customers={customers} developers={developers} deals={deals} settings={settings} userEmail={userEmail} userRole={accessSubject} preselectedDeal={invoiceDeal} onClearPreselected={() => setInvoiceDeal(null)} />;
       case "payments": return <PaymentsPage {...shared} />;
       case "customers": return <CustomersPage {...shared} />;
       case "brokers": return <BrokersPage {...shared} />;
