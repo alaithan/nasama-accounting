@@ -296,6 +296,41 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     { label: "Avg. Pending / Deal", value: avgOpenDealCommission, sub: "Avg. expected commission per open deal", accent: "#2563EB" },
   ];
 
+  // ── Commission Aging & Management Alerts ─────────────────────────────────
+  const todayMs = new Date(todayStr() + "T12:00:00").getTime();
+  const pendingDeals = (deals || []).filter(d => !["Commission Collected", "Cancelled"].includes(d.stage));
+  const dealsOverdue60 = pendingDeals.filter(d => {
+    if (!d.created_at) return false;
+    return Math.floor((todayMs - new Date(d.created_at + "T12:00:00").getTime()) / 86400000) > 60;
+  });
+  const dealsEarnedNoReceipt = (deals || []).filter(d =>
+    d.stage === "Commission Earned" &&
+    !txns.some(t => t.deal_id === d.id && t.txnType === "SR" && !t.isVoid)
+  );
+  const mgmtAlerts = [];
+  if (dealsOverdue60.length > 0) {
+    const tot = dealsOverdue60.reduce((s, d) => s + (d.expected_commission_net || 0), 0);
+    mgmtAlerts.push({ level: tot > 100000 ? "critical" : "warning", title: `${dealsOverdue60.length} deal${dealsOverdue60.length !== 1 ? "s" : ""} overdue — over 60 days in pipeline`, detail: `${fmtAED(tot)} in expected commission has been in the pipeline for more than 60 days without collection. Chase these deals to protect cash flow.`, action: { label: "View Deals", page: "deals" } });
+  }
+  if (dealsEarnedNoReceipt.length > 0) {
+    const tot = dealsEarnedNoReceipt.reduce((s, d) => s + (d.expected_commission_net || 0), 0);
+    mgmtAlerts.push({ level: "warning", title: `${dealsEarnedNoReceipt.length} deal${dealsEarnedNoReceipt.length !== 1 ? "s" : ""} at Commission Earned with no receipt recorded`, detail: `${fmtAED(tot)} has been marked as earned but no cash receipt exists. Confirm collection or update the deal stage.`, action: { label: "Record Receipt", page: "receipts" } });
+  }
+  const AGING_BUCKETS = [
+    { label: "0–30 days",  min: 0,  max: 30,       color: "#059669", bg: "#ECFDF5" },
+    { label: "31–60 days", min: 31, max: 60,       color: "#2563EB", bg: "#EFF6FF" },
+    { label: "61–90 days", min: 61, max: 90,       color: "#D97706", bg: "#FFFBEB" },
+    { label: "90+ days",   min: 91, max: Infinity, color: "#DC2626", bg: "#FEF2F2" },
+  ];
+  const agingData = AGING_BUCKETS.map(bucket => {
+    const bDeals = pendingDeals.filter(d => {
+      if (!d.created_at) return false;
+      const days = Math.floor((todayMs - new Date(d.created_at + "T12:00:00").getTime()) / 86400000);
+      return days >= bucket.min && days <= bucket.max;
+    });
+    return { ...bucket, count: bDeals.length, total: bDeals.reduce((s, d) => s + (d.expected_commission_net || 0), 0) };
+  });
+
   return <div>
     <PageHeader title="Dashboard" sub={`Nasama Properties — ${new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}`}>
       <button style={C.btn("ghost", true)} onClick={() => setPage("reports")}>Financial Reports</button>
@@ -375,6 +410,21 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 14, marginBottom: 20 }}>
       {pipelineMetrics.map(item => <div key={item.label}>{metricTile({ ...item })}</div>)}
     </div>
+
+    {/* ── Management Alerts Panel ── */}
+    {mgmtAlerts.length > 0 && <div style={{ ...C.card, marginBottom: 20 }}>
+      {sectionTitle("Management Alerts", "Action required — commission and pipeline issues detected")}
+      <div style={{ padding: "4px 18px 14px" }}>
+        {mgmtAlerts.map((alert, i) => <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 0", borderBottom: i < mgmtAlerts.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+          <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>{alert.level === "critical" ? "🔴" : "⚠️"}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 13, color: alert.level === "critical" ? "#991B1B" : "#92400E" }}>{alert.title}</div>
+            <div style={{ fontSize: 12, color: "#6B7280", marginTop: 3, lineHeight: 1.5 }}>{alert.detail}</div>
+          </div>
+          {alert.action && <button onClick={() => setPage(alert.action.page)} style={{ flexShrink: 0, fontSize: 11, padding: "5px 12px", borderRadius: 6, border: "1px solid #E5E7EB", background: "white", color: NAVY, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>{alert.action.label}</button>}
+        </div>)}
+      </div>
+    </div>}
 
     <div style={{ display: "grid", gridTemplateColumns: isTablet ? "1fr" : "1.1fr 1.1fr 0.9fr", gap: 16, marginBottom: 16 }}>
       <div style={C.card}>
@@ -520,6 +570,57 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
         </div>
       </div>
     </div>
+
+    {/* ── Commission Collection Aging ── */}
+    {pendingDeals.length > 0 && <div style={{ ...C.card, marginBottom: 16 }}>
+      {sectionTitle("Commission Collection Aging", "Open deals by time in pipeline — sorted oldest first", "Open Deals", "deals")}
+      <div style={{ padding: "12px 18px 4px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, marginBottom: 20 }}>
+          {agingData.map(bucket => <div key={bucket.label} style={{ padding: "14px 16px", borderRadius: 10, background: bucket.bg, border: `1px solid ${bucket.color}33` }}>
+            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: bucket.color, fontWeight: 700, marginBottom: 8 }}>{bucket.label}</div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: bucket.color, lineHeight: 1 }}>{bucket.count}</div>
+            <div style={{ fontSize: 11, color: "#6B7280", marginTop: 2 }}>deals</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginTop: 10 }}>{fmtAED(bucket.total)}</div>
+            <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 1 }}>expected</div>
+          </div>)}
+        </div>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead><tr>
+            <th style={C.th}>Property</th>
+            <th style={C.th}>Client</th>
+            <th style={C.th}>Stage</th>
+            <th style={C.th}>Broker</th>
+            <th style={{ ...C.th, textAlign: "right" }}>Commission</th>
+            <th style={{ ...C.th, textAlign: "right" }}>Age</th>
+            <th style={C.th}>Bucket</th>
+          </tr></thead>
+          <tbody>
+            {pendingDeals
+              .map(d => {
+                const days = d.created_at ? Math.floor((todayMs - new Date(d.created_at + "T12:00:00").getTime()) / 86400000) : null;
+                const bucket = days === null ? null : days <= 30 ? AGING_BUCKETS[0] : days <= 60 ? AGING_BUCKETS[1] : days <= 90 ? AGING_BUCKETS[2] : AGING_BUCKETS[3];
+                return { ...d, days, bucket };
+              })
+              .sort((a, b) => (b.days || 0) - (a.days || 0))
+              .map(d => <tr key={d.id}>
+                <td style={C.td}><div style={{ fontWeight: 500 }}>{d.property_name || "—"}</div>{d.unit_no && <div style={{ fontSize: 11, color: "#9CA3AF" }}>Unit {d.unit_no}</div>}</td>
+                <td style={C.td}>{d.client_name || "—"}</td>
+                <td style={C.td}><span style={C.badge(d.stage?.includes("Earned") ? "gold" : "neutral")}>{d.stage}</span></td>
+                <td style={C.td}>{d.broker_name || "—"}</td>
+                <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(d.expected_commission_net || 0)}</td>
+                <td style={{ ...C.td, textAlign: "right" }}>
+                  {d.days !== null ? <span style={{ fontWeight: 700, color: d.bucket?.color || "#374151" }}>{d.days}d</span> : "—"}
+                </td>
+                <td style={C.td}>
+                  {d.bucket ? <span style={{ fontSize: 11, fontWeight: 700, color: d.bucket.color, background: d.bucket.bg, padding: "2px 8px", borderRadius: 4 }}>{d.bucket.label}</span> : "—"}
+                </td>
+              </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </div>}
 
     <div style={C.card}>
       <div style={{ padding: "14px 20px 13px", borderBottom: showRecentTxns ? "1px solid #EAECF0" : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, cursor: "pointer" }} onClick={() => setShowRecentTxns(v => !v)}>
@@ -3131,6 +3232,18 @@ function BudgetPage({ accounts, txns, budgets, setBudgets, userRole, userEmail }
         </div>
       </div>
 
+      {currentBudget && utilPct >= 80 && <div style={{ marginBottom: 16, padding: "12px 18px", borderRadius: 10, background: utilPct >= 100 ? "#FEF2F2" : "#FFFBEB", border: `1.5px solid ${utilPct >= 100 ? "#FECACA" : "#FDE68A"}`, display: "flex", alignItems: "center", gap: 12 }}>
+        <span style={{ fontSize: 18 }}>{utilPct >= 100 ? "🔴" : "⚠️"}</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: utilPct >= 100 ? "#991B1B" : "#92400E" }}>
+            {utilPct >= 100 ? `Over budget — ${utilPct.toFixed(0)}% used · ${fmtAED(Math.abs(totalRemaining))} over limit` : `Approaching budget limit — ${utilPct.toFixed(0)}% used · ${fmtAED(totalRemaining)} remaining`}
+          </div>
+          <div style={{ fontSize: 12, color: utilPct >= 100 ? "#B91C1C" : "#B45309", marginTop: 2 }}>
+            {utilPct >= 100 ? "Total spending has exceeded the quarterly budget. Review and defer non-essential expenses." : "80% of the quarterly budget has been used. Monitor remaining spend closely."}
+          </div>
+        </div>
+      </div>}
+
       {!currentBudget ? (
         <div style={{ ...C.card, padding: 60, textAlign: "center" }}>
           <div style={{ fontSize: 40, marginBottom: 16 }}>🎯</div>
@@ -3191,7 +3304,7 @@ function BudgetPage({ accounts, txns, budgets, setBudgets, userRole, userEmail }
                     const pct = line.amount > 0 ? (spent / line.amount) * 100 : 0;
                     const badge = statusBadge(pct);
                     return (
-                      <tr key={line.accountCode} style={{ opacity: line.amount === 0 ? 0.5 : 1 }}>
+                      <tr key={line.accountCode} style={{ opacity: line.amount === 0 ? 0.5 : 1, background: pct >= 100 ? "#FEF2F2" : pct >= 80 ? "#FFFBEB" : "transparent" }}>
                         <td style={C.td}><span style={{ fontFamily: "monospace", fontWeight: 600 }}>{acc.code}</span> — {acc.name}</td>
                         <td style={{ ...C.td, textAlign: "right" }}>{fmtAED(line.amount)}</td>
                         <td style={{ ...C.td, textAlign: "right", color: spent > 0 ? "#374151" : "#9CA3AF" }}>{fmtAED(spent)}</td>
