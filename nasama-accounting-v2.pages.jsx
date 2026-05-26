@@ -138,6 +138,22 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
   const maxPerformance = Math.max(1, ...kpis.monthlyPerformance.map(item => Math.max(item.revenue, item.expense, Math.abs(item.net))));
   const [includePending, setIncludePending] = useState(false);
   const [showRecentTxns, setShowRecentTxns] = useState(false);
+  const [dealInvoiceStatus, setDealInvoiceStatus] = useState(new Map());
+  useEffect(() => {
+    const unsub = db.collection("invoices").onSnapshot(snap => {
+      const map = new Map();
+      snap.docs.forEach(doc => {
+        const inv = doc.data();
+        const status = inv.status || "draft";
+        (inv.lineItems || []).forEach(li => {
+          if (!li.dealId) return;
+          if (!map.has(li.dealId) || status === "issued") map.set(li.dealId, status);
+        });
+      });
+      setDealInvoiceStatus(map);
+    }, err => console.error("Invoice listener (Dashboard):", err));
+    return () => unsub();
+  }, []);
 
   // Projected Runway assuming 50% collection of pipeline
   const projectedRunway = useMemo(() => {
@@ -595,6 +611,7 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
             <th style={{ ...C.th, textAlign: "right" }}>Commission</th>
             <th style={{ ...C.th, textAlign: "right" }}>Age</th>
             <th style={C.th}>Bucket</th>
+            <th style={C.th}>Invoice</th>
           </tr></thead>
           <tbody>
             {pendingDeals
@@ -604,19 +621,29 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
                 return { ...d, days, bucket };
               })
               .sort((a, b) => (b.days || 0) - (a.days || 0))
-              .map(d => <tr key={d.id}>
-                <td style={C.td}><div style={{ fontWeight: 500 }}>{d.property_name || "—"}</div>{d.unit_no && <div style={{ fontSize: 11, color: "#9CA3AF" }}>Unit {d.unit_no}</div>}</td>
-                <td style={C.td}>{d.client_name || "—"}</td>
-                <td style={C.td}><span style={C.badge(d.stage?.includes("Earned") ? "gold" : "neutral")}>{d.stage}</span></td>
-                <td style={C.td}>{d.broker_name || "—"}</td>
-                <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(d.expected_commission_net || 0)}</td>
-                <td style={{ ...C.td, textAlign: "right" }}>
-                  {d.days !== null ? <span style={{ fontWeight: 700, color: d.bucket?.color || "#374151" }}>{d.days}d</span> : "—"}
-                </td>
-                <td style={C.td}>
-                  {d.bucket ? <span style={{ fontSize: 11, fontWeight: 700, color: d.bucket.color, background: d.bucket.bg, padding: "2px 8px", borderRadius: 4 }}>{d.bucket.label}</span> : "—"}
-                </td>
-              </tr>)}
+              .map(d => {
+                const invStatus = dealInvoiceStatus.get(d.id);
+                return <tr key={d.id}>
+                  <td style={C.td}><div style={{ fontWeight: 500 }}>{d.property_name || "—"}</div>{d.unit_no && <div style={{ fontSize: 11, color: "#9CA3AF" }}>Unit {d.unit_no}</div>}</td>
+                  <td style={C.td}>{d.client_name || "—"}</td>
+                  <td style={C.td}><span style={C.badge(d.stage?.includes("Earned") ? "gold" : "neutral")}>{d.stage}</span></td>
+                  <td style={C.td}>{d.broker_name || "—"}</td>
+                  <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(d.expected_commission_net || 0)}</td>
+                  <td style={{ ...C.td, textAlign: "right" }}>
+                    {d.days !== null ? <span style={{ fontWeight: 700, color: d.bucket?.color || "#374151" }}>{d.days}d</span> : "—"}
+                  </td>
+                  <td style={C.td}>
+                    {d.bucket ? <span style={{ fontSize: 11, fontWeight: 700, color: d.bucket.color, background: d.bucket.bg, padding: "2px 8px", borderRadius: 4 }}>{d.bucket.label}</span> : "—"}
+                  </td>
+                  <td style={C.td}>
+                    {invStatus === "issued"
+                      ? <span style={{ fontSize: 11, fontWeight: 700, color: "#059669", background: "#ECFDF5", border: "1px solid #D1FAE5", padding: "2px 8px", borderRadius: 4, whiteSpace: "nowrap" }}>✓ Issued</span>
+                      : invStatus === "draft"
+                      ? <span style={{ fontSize: 11, fontWeight: 700, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", padding: "2px 8px", borderRadius: 4, whiteSpace: "nowrap" }}>Draft</span>
+                      : <span style={{ fontSize: 11, color: "#DC2626", fontWeight: 600 }}>None</span>}
+                  </td>
+                </tr>;
+              })}
           </tbody>
         </table>
       </div>
