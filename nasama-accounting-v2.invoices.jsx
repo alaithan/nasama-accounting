@@ -817,8 +817,12 @@ function InvoicePage({ customers, developers, deals, settings, userEmail, userRo
 
   const handleDelete = async (id) => {
     if (!window.confirm("Delete this invoice permanently?")) return;
-    await db.collection("invoices").doc(id).delete();
-    toast("Invoice deleted", "success");
+    try {
+      await db.collection("invoices").doc(id).delete();
+      toast("Invoice deleted", "success");
+    } catch (err) {
+      toast("Delete failed: " + err.message, "error");
+    }
   };
 
   // Editor view

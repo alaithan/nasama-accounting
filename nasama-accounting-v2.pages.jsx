@@ -1537,10 +1537,14 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
     });
   };
 
-  const handleSaveEdit = (updatedTxn) => {
-    setTxns(prev => prev.map(t => t.id === updatedTxn.id ? updatedTxn : t));
-    setEditTxnId("");
-    toast("Bank transaction updated", "success");
+  const handleSaveEdit = async (updatedTxn) => {
+    try {
+      await persistTxn(updatedTxn);
+      setEditTxnId("");
+      toast("Bank transaction updated", "success");
+    } catch (err) {
+      toast("Save failed: " + err.message, "error");
+    }
   };
 
   // Shared activity table renderer
@@ -2090,10 +2094,14 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
       toast("Transaction deleted", "success");
     } catch (err) { toast(err.message, "error"); }
   };
-  const handleSaveEdit = (updatedTxn) => {
-    setTxns(prev => prev.map(t => t.id === updatedTxn.id ? updatedTxn : t));
-    setEditTxnId("");
-    toast("Journal entry updated", "success");
+  const handleSaveEdit = async (updatedTxn) => {
+    try {
+      await persistTxn(updatedTxn);
+      setEditTxnId("");
+      toast("Journal entry updated", "success");
+    } catch (err) {
+      toast("Save failed: " + err.message, "error");
+    }
   };
 
   const toggleSort = (key) => {
@@ -3386,26 +3394,32 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
     : null;
   const showBackupWarning = daysSinceBackup === null || daysSinceBackup >= 7;
 
-  const save = () => {
+  const save = async () => {
     const nextSettings = normalizeSettings(s);
     setSettings(nextSettings);
-    if (nextSettings.openingBalance > 0 && accounts && saveTxn) {
-      const bankA = accounts.find(a => a.code === "1002");
-      const capitalA = accounts.find(a => a.code === "3000");
-      if (bankA && capitalA) {
-        const existingOB = txns?.find(t => t.tags?.includes("opening-balance"));
-        if (!existingOB) {
-          const amountCents = toCents(nextSettings.openingBalance);
-          const lines = [
-            { id: uid(), accountId: bankA.id, debit: amountCents, credit: 0, memo: "Opening Balance — Bank deposit", deal_id: null, broker_id: null, developer_id: null },
-            { id: uid(), accountId: capitalA.id, debit: 0, credit: amountCents, memo: "Opening Balance — Capital Injection", deal_id: null, broker_id: null, developer_id: null }
-          ];
-          const txn = { id: uid(), date: nextSettings.openingBalanceDate, description: "Opening Balance", ref: `OB-${Date.now().toString(36).toUpperCase()}`, counterparty: "Opening Balance", tags: "opening-balance", txnType: "JV", isVoid: false, lines, createdAt: new Date().toISOString() };
-          saveTxn(txn);
+    try {
+      const writes = [window.fsSaveSettings(nextSettings)];
+      if (nextSettings.openingBalance > 0 && accounts && persistTxn) {
+        const bankA = accounts.find(a => a.code === "1002");
+        const capitalA = accounts.find(a => a.code === "3000");
+        if (bankA && capitalA) {
+          const existingOB = txns?.find(t => t.tags?.includes("opening-balance"));
+          if (!existingOB) {
+            const amountCents = toCents(nextSettings.openingBalance);
+            const lines = [
+              { id: uid(), accountId: bankA.id, debit: amountCents, credit: 0, memo: "Opening Balance — Bank deposit", deal_id: null, broker_id: null, developer_id: null },
+              { id: uid(), accountId: capitalA.id, debit: 0, credit: amountCents, memo: "Opening Balance — Capital Injection", deal_id: null, broker_id: null, developer_id: null }
+            ];
+            const txn = { id: uid(), date: nextSettings.openingBalanceDate, description: "Opening Balance", ref: `OB-${Date.now().toString(36).toUpperCase()}`, counterparty: "Opening Balance", tags: "opening-balance", txnType: "JV", isVoid: false, lines, createdAt: new Date().toISOString() };
+            writes.push(persistTxn(txn));
+          }
         }
       }
+      await Promise.all(writes);
+      toast("Settings saved", "success");
+    } catch (err) {
+      toast("Save failed: " + err.message, "error");
     }
-    toast("Settings saved", "success");
   };
 
   // ── Backup: read all collections from Firestore → JSON file ──
@@ -3559,7 +3573,7 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
       <div style={{ borderTop: "1px solid #E5E7EB", marginTop: 28, paddingTop: 22 }}>
         <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4, color: "#DC2626" }}>♻️ Restore from Backup</div>
         <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 14, lineHeight: 1.6 }}>
-          Upload a previously downloaded backup file to restore your database. <strong style={{ color: "#DC2626" }}>This will overwrite all current data.</strong> Only use this if you need to recover from data loss.
+          Upload a previously downloaded backup file to restore your database. <strong style={{ color: "#DC2626" }}>Records in the backup will be merged into the current database — existing records not in the backup will not be deleted.</strong> Only use this if you need to recover from data loss.
         </div>
         <input ref={fileRef} type="file" accept=".json" style={{ display: "none" }} onChange={handleFileChange} />
         <button style={{ ...C.btn("secondary"), marginBottom: 12 }} onClick={() => fileRef.current?.click()}>
@@ -3604,7 +3618,7 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
             You are about to restore <strong>{totalRestoreRecords.toLocaleString()} records</strong> from the backup exported on <strong>{restorePreview?.exportedAt?.slice(0, 10)}</strong>.
           </p>
           <div style={{ padding: 12, background: "#FEF2F2", borderRadius: 6, border: "1px solid #FECACA", fontSize: 13, color: "#991B1B", fontWeight: 600 }}>
-            ⚠️ This will overwrite ALL current data in the database. This cannot be undone. Make sure you have a backup of your current data first.
+            ⚠️ This will write backup records into the database. Existing records not in the backup file will not be deleted. This cannot be undone.
           </div>
         </div>
         <div style={C.mftr}>
