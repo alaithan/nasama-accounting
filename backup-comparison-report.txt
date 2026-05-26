@@ -1,0 +1,27 @@
+NASAMA ACCOUNTING - DETAILED BACKUP COMPARISON REPORT
+==========================================================================================
+
+Generated: 2026-05-26 18:49:00
+
+BACKUP 1: 2026-05-21T14:26:52.309Z
+BACKUP 2: 2026-05-25T10:59:03.684Z
+
+COLLECTION TOTALS
+------------------------------------------------------------------------------------------
+accounts            :     54 →     54 (change: +0)
+brokers             :     16 →     16 (change: +0)
+customers           :     52 →     52 (change: +0)
+deals               :     43 →     43 (change: +0)
+developers          :     57 →     57 (change: +0)
+planned_expenses    :     16 →     18 (change: +2)
+transactions        :    707 →    735 (change: +28)
+vendors             :     10 →     12 (change: +2)
+
+BANK TRANSACTIONS (BK TYPE)
+------------------------------------------------------------------------------------------
+Total Bank Txns B1: 555
+Total Bank Txns B2: 555
+NEW: 0
+REMOVED: 0
+MODIFIED: 0
+

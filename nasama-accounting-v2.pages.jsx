@@ -786,7 +786,7 @@ function ManualPage() {
 // ╔══════════════════════════════════════════════════╗
 //  DEALS PAGE
 // ╚══════════════════════════════════════════════════╝
-function DealsPage({ deals, setDeals, customers, brokers, developers, txns, userRole, userEmail, writeMeta, setInvoiceDeal, setPage }) {
+function DealsPage({ deals, setDeals, customers, brokers, developers, txns, accounts, journal, persistTxn, userRole, userEmail, writeMeta, setInvoiceDeal, setPage }) {
   const [show, setShow] = useState(false);
   const [edit, setEdit] = useState(null);
   const [filter, setFilter] = useState("All");
@@ -794,6 +794,14 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, user
   const [sortDir, setSortDir] = useState("asc");
   const [dealMutationLabel, setDealMutationLabel] = useState("");
   const [invoicedDealIds, setInvoicedDealIds] = useState(new Set());
+  const [bpDeal, setBpDeal] = useState(null);
+  const [bpForm, setBpForm] = useState({ date: todayStr(), amount: "", splitPct: "", paidFromCode: "1002", memo: "" });
+  const [bpSaving, setBpSaving] = useState(false);
+  const brokerPaidDealIds = useMemo(() => {
+    const fromTxns = (txns || []).filter(t => t.txnType === "BP" && !t.isVoid && t.deal_id).map(t => t.deal_id);
+    const fromDeals = (deals || []).filter(d => (d.broker_paid_amount || 0) > 0).map(d => d.id);
+    return new Set([...fromTxns, ...fromDeals]);
+  }, [txns, deals]);
   useEffect(() => {
     const unsub = db.collection("invoices").onSnapshot(snap => {
       const ids = new Set();
@@ -1061,6 +1069,12 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, user
                   );
                   return <button style={{ ...C.btn("secondary", true), borderColor: GOLD, color: GOLD_D }} onClick={e => { e.stopPropagation(); setInvoiceDeal(d); setPage("invoices"); }}>Invoice</button>;
                 })()}
+                {hasPermission(userRole, 'finance.create') && d.broker_id && d.stage !== "Cancelled" && (() => {
+                  if (brokerPaidDealIds.has(d.id)) return (
+                    <span title="Broker payment already recorded for this deal" style={{ fontSize: 11, color: "#7C3AED", padding: "4px 8px", borderRadius: 4, border: "1px solid #DDD6FE", background: "#F5F3FF", whiteSpace: "nowrap", cursor: "default" }}>✓ Broker Paid</span>
+                  );
+                  return <button style={{ ...C.btn("secondary", true), borderColor: "#7C3AED", color: "#7C3AED" }} onClick={e => { e.stopPropagation(); setBpDeal(d); setBpForm({ date: todayStr(), amount: "", splitPct: "", paidFromCode: "1002", memo: `Broker commission — ${d.property_name || d.id}` }); }}>Pay Broker</button>;
+                })()}
                 {hasPermission(userRole, 'sales.edit') && <button style={C.btn("secondary", true)} onClick={e => { e.stopPropagation(); setEdit(d); setShow(true); }}>Edit</button>}
                 {hasPermission(userRole, 'sales.edit') && <button style={C.btn("danger", true)} onClick={e => { e.stopPropagation(); handleDelete(d); }}>Delete</button>}
               </div>
@@ -1077,6 +1091,118 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, user
         <DealForm initial={normalizeLinkedDealRefs(edit || empty)} onSave={save} onCancel={() => setShow(false)} customers={customers} brokers={brokers} developers={developers} />
       </div>
     </div>}
+
+    {/* Pay Broker Modal */}
+    {bpDeal && (() => {
+      const bankAccts = (accounts || []).filter(a => a.isBank);
+      const cashAccts = (accounts || []).filter(a => a.isCash || (!a.isBank && a.type === "Asset" && a.code === "1001"));
+      const allLiquid = [...bankAccts, ...cashAccts];
+      const totalComm = bpDeal.expected_commission_net ? fromCents(bpDeal.expected_commission_net) : 0;
+      const brokerAmt = parseFloat(bpForm.amount) || 0;
+      const companyRetains = totalComm > 0 ? Math.max(0, totalComm - brokerAmt) : 0;
+      const splitPctNum = parseFloat(bpForm.splitPct);
+      const handleSplitPctChange = (val) => {
+        const pct = parseFloat(val);
+        if (!isNaN(pct) && totalComm > 0) {
+          const calculated = Math.round(totalComm * pct / 100 * 100) / 100;
+          setBpForm(p => ({ ...p, splitPct: val, amount: String(calculated) }));
+        } else {
+          setBpForm(p => ({ ...p, splitPct: val }));
+        }
+      };
+      const handleAmountChange = (val) => {
+        const amt = parseFloat(val);
+        if (!isNaN(amt) && totalComm > 0) {
+          const impliedPct = Math.round(amt / totalComm * 10000) / 100;
+          setBpForm(p => ({ ...p, amount: val, splitPct: String(impliedPct) }));
+        } else {
+          setBpForm(p => ({ ...p, amount: val, splitPct: "" }));
+        }
+      };
+      const handlePayBroker = async () => {
+        if (!brokerAmt || brokerAmt <= 0) { toast("Enter a valid amount", "error"); return; }
+        if (!bpForm.date) { toast("Select a date", "error"); return; }
+        setBpSaving(true);
+        try {
+          const txn = journal.postBrokerPayment({ date: bpForm.date, deal: bpDeal, brokerAmount: brokerAmt, paidFromCode: bpForm.paidFromCode, memo: bpForm.memo, commit: false });
+          await persistTxn(txn);
+          toast(`Broker payment of ${fmtAED(toCents(brokerAmt))} recorded`, "success");
+          setBpDeal(null);
+        } catch (err) {
+          toast("Save failed: " + err.message, "error");
+        } finally {
+          setBpSaving(false);
+        }
+      };
+      const handleRecordNoBankPayment = async () => {
+        if (!brokerAmt || brokerAmt <= 0) { toast("Enter a valid amount", "error"); return; }
+        setBpSaving(true);
+        try {
+          const updated = { ...bpDeal, broker_paid_amount: toCents(brokerAmt), broker_paid_date: bpForm.date };
+          setDeals(prev => prev.map(d => d.id === bpDeal.id ? updated : d));
+          toast(`Broker payment of ${fmtAED(toCents(brokerAmt))} recorded (no bank transaction)`, "success");
+          setBpDeal(null);
+        } catch (err) {
+          toast("Save failed: " + err.message, "error");
+        } finally {
+          setBpSaving(false);
+        }
+      };
+      return <div style={C.modal} onClick={() => setBpDeal(null)}>
+        <div style={C.mbox(480)} onClick={e => e.stopPropagation()}>
+          <div style={C.mhdr}>
+            <span style={{ fontWeight: 700, fontSize: 16 }}>Pay Broker</span>
+            <button onClick={() => setBpDeal(null)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
+          </div>
+          <div style={C.mbdy}>
+            <div style={{ marginBottom: 12, padding: "10px 14px", background: "#F5F3FF", borderRadius: 6, borderLeft: "3px solid #7C3AED", fontSize: 13 }}>
+              <div style={{ fontWeight: 600, color: "#4C1D95" }}>{bpDeal.property_name || "Deal"}</div>
+              <div style={{ color: "#6B7280", marginTop: 2 }}>Broker: {bpDeal.broker_name} &nbsp;|&nbsp; Total commission: {fmtAED(bpDeal.expected_commission_net || 0)}</div>
+            </div>
+
+            {/* Split summary bar */}
+            {brokerAmt > 0 && totalComm > 0 && <div style={{ marginBottom: 14, borderRadius: 8, overflow: "hidden", border: "1px solid #E9D5FF" }}>
+              <div style={{ display: "flex", height: 28 }}>
+                <div style={{ flex: brokerAmt, background: "#7C3AED", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap", padding: "0 6px" }}>
+                  Broker {!isNaN(splitPctNum) ? `${splitPctNum}%` : ""}
+                </div>
+                <div style={{ flex: Math.max(0, companyRetains), background: "#059669", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap", padding: "0 6px" }}>
+                  Company {!isNaN(splitPctNum) ? `${Math.round((100 - splitPctNum) * 100) / 100}%` : ""}
+                </div>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", background: "#FAFAFA", fontSize: 12 }}>
+                <span style={{ color: "#7C3AED", fontWeight: 600 }}>Broker: {fmtAED(toCents(brokerAmt))}</span>
+                <span style={{ color: "#059669", fontWeight: 600 }}>Company retains: {fmtAED(toCents(companyRetains))}</span>
+              </div>
+            </div>}
+
+            <div style={C.fg}>
+              <div><label style={C.label}>Date</label><Inp type="date" value={bpForm.date} onChange={e => setBpForm(p => ({ ...p, date: e.target.value }))} /></div>
+              <div><label style={C.label}>Broker Split %</label>
+                <div style={{ position: "relative" }}>
+                  <Inp type="number" step="0.01" min="0" max="100" value={bpForm.splitPct} onChange={e => handleSplitPctChange(e.target.value)} placeholder="e.g. 50" style={{ paddingRight: 32 }} />
+                  <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", color: "#9CA3AF", fontSize: 13, pointerEvents: "none" }}>%</span>
+                </div>
+              </div>
+              <div><label style={C.label}>Broker Amount (AED)</label><Inp type="number" step="0.01" value={bpForm.amount} onChange={e => handleAmountChange(e.target.value)} placeholder="Auto-calculated from %" /></div>
+              <div><label style={C.label}>Paid From Account</label>
+                <Sel value={bpForm.paidFromCode} onChange={e => setBpForm(p => ({ ...p, paidFromCode: e.target.value }))}>
+                  {bankAccts.length > 0 && <optgroup label="Bank Accounts">{bankAccts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
+                  {cashAccts.length > 0 && <optgroup label="Cash Accounts">{cashAccts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
+                  {allLiquid.length === 0 && <option value="1002">Default Bank</option>}
+                </Sel>
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}><label style={C.label}>Memo</label><Inp value={bpForm.memo} onChange={e => setBpForm(p => ({ ...p, memo: e.target.value }))} /></div>
+            </div>
+          </div>
+          <div style={C.mftr}>
+            <button style={C.btn("secondary")} onClick={() => setBpDeal(null)} disabled={bpSaving}>Cancel</button>
+            <button style={{ ...C.btn("secondary"), borderColor: "#7C3AED", color: "#7C3AED" }} onClick={handleRecordNoBankPayment} disabled={bpSaving} title="Records the broker amount on the deal — no bank transaction created">{bpSaving ? "Saving…" : "Record (No Bank)"}</button>
+            <button style={{ ...C.btn(), background: "#7C3AED", borderColor: "#7C3AED" }} onClick={handlePayBroker} disabled={bpSaving}>{bpSaving ? "Saving…" : "Record + Bank"}</button>
+          </div>
+        </div>
+      </div>;
+    })()}
   </div>;
 }
 
@@ -1147,6 +1273,9 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
   const [show, setShow] = useState(false);
   const [preview, setPreview] = useState(null);
   const [form, setForm] = useState({ deal_id: "", date: todayStr(), bankCode: "1002", vatRate: 5, grossAmount: "" });
+  const [linkTxn, setLinkTxn] = useState(null);
+  const [linkDealId, setLinkDealId] = useState("");
+  const [linkSaving, setLinkSaving] = useState(false);
 
   useEffect(() => {
     const h = () => setShow(true);
@@ -1155,6 +1284,8 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
   }, []);
 
   const saleReceipts = txns.filter(t => t.txnType === "SR" && !t.isVoid);
+  const dealById = useMemo(() => new Map((deals || []).map(d => [d.id, d])), [deals]);
+  const unlinkedCount = saleReceipts.filter(t => !t.deal_id).length;
 
   const handlePreview = () => {
     const deal = deals.find(d => d.id === form.deal_id);
@@ -1178,23 +1309,75 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
     } catch (err) { toast(err.message, "error"); }
   };
 
+  const handleLinkDeal = async () => {
+    const deal = deals.find(d => d.id === linkDealId);
+    if (!deal) { toast("Select a deal first", "warning"); return; }
+    setLinkSaving(true);
+    try {
+      const updated = {
+        ...linkTxn,
+        deal_id: deal.id,
+        counterparty: linkTxn.counterparty || deal.client_name || "",
+        lines: (linkTxn.lines || []).map(l => ({ ...l, deal_id: deal.id })),
+      };
+      await persistTxn(updated);
+      toast(`Receipt linked to "${deal.property_name}"`, "success");
+      setLinkTxn(null);
+      setLinkDealId("");
+    } catch (err) {
+      toast("Failed: " + err.message, "error");
+    } finally {
+      setLinkSaving(false);
+    }
+  };
+
   const bankAccounts  = accounts.filter(a => a.isBank);
   const cashAccounts  = accounts.filter(a => a.isCash || (!a.isBank && a.type === "Asset" && a.code === "1001"));
-  const allLiquidAccts = [...bankAccounts, ...cashAccounts];
 
   return <div>
-    <PageHeader title="Sale Receipts" sub={`Cash-settled commission collections — ${saleReceipts.length} receipts`}>
+    <PageHeader title="Sale Receipts" sub={`Cash-settled commission collections — ${saleReceipts.length} receipts${unlinkedCount > 0 ? ` • ${unlinkedCount} not linked to a deal` : ""}`}>
       {hasPermission(userRole, 'sales.create') && <button style={C.btn()} onClick={() => setShow(true)}>+ New Receipt</button>}
     </PageHeader>
 
-    <div style={C.card}>
+    {unlinkedCount > 0 && <div style={{ ...C.card, padding: "12px 16px", marginBottom: 14, borderLeft: "4px solid #D97706", background: "#FFFBEB", color: "#92400E", fontSize: 13 }}>
+      {unlinkedCount} receipt{unlinkedCount !== 1 ? "s are" : " is"} not linked to a deal — Cash Collected will show "—" in the Deal Profitability table for these. Use the "Link Deal" button on each row to fix this without re-entering the receipt.
+    </div>}
+
+    <div style={{ ...C.card, overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead><tr><th style={C.th}>Date</th><th style={C.th}>Ref</th><th style={C.th}>Deal / Description</th><th style={C.th}>Client</th><th style={{ ...C.th, textAlign: "right" }}>Gross Amount</th></tr></thead>
+        <thead><tr>
+          <th style={C.th}>Date</th>
+          <th style={C.th}>Ref</th>
+          <th style={C.th}>Description</th>
+          <th style={C.th}>Client</th>
+          <th style={C.th}>Linked Deal</th>
+          <th style={{ ...C.th, textAlign: "right" }}>Gross Amount</th>
+          {hasPermission(userRole, 'sales.edit') && <th style={C.th}>Actions</th>}
+        </tr></thead>
         <tbody>
-          {saleReceipts.length === 0 && <tr><td colSpan={5} style={{ ...C.td, textAlign: "center", padding: 40, color: "#9CA3AF" }}>No sale receipts yet. Collect a commission to get started.</td></tr>}
+          {saleReceipts.length === 0 && <tr><td colSpan={7} style={{ ...C.td, textAlign: "center", padding: 40, color: "#9CA3AF" }}>No sale receipts yet. Collect a commission to get started.</td></tr>}
           {saleReceipts.sort((a, b) => b.date?.localeCompare(a.date)).map(t => {
             const gross = t.lines.reduce((s, l) => s + (l.debit || 0), 0);
-            return <tr key={t.id}><td style={C.td}>{fmtDate(t.date)}</td><td style={C.td}><span style={C.badge("success")}>{t.ref}</span></td><td style={C.td}>{t.description}</td><td style={C.td}>{t.counterparty}</td><td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(gross)}</td></tr>;
+            const linkedDeal = t.deal_id ? dealById.get(t.deal_id) : null;
+            return <tr key={t.id}>
+              <td style={C.td}>{fmtDate(t.date)}</td>
+              <td style={C.td}><span style={C.badge("success")}>{t.ref}</span></td>
+              <td style={C.td}>{t.description}</td>
+              <td style={C.td}>{t.counterparty || "—"}</td>
+              <td style={C.td}>
+                {linkedDeal
+                  ? <div>
+                      <div style={{ fontWeight: 600, fontSize: 12, color: "#059669" }}>{linkedDeal.property_name}</div>
+                      {linkedDeal.unit_no && <div style={{ fontSize: 11, color: "#9CA3AF" }}>Unit {linkedDeal.unit_no}</div>}
+                    </div>
+                  : <span style={{ fontSize: 11, color: "#D97706", padding: "2px 8px", borderRadius: 4, border: "1px solid #FDE68A", background: "#FFFBEB" }}>Not linked</span>
+                }
+              </td>
+              <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(gross)}</td>
+              {hasPermission(userRole, 'sales.edit') && <td style={C.td}>
+                {!t.deal_id && <button style={{ ...C.btn("secondary", true), borderColor: "#D97706", color: "#92400E", fontSize: 11 }} onClick={() => { setLinkTxn(t); setLinkDealId(""); }}>Link Deal</button>}
+              </td>}
+            </tr>;
           })}
         </tbody>
       </table>
@@ -1203,7 +1386,7 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
     {/* New Receipt Modal */}
     {show && <div style={C.modal} onClick={() => setShow(false)}>
       <div style={C.mbox(560)} onClick={e => e.stopPropagation()}>
-        <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>💰 New Sale Receipt</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
+        <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>New Sale Receipt</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
         <div style={C.mbdy}>
           <p style={{ fontSize: 13, color: "#6B7280", marginBottom: 16 }}>Record a commission collected. This posts a single journal entry: DR Bank / CR Revenue / CR Output VAT.</p>
           <div style={C.fg}>
@@ -1228,6 +1411,45 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
           </div>}
         </div>
         <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn()} onClick={handlePreview}>Preview Journal →</button></div>
+      </div>
+    </div>}
+
+    {/* Link Deal Modal */}
+    {linkTxn && <div style={C.modal} onClick={() => setLinkTxn(null)}>
+      <div style={C.mbox(460)} onClick={e => e.stopPropagation()}>
+        <div style={C.mhdr}>
+          <span style={{ fontWeight: 700, fontSize: 16 }}>Link Deal to Receipt</span>
+          <button onClick={() => setLinkTxn(null)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
+        </div>
+        <div style={C.mbdy}>
+          <div style={{ marginBottom: 14, padding: "10px 14px", background: "#FFFBEB", borderRadius: 6, borderLeft: "3px solid #D97706", fontSize: 13 }}>
+            <div style={{ fontWeight: 600, color: "#92400E" }}>{linkTxn.ref} — {fmtDate(linkTxn.date)}</div>
+            <div style={{ color: "#6B7280", marginTop: 2 }}>{linkTxn.description}</div>
+            <div style={{ color: "#374151", fontWeight: 600, marginTop: 4 }}>{fmtAED(linkTxn.lines.reduce((s, l) => s + (l.debit || 0), 0))}</div>
+          </div>
+          <div>
+            <label style={C.label}>Select Deal to Link</label>
+            <Sel value={linkDealId} onChange={e => setLinkDealId(e.target.value)}>
+              <option value="">— Select Deal —</option>
+              {[...deals].sort((a, b) => (b.expected_commission_net || 0) - (a.expected_commission_net || 0)).map(d => (
+                <option key={d.id} value={d.id}>{d.property_name}{d.unit_no ? ` — Unit ${d.unit_no}` : ""} ({d.stage})</option>
+              ))}
+            </Sel>
+          </div>
+          {linkDealId && (() => {
+            const d = dealById.get(linkDealId);
+            if (!d) return null;
+            return <div style={{ marginTop: 12, padding: "10px 14px", background: "#ECFDF5", borderRadius: 6, borderLeft: "3px solid #059669", fontSize: 13 }}>
+              <div style={{ fontWeight: 600, color: "#047857" }}>{d.property_name}</div>
+              <div style={{ color: "#6B7280", marginTop: 2 }}>Broker: {d.broker_name || "—"} &nbsp;|&nbsp; Stage: {d.stage} &nbsp;|&nbsp; Expected: {fmtAED(d.expected_commission_net || 0)}</div>
+            </div>;
+          })()}
+          <p style={{ marginTop: 12, fontSize: 12, color: "#6B7280" }}>This will update the receipt's <code>deal_id</code> field in Firestore. The journal lines are not changed — only the link is added. The Deal Profitability table will update immediately.</p>
+        </div>
+        <div style={C.mftr}>
+          <button style={C.btn("secondary")} onClick={() => setLinkTxn(null)} disabled={linkSaving}>Cancel</button>
+          <button style={C.btn()} onClick={handleLinkDeal} disabled={!linkDealId || linkSaving}>{linkSaving ? "Saving…" : "Link Deal"}</button>
+        </div>
       </div>
     </div>}
 
@@ -1527,7 +1749,7 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
       : 0;
 
     const rows = txns
-      .filter(t => !t.isVoid && (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to))
+      .filter(t => (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to))
       .map(t => {
         const lines = (t.lines || []).filter(l => targetAccts.some(a => a.id === l.accountId));
         if (lines.length === 0) return null;
@@ -1536,8 +1758,8 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
           description: t.description || "", counterparty: t.counterparty || "",
           txnType: TXN_TYPES[t.txnType]?.label || t.txnType || "",
           acctName: lines.map(l => targetAccts.find(a => a.id === l.accountId)?.name || "").join(", "),
-          inAmt: lines.reduce((s, l) => s + (l.debit || 0), 0),
-          outAmt: lines.reduce((s, l) => s + (l.credit || 0), 0),
+          inAmt: t.isVoid ? 0 : lines.reduce((s, l) => s + (l.debit || 0), 0),
+          outAmt: t.isVoid ? 0 : lines.reduce((s, l) => s + (l.credit || 0), 0),
           balance: 0,
         };
       })
@@ -1689,12 +1911,69 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
     }
   };
 
+  const handleDeleteTxn = async (txnId) => {
+    const txn = txns.find(t => t.id === txnId);
+    if (!txn) return;
+    const amt = txn.lines?.reduce((s, l) => s + (l.debit || 0) + (l.credit || 0), 0) || 0;
+    if (!confirm(`Permanently DELETE this transaction?\n\n${txn.ref} — ${txn.description}\nAmount: ${fmtAED(amt / 2)}\n\nNo reversal will be created. This cannot be undone.`)) return;
+    try {
+      await window.fsDeleteDoc('transactions', txnId);
+      setTxns(prev => prev.filter(t => t.id !== txnId));
+      toast(`${txn.ref} deleted`, "success");
+    } catch (err) {
+      toast("Delete failed: " + err.message, "error");
+    }
+  };
+
+  const handleDeleteAllBpToday = async () => {
+    const today = todayStr();
+    // Catch: original BP txns, any REV-BP- reversal (JV or other type), voided BP originals
+    const toDelete = txns.filter(t =>
+      t.date === today && (
+        t.txnType === "BP" ||
+        (t.ref || "").startsWith("REV-BP-") ||
+        (t.ref || "").startsWith("REV-") && (t.description || "").toLowerCase().includes("broker")
+      )
+    );
+    if (!toDelete.length) { toast("No broker payment transactions found for today", "info"); return; }
+    const bpCount  = toDelete.filter(t => t.txnType === "BP").length;
+    const revCount = toDelete.filter(t => t.txnType !== "BP").length;
+    const lines = toDelete.flatMap(t => t.lines || []);
+    const bankAcctIds = new Set(allLiquidAccts.map(a => a.id));
+    const netBankImpact = lines.reduce((s, l) => bankAcctIds.has(l.accountId) ? s + (l.debit || 0) - (l.credit || 0) : s, 0);
+    if (!confirm(`Permanently DELETE all broker payment transactions from today (${today})?\n\n• ${bpCount} BP transaction(s)\n• ${revCount} reversal/JV transaction(s)\nTotal: ${toDelete.length} entries\nNet bank impact being removed: ${fmtAED(Math.abs(netBankImpact))}\n\nThis CANNOT be undone.`)) return;
+    try {
+      await Promise.all(toDelete.map(t => window.fsDeleteDoc('transactions', t.id)));
+      const deletedIds = new Set(toDelete.map(t => t.id));
+      setTxns(prev => prev.filter(t => !deletedIds.has(t.id)));
+      toast(`Deleted ${toDelete.length} broker payment transactions from ${today}`, "success");
+    } catch (err) {
+      toast("Bulk delete failed: " + err.message, "error");
+    }
+  };
+
+  // Diagnostic: find unexplained bank movements (REV- entries and voided txns still affecting balance)
+  const suspiciousTxns = useMemo(() => {
+    return txns.filter(t => {
+      if (t.isVoid) return false;
+      const ref = t.ref || "";
+      const isRev = ref.startsWith("REV-");
+      if (!isRev) return false;
+      const bankLines = (t.lines || []).filter(l => allLiquidAccts.some(a => a.id === l.accountId));
+      return bankLines.length > 0;
+    }).map(t => {
+      const bankLines = (t.lines || []).filter(l => allLiquidAccts.some(a => a.id === l.accountId));
+      const netImpact = bankLines.reduce((s, l) => s + (l.debit || 0) - (l.credit || 0), 0);
+      return { ...t, netImpact };
+    });
+  }, [txns, allLiquidAccts]);
+
   // Shared activity table renderer
   const ActivityTable = (rows, emptyMsg) => (
     <div style={{ overflowX: "auto", overflowY: "visible" }}>
       <table style={{ width: "100%", minWidth: 1060, borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
         <colgroup>
-          <col style={{ width: 110 }} /><col style={{ width: 100 }} /><col /><col style={{ width: 140 }} /><col style={{ width: 140 }} /><col style={{ width: 150 }} /><col style={{ width: 70 }} />
+          <col style={{ width: 110 }} /><col style={{ width: 100 }} /><col /><col style={{ width: 140 }} /><col style={{ width: 140 }} /><col style={{ width: 150 }} /><col style={{ width: 120 }} />
         </colgroup>
         <thead><tr>
           <SortTh label="Date"        sortKey={sortKey} activeKey="date"        sortDir={sortDir} onToggle={toggleSort} />
@@ -1707,15 +1986,31 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
         </tr></thead>
         <tbody>
           {rows.length === 0 && <tr><td colSpan={7} style={{ ...C.td, textAlign: "center", padding: 32, color: "#9CA3AF" }}>{emptyMsg}</td></tr>}
-          {rows.map(row => <tr key={row.id}>
-            <td style={C.td}>{fmtDate(row.date)}</td>
-            <td style={C.td}>{row.ref}</td>
-            <td style={{ ...C.td, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 0 }} title={row.description}>{row.description}</td>
-            <td style={{ ...C.td, textAlign: "right", color: row.inAmt  > 0 ? "#059669" : "#9CA3AF" }}>{row.inAmt  > 0 ? fmtAED(row.inAmt)  : "—"}</td>
-            <td style={{ ...C.td, textAlign: "right", color: row.outAmt > 0 ? "#DC2626" : "#9CA3AF" }}>{row.outAmt > 0 ? fmtAED(row.outAmt) : "—"}</td>
-            <td style={{ ...C.td, textAlign: "right", fontWeight: 600, fontVariantNumeric: "tabular-nums", background: "#F0FDF4", color: row.balance >= 0 ? "#065F46" : "#DC2626", whiteSpace: "nowrap" }}>{fmtAED(row.balance)}</td>
-            <td style={C.td}>{hasPermission(userRole, 'canEditTxns') && <button style={C.btn("secondary", true)} onClick={() => setEditTxnId(row.id)}>Edit</button>}</td>
-          </tr>)}
+          {rows.map(row => {
+            const origTxn = txns.find(t => t.id === row.id);
+            const isVoided = origTxn?.isVoid;
+            const isReversal = origTxn?.ref?.startsWith("REV-");
+            return <tr key={row.id} style={{ opacity: isVoided ? 0.45 : 1, background: isVoided ? "#FEF2F2" : undefined }}>
+              <td style={C.td}>{fmtDate(row.date)}</td>
+              <td style={C.td}>
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <span>{row.ref}</span>
+                  {isVoided && <span style={{ fontSize: 9, fontWeight: 700, color: "#DC2626", background: "#FEE2E2", padding: "1px 4px", borderRadius: 3 }}>VOID</span>}
+                  {isReversal && <span style={{ fontSize: 9, fontWeight: 700, color: "#7C3AED", background: "#EDE9FE", padding: "1px 4px", borderRadius: 3 }}>REV</span>}
+                </div>
+              </td>
+              <td style={{ ...C.td, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 0 }} title={row.description}>{row.description}</td>
+              <td style={{ ...C.td, textAlign: "right", color: row.inAmt  > 0 ? "#059669" : "#9CA3AF" }}>{row.inAmt  > 0 ? fmtAED(row.inAmt)  : "—"}</td>
+              <td style={{ ...C.td, textAlign: "right", color: row.outAmt > 0 ? "#DC2626" : "#9CA3AF" }}>{row.outAmt > 0 ? fmtAED(row.outAmt) : "—"}</td>
+              <td style={{ ...C.td, textAlign: "right", fontWeight: 600, fontVariantNumeric: "tabular-nums", background: isVoided ? "#FEF2F2" : "#F0FDF4", color: isVoided ? "#9CA3AF" : row.balance >= 0 ? "#065F46" : "#DC2626", whiteSpace: "nowrap" }}>{isVoided ? "—" : fmtAED(row.balance)}</td>
+              <td style={C.td}>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {!isVoided && hasPermission(userRole, 'canEditTxns') && <button style={C.btn("secondary", true)} onClick={() => setEditTxnId(row.id)}>Edit</button>}
+                  {hasPermission(userRole, 'canVoidTxns') && <button style={C.btn("danger", true)} onClick={() => handleDeleteTxn(row.id)}>Delete</button>}
+                </div>
+              </td>
+            </tr>;
+          })}
         </tbody>
       </table>
     </div>
@@ -1725,9 +2020,66 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
     <PageHeader title="Banking" sub="Bank accounts and cash — kept separate">
       <button style={C.btn("secondary")} onClick={handleExportBankRows}>Export Excel</button>
       {hasPermission(userRole, 'canCreateTxns') && <button style={C.btn("secondary")} onClick={() => setShowImport(true)}>Import Bank CSV</button>}
+      {hasPermission(userRole, 'canVoidTxns') && (() => {
+        const today = todayStr();
+        const bpTodayCount = txns.filter(t => t.date === today && (t.txnType === "BP" || (t.ref || "").startsWith("REV-BP-"))).length;
+        return bpTodayCount > 0 ? <button style={{ ...C.btn("danger"), fontSize: 12 }} onClick={handleDeleteAllBpToday}>Delete All BP Today ({bpTodayCount})</button> : null;
+      })()}
       {hasPermission(userRole, 'canCreateTxns') && <button style={C.btn()} onClick={() => setShowTransfer(true)}>Transfer</button>}
     </PageHeader>
     <DateFilterBar dateFilter={dateFilter} setDateFilter={setDateFilter} />
+
+    {/* ══ ALL-TIME BANK RECONCILIATION FINDER ═════════════════════════ */}
+    {(() => {
+      const bankAcctIds = new Set(allLiquidAccts.map(a => a.id));
+      const allBankTxns = txns
+        .filter(t => !t.isVoid)
+        .map(t => {
+          const bankLines = (t.lines || []).filter(l => bankAcctIds.has(l.accountId));
+          if (!bankLines.length) return null;
+          const netIn  = bankLines.reduce((s, l) => s + (l.debit  || 0), 0);
+          const netOut = bankLines.reduce((s, l) => s + (l.credit || 0), 0);
+          return { id: t.id, date: t.date, ref: t.ref, description: t.description, txnType: t.txnType, netIn, netOut, net: netIn - netOut };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.netIn - a.netIn);
+
+      const revInflows = allBankTxns.filter(t => t.netIn > 0 && (t.ref || "").startsWith("REV-"));
+      const totalSuspect = revInflows.reduce((s, t) => s + t.netIn, 0);
+
+      if (!revInflows.length) return null;
+
+      return <div style={{ ...C.card, marginBottom: 16, borderLeft: "4px solid #DC2626", background: "#FEF2F2" }}>
+        <div style={{ padding: "12px 16px 10px", borderBottom: "1px solid #FECACA" }}>
+          <div style={{ fontWeight: 700, color: "#991B1B", fontSize: 13 }}>Found — Reversal Entries Adding Money to Bank</div>
+          <div style={{ fontSize: 12, color: "#DC2626", marginTop: 2 }}>
+            {revInflows.length} reversal transaction{revInflows.length !== 1 ? "s" : ""} are adding <strong>{fmtAED(totalSuspect)}</strong> to your bank balance. Delete the ones that should not be there.
+          </div>
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead><tr>
+            <th style={C.th}>Date</th>
+            <th style={C.th}>Ref</th>
+            <th style={C.th}>Description</th>
+            <th style={{ ...C.th, textAlign: "right" }}>Adding to Bank</th>
+            <th style={C.th}>Action</th>
+          </tr></thead>
+          <tbody>
+            {revInflows.map(t => (
+              <tr key={t.id} style={{ background: "#FFF5F5" }}>
+                <td style={C.td}>{fmtDate(t.date)}</td>
+                <td style={C.td}><span style={{ fontWeight: 700, color: "#7C3AED", fontSize: 12 }}>{t.ref}</span></td>
+                <td style={C.td}>{t.description}</td>
+                <td style={{ ...C.td, textAlign: "right", fontWeight: 700, color: "#059669" }}>+{fmtAED(t.netIn)}</td>
+                <td style={C.td}>
+                  <button style={C.btn("danger", true)} onClick={() => handleDeleteTxn(t.id)}>Delete</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>;
+    })()}
 
     {/* ══ BANK ACCOUNTS SECTION ═══════════════════════════════════════ */}
     <div style={{ marginBottom: 28 }}>
@@ -2968,17 +3320,17 @@ function PerformancePage({ deals, txns, accounts, budgets, setPage }) {
         const a = accountById.get(l.accountId);
         return ss + (a && (a.isBank || a.isCash || a.code === "1001" || a.code === "1002") ? (l.debit || 0) : 0);
       }, 0), 0);
-    const brokerPaid = dTxns.filter(t => t.txnType === "BP").reduce((s, t) =>
+    const brokerPaidFromTxns = dTxns.filter(t => t.txnType === "BP").reduce((s, t) =>
       s + (t.lines || []).reduce((ss, l) => {
         const a = accountById.get(l.accountId);
         return ss + (a && a.type === "Expense" ? (l.debit || 0) : 0);
       }, 0), 0);
+    const brokerPaid = brokerPaidFromTxns > 0 ? brokerPaidFromTxns : (d.broker_paid_amount || 0);
     dealPnlMap.set(d.id, { cashIn, brokerPaid, net: cashIn - brokerPaid });
   });
   const topPnlDeals = [...deals]
-    .filter(d => (d.expected_commission_net || 0) > 0)
+    .filter(d => d.stage === "Commission Collected")
     .sort((a, b) => (b.expected_commission_net || 0) - (a.expected_commission_net || 0))
-    .slice(0, 15)
     .map(d => ({ ...d, ...dealPnlMap.get(d.id) }));
 
   // ── Enhanced broker data (adds broker paid from BP txns) ─────
@@ -3177,7 +3529,7 @@ function PerformancePage({ deals, txns, accounts, budgets, setPage }) {
       <div style={{ marginBottom: 16 }} />
 
       {/* ── Deal Profitability Table ── */}
-      {sectionCard("Deal Profitability", "Top deals — expected commission vs cash collected vs broker paid vs net retained",
+      {sectionCard("Deal Profitability", `All Commission Collected deals (${topPnlDeals.length}) — expected commission vs cash collected vs broker paid vs net retained`,
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
