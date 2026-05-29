@@ -1228,14 +1228,13 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers })
   });
   const isSecondary = d.type === "Secondary";
   // Decoupled text buffers for the amount fields: the user types freely and
-  // cents are derived via toCents (avoids reformatting every keystroke). The
-  // guarded effects only resync the text when the underlying cents value
-  // changes externally — e.g. expected commission auto-calculated from value × %.
+  // cents are derived via toCents (avoids reformatting every keystroke).
   const [txnValueText, setTxnValueText] = useState(d.transaction_value ? fromCents(d.transaction_value) : "");
   const [discountText, setDiscountText] = useState(d.discount ? fromCents(d.discount) : "");
   const [expectedText, setExpectedText] = useState(d.expected_commission_net ? fromCents(d.expected_commission_net) : "");
-  useEffect(() => { if (toCents(txnValueText) !== (d.transaction_value || 0)) setTxnValueText(d.transaction_value ? fromCents(d.transaction_value) : ""); }, [d.transaction_value]);
-  useEffect(() => { if (toCents(discountText) !== (d.discount || 0)) setDiscountText(d.discount ? fromCents(d.discount) : ""); }, [d.discount]);
+  // Expected commission is auto-computed (value × % − discount), so resync its
+  // text buffer whenever that computed cents value changes. Transaction value and
+  // discount are only ever set by their own inputs, so they need no resync effect.
   useEffect(() => { if (toCents(expectedText) !== (d.expected_commission_net || 0)) setExpectedText(d.expected_commission_net ? fromCents(d.expected_commission_net) : ""); }, [d.expected_commission_net]);
 
   return <div>
@@ -1266,7 +1265,7 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers })
         {isSecondary && <div><label style={C.label}>Seller Commission %</label><Inp type="number" step="0.01" value={d.seller_commission_pct} onChange={e => up("seller_commission_pct", e.target.value)} placeholder="Optional" /></div>}
         {isSecondary && <div><label style={C.label}>Seller Commission (AED)</label><Inp type="number" step="0.01" value={d.seller_commission ? fromCents(d.seller_commission) : ""} disabled style={{ background: "#F3F4F6", color: "#374151", opacity: 1 }} placeholder="Auto-calculated" /></div>}
         {isSecondary && <div><label style={C.label}>Discount (AED)</label><Inp type="number" step="0.01" value={discountText} onChange={e => { setDiscountText(e.target.value); up("discount", toCents(e.target.value)); }} placeholder="Optional" /></div>}
-        <div><label style={C.label}>Expected Net Commission (AED)</label><Inp type="number" step="0.01" value={expectedText} onChange={e => { setExpectedText(e.target.value); up("expected_commission_net", toCents(e.target.value)); }} placeholder="You can enter this directly from your sheet" /></div>
+        <div><label style={C.label}>Expected Net Commission (AED)</label><Inp type="number" step="0.01" value={expectedText} onChange={e => { setExpectedText(e.target.value); up("expected_commission_net", toCents(e.target.value)); }} disabled={isSecondary} style={isSecondary ? { background: "#F3F4F6", color: "#374151" } : {}} placeholder={isSecondary ? "Auto-calculated (buyer + seller − discount)" : "You can enter this directly from your sheet"} /></div>
         <div><label style={C.label}>VAT Applicable</label><Sel value={d.vat_applicable ? "yes" : "no"} onChange={e => up("vat_applicable", e.target.value === "yes")}><option value="yes">Yes (5%)</option><option value="no">No</option></Sel></div>
         <div><label style={C.label}>Date Created</label><Inp type="date" value={d.created_at} onChange={e => up("created_at", e.target.value)} /></div>
       </div>
