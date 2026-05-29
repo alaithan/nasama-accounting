@@ -1368,6 +1368,23 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
     // ── SHARED COMPONENTS ──────────────────────────────
     function Inp({ value, onChange, type = "text", placeholder = "", disabled = false, step, style = {} }) { return <input style={{ ...C.input, ...style, opacity: disabled ? .6 : 1 }} type={type} value={value || ""} onChange={onChange} placeholder={placeholder} disabled={disabled} step={step} />; }
+    // Numeric input that keeps its own text buffer so the decimal point and
+    // trailing zeros "stick" while typing. A plain number-bound input reformats
+    // every keystroke and a type="number" field sanitizes "1." to "" — both make
+    // decimals fiddly. The stored data stays numeric: onValue receives a Number.
+    function NumInp({ value, onValue, placeholder = "", disabled = false, allowNegative = false, style = {} }) {
+      const [text, setText] = useState(() => value ? String(value) : "");
+      useEffect(() => { if ((parseFloat(text) || 0) !== (value || 0)) setText(value ? String(value) : ""); }, [value]);
+      const handle = (e) => {
+        let raw = e.target.value.replace(allowNegative ? /[^0-9.\-]/g : /[^0-9.]/g, "");
+        const dot = raw.indexOf(".");
+        if (dot !== -1) raw = raw.slice(0, dot + 1) + raw.slice(dot + 1).replace(/\./g, "");
+        if (allowNegative) raw = raw.replace(/(?!^)-/g, "");
+        setText(raw);
+        onValue(parseFloat(raw) || 0);
+      };
+      return <input style={{ ...C.input, ...style, opacity: disabled ? .6 : 1 }} type="text" inputMode="decimal" value={text} onChange={handle} placeholder={placeholder} disabled={disabled} />;
+    }
     function Sel({ value, onChange, children }) { return <select style={C.select} value={value || ""} onChange={onChange}>{children}</select>; }
     function PageHeader({ title, sub, children }) { return <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22, flexWrap: "wrap", gap: 10 }}><div><div style={{ fontSize: 21, fontWeight: 700, color: NAVY, letterSpacing: "-0.02em" }}>{title}</div>{sub && <div style={{ fontSize: 13, color: "#667085", marginTop: 3 }}>{sub}</div>}</div>{children && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>{children}</div>}</div>; }
     function SortTh({ label, sortKey, activeKey, sortDir, onToggle, align = "left" }) {

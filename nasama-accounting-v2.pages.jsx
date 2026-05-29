@@ -1227,6 +1227,16 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers })
     return next;
   });
   const isSecondary = d.type === "Secondary";
+  // Decoupled text buffers for the amount fields: the user types freely and
+  // cents are derived via toCents (avoids reformatting every keystroke). The
+  // guarded effects only resync the text when the underlying cents value
+  // changes externally — e.g. expected commission auto-calculated from value × %.
+  const [txnValueText, setTxnValueText] = useState(d.transaction_value ? fromCents(d.transaction_value) : "");
+  const [discountText, setDiscountText] = useState(d.discount ? fromCents(d.discount) : "");
+  const [expectedText, setExpectedText] = useState(d.expected_commission_net ? fromCents(d.expected_commission_net) : "");
+  useEffect(() => { if (toCents(txnValueText) !== (d.transaction_value || 0)) setTxnValueText(d.transaction_value ? fromCents(d.transaction_value) : ""); }, [d.transaction_value]);
+  useEffect(() => { if (toCents(discountText) !== (d.discount || 0)) setDiscountText(d.discount ? fromCents(d.discount) : ""); }, [d.discount]);
+  useEffect(() => { if (toCents(expectedText) !== (d.expected_commission_net || 0)) setExpectedText(d.expected_commission_net ? fromCents(d.expected_commission_net) : ""); }, [d.expected_commission_net]);
 
   return <div>
     <div style={C.mbdy}>
@@ -1251,12 +1261,12 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers })
           <option value="">— Select —</option>
           {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </Sel></div>}
-        <div><label style={C.label}>Transaction Value (AED)</label><Inp type="number" step="0.01" value={d.transaction_value ? parseFloat(fromCents(d.transaction_value)) : ""} onChange={e => up("transaction_value", toCents(e.target.value))} placeholder="Optional if you only know the commission amount" /></div>
+        <div><label style={C.label}>Transaction Value (AED)</label><Inp type="number" step="0.01" value={txnValueText} onChange={e => { setTxnValueText(e.target.value); up("transaction_value", toCents(e.target.value)); }} placeholder="Optional if you only know the commission amount" /></div>
         <div><label style={C.label}>{isSecondary ? "Buyer Commission %" : "Commission %"}</label><Inp type="number" step="0.01" value={d.commission_pct} onChange={e => up("commission_pct", e.target.value)} placeholder="Optional" /></div>
         {isSecondary && <div><label style={C.label}>Seller Commission %</label><Inp type="number" step="0.01" value={d.seller_commission_pct} onChange={e => up("seller_commission_pct", e.target.value)} placeholder="Optional" /></div>}
         {isSecondary && <div><label style={C.label}>Seller Commission (AED)</label><Inp type="number" step="0.01" value={d.seller_commission ? fromCents(d.seller_commission) : ""} disabled style={{ background: "#F3F4F6", color: "#374151", opacity: 1 }} placeholder="Auto-calculated" /></div>}
-        {isSecondary && <div><label style={C.label}>Discount (AED)</label><Inp type="number" step="0.01" value={d.discount ? parseFloat(fromCents(d.discount)) : ""} onChange={e => up("discount", toCents(e.target.value))} placeholder="Optional" /></div>}
-        <div><label style={C.label}>Expected Net Commission (AED)</label><Inp type="number" step="0.01" value={d.expected_commission_net ? fromCents(d.expected_commission_net) : ""} onChange={e => up("expected_commission_net", toCents(e.target.value))} placeholder="You can enter this directly from your sheet" /></div>
+        {isSecondary && <div><label style={C.label}>Discount (AED)</label><Inp type="number" step="0.01" value={discountText} onChange={e => { setDiscountText(e.target.value); up("discount", toCents(e.target.value)); }} placeholder="Optional" /></div>}
+        <div><label style={C.label}>Expected Net Commission (AED)</label><Inp type="number" step="0.01" value={expectedText} onChange={e => { setExpectedText(e.target.value); up("expected_commission_net", toCents(e.target.value)); }} placeholder="You can enter this directly from your sheet" /></div>
         <div><label style={C.label}>VAT Applicable</label><Sel value={d.vat_applicable ? "yes" : "no"} onChange={e => up("vat_applicable", e.target.value === "yes")}><option value="yes">Yes (5%)</option><option value="no">No</option></Sel></div>
         <div><label style={C.label}>Date Created</label><Inp type="date" value={d.created_at} onChange={e => up("created_at", e.target.value)} /></div>
       </div>
@@ -2455,8 +2465,8 @@ function JournalPage({ accounts, txns, setTxns, saveTxn, persistTxn, journal, us
                   <option value="">— Select —</option>
                   {accounts.sort((a, b) => a.code.localeCompare(b.code)).map(a => <option key={a.id} value={a.id}>{a.code} — {a.name}</option>)}
                 </Sel></td>
-                <td style={C.td}><Inp type="number" value={l.debit || ""} onChange={e => { const lines = [...form.lines]; lines[i] = { ...lines[i], debit: parseFloat(e.target.value) || 0 }; setForm(p => ({ ...p, lines })); }} /></td>
-                <td style={C.td}><Inp type="number" value={l.credit || ""} onChange={e => { const lines = [...form.lines]; lines[i] = { ...lines[i], credit: parseFloat(e.target.value) || 0 }; setForm(p => ({ ...p, lines })); }} /></td>
+                <td style={C.td}><NumInp value={l.debit} onValue={v => { const lines = [...form.lines]; lines[i] = { ...lines[i], debit: v }; setForm(p => ({ ...p, lines })); }} /></td>
+                <td style={C.td}><NumInp value={l.credit} onValue={v => { const lines = [...form.lines]; lines[i] = { ...lines[i], credit: v }; setForm(p => ({ ...p, lines })); }} /></td>
                 <td style={C.td}><Inp value={l.memo || ""} onChange={e => { const lines = [...form.lines]; lines[i] = { ...lines[i], memo: e.target.value }; setForm(p => ({ ...p, lines })); }} /></td>
                 <td style={C.td}>{form.lines.length > 2 && <button style={C.btn("ghost", true)} onClick={() => setForm(p => ({ ...p, lines: p.lines.filter((_, j) => j !== i) }))}>✕</button>}</td>
               </tr>)}
@@ -2674,8 +2684,8 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
                     <option value="">— Select —</option>
                     {accounts.slice().sort((a, b) => a.code.localeCompare(b.code)).map(a => <option key={a.id} value={a.id}>{a.code} — {a.name}</option>)}
                   </Sel></td>
-                  <td style={C.td}><Inp type="number" value={l.debit || ""} onChange={e => { const lines = [...form.lines]; lines[i] = { ...lines[i], debit: parseFloat(e.target.value) || 0 }; setForm(p => ({ ...p, lines })); }} /></td>
-                  <td style={C.td}><Inp type="number" value={l.credit || ""} onChange={e => { const lines = [...form.lines]; lines[i] = { ...lines[i], credit: parseFloat(e.target.value) || 0 }; setForm(p => ({ ...p, lines })); }} /></td>
+                  <td style={C.td}><NumInp value={l.debit} onValue={v => { const lines = [...form.lines]; lines[i] = { ...lines[i], debit: v }; setForm(p => ({ ...p, lines })); }} /></td>
+                  <td style={C.td}><NumInp value={l.credit} onValue={v => { const lines = [...form.lines]; lines[i] = { ...lines[i], credit: v }; setForm(p => ({ ...p, lines })); }} /></td>
                   <td style={C.td}><Inp value={l.memo || ""} onChange={e => { const lines = [...form.lines]; lines[i] = { ...lines[i], memo: e.target.value }; setForm(p => ({ ...p, lines })); }} /></td>
                   <td style={C.td}>{form.lines.length > 2 && <button style={C.btn("ghost", true)} onClick={() => setForm(p => ({ ...p, lines: p.lines.filter((_, j) => j !== i) }))}>x</button>}</td>
                 </tr>)}
@@ -4215,7 +4225,7 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
       <div style={{ borderTop: "1px solid #E5E7EB", marginTop: 20, paddingTop: 20 }}>
         <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>🏦 Opening Balance</div>
         <div style={C.fg}>
-          <div><label style={C.label}>Opening Balance (AED)</label><Inp type="number" step="0.01" value={s.openingBalance || 0} onChange={e => setS(p => ({ ...p, openingBalance: parseFloat(e.target.value) || 0 }))} placeholder="e.g., 95548.02" /></div>
+          <div><label style={C.label}>Opening Balance (AED)</label><NumInp value={s.openingBalance} onValue={v => setS(p => ({ ...p, openingBalance: v }))} allowNegative placeholder="e.g., 95548.02" /></div>
           <div><label style={C.label}>As of Date</label><Inp type="date" value={normalizeReportingStartDate(s.openingBalanceDate)} min={DEFAULT_REPORTING_START_DATE} onChange={e => setS(p => ({ ...p, openingBalanceDate: e.target.value }))} /></div>
         </div>
         <div style={{ fontSize: 12, color: "#6B7280", marginTop: 8 }}>This will create an opening balance journal entry (OB) debiting Bank and crediting Capital Injection on save.</div>

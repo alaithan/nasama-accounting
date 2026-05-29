@@ -513,6 +513,9 @@ function FutureExpenseModal({ item, accounts, onSave, onClose }) {
   const defaultCategory = expenseAccounts.length > 0 ? expenseAccounts[0].code : "5100";
   const [form, setForm] = useState(() => item ? { ...item } : { ...feEmpty(), category: defaultCategory });
   const up = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
+  // Raw text the user types for the amount; cents are derived from it (avoids
+  // per-keystroke reformatting that made the field impossible to type into).
+  const [amountText, setAmountText] = useState(() => item && item.amountExpected ? fromCents(item.amountExpected) : "");
 
   const bankAccounts = accounts.filter(a => a.isBank || a.code === "1001");
   const isEdit = !!(item && item.id);
@@ -569,7 +572,7 @@ function FutureExpenseModal({ item, accounts, onSave, onClose }) {
           </div>
 
           <div><label style={C.label}>Amount Expected (AED) *</label>
-            <Inp type="number" step="0.01" value={form.amountExpected ? fromCents(form.amountExpected) : ""} onChange={e => up("amountExpected", toCents(e.target.value))} placeholder="e.g. 15000" />
+            <Inp type="number" step="0.01" value={amountText} onChange={e => { setAmountText(e.target.value); up("amountExpected", toCents(e.target.value)); }} placeholder="e.g. 15000" />
           </div>
 
           <div><label style={C.label}>VAT Applicable</label>
