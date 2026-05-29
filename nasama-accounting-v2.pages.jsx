@@ -1734,7 +1734,6 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
   const editTxn = useMemo(() => txns.find(t => t.id === editTxnId) || null, [txns, editTxnId]);
   const importAccounts = useMemo(() => mergeImportAccounts(accounts || []), [accounts]);
   const importAnalysis = useMemo(() => importCsvText ? analyzeBankImport({ csvText: importCsvText, accounts: importAccounts, txns, narrationMap }) : null, [importCsvText, importAccounts, txns, narrationMap]);
-  const escapeExcel = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
 
   // Build activity rows for a given set of target accounts
   const buildRows = (targetAccts) => {
@@ -1795,59 +1794,43 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
   const bankRows = useMemo(() => buildRows(bankOnlyAccts), [txns, bankOnlyAccts, sortKey, sortDir, dateFilter]);
   const cashRows = useMemo(() => buildRows(cashOnlyAccts), [txns, cashOnlyAccts, sortKey, sortDir, dateFilter]);
   const handleExportBankRows = () => {
-    const allRows = [...bankRows, ...cashRows];
-    if (!allRows.length) { toast("No bank or cash transactions to export", "warning"); return; }
-    const exportRows = [...allRows].sort((a, b) => {
+    // Bank transactions only \u2014 cash movements are intentionally excluded.
+    if (!bankRows.length) { toast("No bank transactions to export", "warning"); return; }
+    if (typeof XLSX === "undefined") { toast("Excel library not loaded \u2014 check your connection", "error"); return; }
+    // Chronological order so the running balance column reads correctly top-to-bottom.
+    const exportRows = [...bankRows].sort((a, b) => {
       const dateCmp = String(a.date || "").localeCompare(String(b.date || ""));
       if (dateCmp !== 0) return dateCmp;
       return String(a.ref || "").localeCompare(String(b.ref || ""));
     });
-    let runningC = 0;
-    const body = exportRows.map((row, idx) => {
-      runningC += (row.inAmt || 0) - (row.outAmt || 0);
-      return `<tr>
-            <td>${idx + 1}</td>
-            <td>${escapeExcel(row.date)}</td>
-            <td>${escapeExcel(row.ref)}</td>
-            <td>${escapeExcel(row.description)}</td>
-            <td>${escapeExcel(row.counterparty)}</td>
-            <td>${escapeExcel(row.txnType)}</td>
-            <td>${escapeExcel(row.acctName)}</td>
-            <td style="mso-number-format:'0.00';">${((row.inAmt || 0) / 100).toFixed(2)}</td>
-            <td style="mso-number-format:'0.00';">${((row.outAmt || 0) / 100).toFixed(2)}</td>
-            <td style="mso-number-format:'0.00';">${(((row.inAmt || 0) - (row.outAmt || 0)) / 100).toFixed(2)}</td>
-            <td style="mso-number-format:'0.00';">${(runningC / 100).toFixed(2)}</td>
-            <td>${escapeExcel(row.id)}</td>
-          </tr>`;
-    }).join("");
-    const html = `<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px;">
-  <thead>
-    <tr>
-      <th style="border:1px solid #D1D5DB;padding:6px 8px;background:#F3F4F6;font-weight:700;">No.</th>
-      <th style="border:1px solid #D1D5DB;padding:6px 8px;background:#F3F4F6;font-weight:700;">Date</th>
-      <th style="border:1px solid #D1D5DB;padding:6px 8px;background:#F3F4F6;font-weight:700;">Ref</th>
-      <th style="border:1px solid #D1D5DB;padding:6px 8px;background:#F3F4F6;font-weight:700;">Description</th>
-      <th style="border:1px solid #D1D5DB;padding:6px 8px;background:#F3F4F6;font-weight:700;">Counterparty</th>
-      <th style="border:1px solid #D1D5DB;padding:6px 8px;background:#F3F4F6;font-weight:700;">Type</th>
-      <th style="border:1px solid #D1D5DB;padding:6px 8px;background:#F3F4F6;font-weight:700;">Bank Account</th>
-      <th style="border:1px solid #D1D5DB;padding:6px 8px;background:#F3F4F6;font-weight:700;">In (AED)</th>
-      <th style="border:1px solid #D1D5DB;padding:6px 8px;background:#F3F4F6;font-weight:700;">Out (AED)</th>
-      <th style="border:1px solid #D1D5DB;padding:6px 8px;background:#F3F4F6;font-weight:700;">Net (AED)</th>
-      <th style="border:1px solid #D1D5DB;padding:6px 8px;background:#F3F4F6;font-weight:700;">Running Balance (AED)</th>
-      <th style="border:1px solid #D1D5DB;padding:6px 8px;background:#F3F4F6;font-weight:700;">Transaction ID</th>
-    </tr>
-  </thead>
-  <tbody>${body}</tbody>
-</table>`;
-    const blob = new Blob(["\ufeff", html], { type: "application/vnd.ms-excel;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `nasama-bank-transactions-${todayStr()}.xls`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    const header = ["No.", "Date", "Ref", "Description", "Counterparty", "Type", "Bank Account", "In (AED)", "Out (AED)", "Net (AED)", "Running Balance (AED)", "Transaction ID"];
+    const aoa = [header];
+    exportRows.forEach((row, idx) => {
+      aoa.push([
+        idx + 1,
+        row.date || "",
+        row.ref || "",
+        row.description || "",
+        row.counterparty || "",
+        row.txnType || "",
+        row.acctName || "",
+        (row.inAmt || 0) / 100,
+        (row.outAmt || 0) / 100,
+        ((row.inAmt || 0) - (row.outAmt || 0)) / 100,
+        (row.balance || 0) / 100,
+        row.id || "",
+      ]);
+    });
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 5 }, { wch: 12 }, { wch: 14 }, { wch: 42 }, { wch: 24 }, { wch: 16 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 20 }, { wch: 20 }];
+    // Apply AED number format to the four amount columns (H\u2013K), skipping the header row.
+    const fmt = "#,##0.00";
+    for (let r = 2; r <= aoa.length; r++) {
+      ["H", "I", "J", "K"].forEach(col => { const cell = ws[col + r]; if (cell) cell.z = fmt; });
+    }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Bank Transactions");
+    XLSX.writeFile(wb, `nasama-bank-transactions-${todayStr()}.xlsx`);
     toast(`Exported ${exportRows.length} bank transactions to Excel`, "success");
   };
 
