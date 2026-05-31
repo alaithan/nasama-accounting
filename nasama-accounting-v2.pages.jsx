@@ -28,6 +28,19 @@ function computeDateRange(preset) {
     default: return { from: "", to: "" };
   }
 }
+// Like usePersistedState but for the { preset, from, to } period filter: relative
+// presets (this_month, etc.) are recomputed on load so the range never goes stale;
+// only a "custom" range stores its actual from/to.
+function usePersistedDateFilter(key, defaultPreset = "this_month") {
+  const [df, setDf] = useState(() => {
+    const saved = ls_get(key, null);
+    const preset = (saved && saved.preset) || defaultPreset;
+    if (preset === "custom" && saved && saved.from && saved.to) return { preset: "custom", from: saved.from, to: saved.to };
+    return { preset, ...computeDateRange(preset) };
+  });
+  useEffect(() => { ls_set(key, df.preset === "custom" ? { preset: "custom", from: df.from, to: df.to } : { preset: df.preset }); }, [key, df]);
+  return [df, setDf];
+}
 function DateFilterBar({ dateFilter, setDateFilter }) {
   const { isMobile } = useWindowSize();
   const PRESETS = [
@@ -130,13 +143,13 @@ function computePeriodKpis(ft, accounts) {
 function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, plannedExpenses }) {
   const { isMobile, isTablet } = useWindowSize();
   const reportingStartLabel = fmtDate(kpis.reportingStartDate || DEFAULT_REPORTING_START_DATE);
-  const [dateFilter, setDateFilter] = useState(() => { const r = computeDateRange("this_month"); return { preset: "this_month", ...r }; });
+  const [dateFilter, setDateFilter] = usePersistedDateFilter("dash_period");
   const inRange = t => (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to);
   const recentTxns = [...txns].filter(t => !t.isVoid && inRange(t)).sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 8);
   const cashAccounts = accounts.filter(a => a.isBank || a.code === "1001");
   const maxCashFlow = Math.max(1, ...kpis.cashFlowSeries.map(item => Math.max(item.inflow, item.outflow, Math.abs(item.net))));
   const maxPerformance = Math.max(1, ...kpis.monthlyPerformance.map(item => Math.max(item.revenue, item.expense, Math.abs(item.net))));
-  const [includePending, setIncludePending] = useState(false);
+  const [includePending, setIncludePending] = usePersistedState("dash_includePending", false);
   const [showRecentTxns, setShowRecentTxns] = useState(false);
   const [dealInvoiceStatus, setDealInvoiceStatus] = useState(new Map());
   useEffect(() => {
@@ -789,11 +802,12 @@ function ManualPage() {
 function DealsPage({ deals, setDeals, customers, brokers, developers, txns, accounts, journal, persistTxn, userRole, userEmail, writeMeta, setInvoiceDeal, setPage }) {
   const [show, setShow] = useState(false);
   const [edit, setEdit] = useState(null);
-  const [filter, setFilter] = useState("All");
-  const [sortKey, setSortKey] = useState("property");
-  const [sortDir, setSortDir] = useState("asc");
+  // Filter + sort persist across navigation; default sort = newest deals first.
+  const [filter, setFilter] = usePersistedState("deals_filter", "All");
+  const [sortKey, setSortKey] = usePersistedState("deals_sortKey", "date");
+  const [sortDir, setSortDir] = usePersistedState("deals_sortDir", "desc");
   const [dealMutationLabel, setDealMutationLabel] = useState("");
-  const [invoicedDealIds, setInvoicedDealIds] = useState(new Set());
+  const [dealInvoices, setDealInvoices] = useState([]);
   const [bpDeal, setBpDeal] = useState(null);
   const [bpForm, setBpForm] = useState({ date: todayStr(), amount: "", splitPct: "", paidFromCode: "1002", memo: "" });
   const [bpSaving, setBpSaving] = useState(false);
@@ -804,11 +818,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
   }, [txns, deals]);
   useEffect(() => {
     const unsub = db.collection("invoices").onSnapshot(snap => {
-      const ids = new Set();
-      snap.docs.forEach(doc => {
-        (doc.data().lineItems || []).forEach(li => { if (li.dealId) ids.add(li.dealId); });
-      });
-      setInvoicedDealIds(ids);
+      setDealInvoices(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     }, err => console.error("Invoice listener error:", err));
     return () => unsub();
   }, []);
@@ -1016,6 +1026,13 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
       {hasPermission(userRole, 'sales.create') && <button style={C.btn()} onClick={() => { setEdit(null); setShow(true); }}>+ New Deal</button>}
     </PageHeader>
 
+    <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+      {["All", ...DEAL_TYPES].map(t => {
+        const active = filter === t;
+        return <button key={t} onClick={() => setFilter(t)} style={{ ...C.btn(active ? "primary" : "secondary", true), fontSize: 13, padding: "7px 16px" }}>{t === "All" ? "All Deals" : t}</button>;
+      })}
+    </div>
+
     <div style={{ ...C.card, padding: "12px 16px", marginBottom: 14, borderLeft: "4px solid #2563EB", background: "#EFF6FF", color: "#1D4ED8", fontSize: 13 }}>
       Deal reseeding from pasted data is disabled. Firestore is now the only source of truth for deal create, edit, delete, and repair actions.
     </div>
@@ -1058,16 +1075,24 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
             <td style={C.td}>{d.client_name || "—"}</td>
             <td style={C.td}>{d.broker_name || "—"}</td>
             <td style={{ ...C.td, textAlign: "right" }}>{d.transaction_value ? fmtAED(d.transaction_value) : "--"}</td>
-            <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(d.expected_commission_net || 0)}</td>
+            <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>
+              <div>{fmtAED(d.expected_commission_net || 0)}</div>
+              {d.vat_applicable && <div style={{ fontSize: 10, fontWeight: 500, color: "#9CA3AF", marginTop: 1 }}>+ 5% VAT</div>}
+            </td>
             <td style={C.td}>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {hasPermission(userRole, 'sales.create') && (() => {
                   const isDone = d.stage === "Commission Collected" || d.stage === "Cancelled";
                   if (isDone) return null;
-                  if (invoicedDealIds.has(d.id)) return (
-                    <span title="An invoice already exists for this deal" style={{ fontSize: 11, color: "#059669", padding: "4px 8px", borderRadius: 4, border: "1px solid #D1FAE5", background: "#ECFDF5", whiteSpace: "nowrap", cursor: "default" }}>✓ Invoiced</span>
+                  const ci = commissionInvoicing(d, dealInvoices);
+                  if (ci.fullyInvoiced) return (
+                    <span title={`Fully invoiced${ci.invoiceNumbers.length ? ` — #${ci.invoiceNumbers.join(", #")}` : ""}`} style={{ fontSize: 11, color: "#059669", padding: "4px 8px", borderRadius: 4, border: "1px solid #D1FAE5", background: "#ECFDF5", whiteSpace: "nowrap", cursor: "default" }}>✓ Invoiced</span>
                   );
-                  return <button style={{ ...C.btn("secondary", true), borderColor: GOLD, color: GOLD_D }} onClick={e => { e.stopPropagation(); setInvoiceDeal(d); setPage("invoices"); }}>Invoice</button>;
+                  const openInvoice = e => { e.stopPropagation(); setInvoiceDeal(d); setPage("invoices"); };
+                  return <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <button style={{ ...C.btn("secondary", true), borderColor: GOLD, color: GOLD_D }} onClick={openInvoice}>{ci.partiallyInvoiced ? "Invoice rest" : "Invoice"}</button>
+                    {ci.partiallyInvoiced && <span title={`${fmtAED(ci.totalInvoicedCents)} invoiced${ci.invoiceNumbers.length ? ` (#${ci.invoiceNumbers.join(", #")})` : ""}`} style={{ fontSize: 10.5, color: "#B45309", whiteSpace: "nowrap" }}>{fmtAED(ci.remainingCents)} left</span>}
+                  </span>;
                 })()}
                 {hasPermission(userRole, 'finance.create') && d.broker_id && d.stage !== "Cancelled" && (() => {
                   if (brokerPaidDealIds.has(d.id)) return (
@@ -1088,7 +1113,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
     {show && <div style={C.modal} onClick={() => setShow(false)}>
       <div style={C.mbox(700)} onClick={e => e.stopPropagation()}>
         <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>{edit?.id ? "Edit Deal" : "New Deal"}</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
-        <DealForm initial={normalizeLinkedDealRefs(edit || empty)} onSave={save} onCancel={() => setShow(false)} customers={customers} brokers={brokers} developers={developers} />
+        <DealForm initial={normalizeLinkedDealRefs(edit || empty)} onSave={save} onCancel={() => setShow(false)} customers={customers} brokers={brokers} developers={developers} invoices={dealInvoices} />
       </div>
     </div>}
 
@@ -1206,7 +1231,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
   </div>;
 }
 
-function DealForm({ initial, onSave, onCancel, customers, brokers, developers }) {
+function DealForm({ initial, onSave, onCancel, customers, brokers, developers, invoices }) {
   const [d, setD] = useState({ ...initial });
   const up = (k, v) => setD(p => {
     const next = { ...p, [k]: v };
@@ -1237,7 +1262,7 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers })
   // discount are only ever set by their own inputs, so they need no resync effect.
   useEffect(() => { if (toCents(expectedText) !== (d.expected_commission_net || 0)) setExpectedText(d.expected_commission_net ? fromCents(d.expected_commission_net) : ""); }, [d.expected_commission_net]);
 
-  return <div>
+  return <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
     <div style={C.mbdy}>
       <div style={C.fg}>
         <div><label style={C.label}>Deal Type</label><Sel value={d.type} onChange={e => up("type", e.target.value)}>{DEAL_TYPES.map(t => <option key={t}>{t}</option>)}</Sel></div>
@@ -1270,6 +1295,45 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers })
         <div><label style={C.label}>Date Created</label><Inp type="date" value={d.created_at} onChange={e => up("created_at", e.target.value)} /></div>
       </div>
       <div style={{ marginTop: 14 }}><label style={C.label}>Notes</label><textarea style={{ ...C.input, minHeight: 60, resize: "vertical" }} value={d.notes || ""} onChange={e => up("notes", e.target.value)} /></div>
+
+      {(() => {
+        const ci = commissionInvoicing(d, invoices || []);
+        const hasContent = ci.commissions.some(c => c.target > 0) || ci.totalInvoicedCents > 0 || ci.totalPendingCents > 0;
+        if (!hasContent) return null;
+        const statusChip = (s) => {
+          const [txt, color, bg, bd] = s === "full" ? ["Fully invoiced", "#059669", "#ECFDF5", "#D1FAE5"]
+            : s === "partial" ? ["Partial", "#B45309", "#FFFBEB", "#FDE68A"]
+            : ["Not invoiced", "#6B7280", "#F3F4F6", "#E5E7EB"];
+          return <span style={{ fontSize: 10, fontWeight: 600, color, background: bg, border: `1px solid ${bd}`, borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>{txt}</span>;
+        };
+        return <div style={{ marginTop: 16, border: "1px solid #E5E7EB", borderRadius: 8, overflow: "hidden" }}>
+          <div style={{ padding: "10px 14px", background: "#F9FAFB", borderBottom: "1px solid #E5E7EB", fontSize: 12, fontWeight: 700, color: NAVY, letterSpacing: "0.02em" }}>Commissions & Invoicing</div>
+          <div style={{ padding: "4px 14px" }}>
+            {ci.commissions.map(c => <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "8px 0", borderBottom: "1px solid #F3F4F6", fontSize: 12.5, flexWrap: "wrap" }}>
+              <div style={{ minWidth: 150 }}>
+                <div style={{ fontWeight: 600, color: "#374151" }}>{c.label}</div>
+                {c.invoiceNumbers.length > 0 && <div style={{ fontSize: 10.5, color: "#9CA3AF", marginTop: 2 }}>Invoice {c.invoiceNumbers.map(n => "#" + n).join(", ")}</div>}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, textAlign: "right" }}>
+                <div><div style={{ fontSize: 10, color: "#9CA3AF" }}>Target</div><div style={{ fontWeight: 600 }}>{fmtAED(c.target)}</div></div>
+                <div><div style={{ fontSize: 10, color: "#9CA3AF" }}>Invoiced</div><div style={{ fontWeight: 600, color: "#059669" }}>{fmtAED(c.invoicedCents)}</div></div>
+                <div><div style={{ fontSize: 10, color: "#9CA3AF" }}>Remaining</div><div style={{ fontWeight: 700, color: c.remainingCents > 0 ? "#B45309" : "#059669" }}>{fmtAED(c.remainingCents)}</div></div>
+                {statusChip(c.status)}
+              </div>
+            </div>)}
+            {ci.discount > 0 && <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #F3F4F6", fontSize: 12, color: "#6B7280" }}><span>Discount (deal-level)</span><span style={{ fontWeight: 600 }}>− {fmtAED(ci.discount)}</span></div>}
+            {ci.untaggedInvoicedCents > 0 && <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #F3F4F6", fontSize: 11.5, color: "#9CA3AF" }}><span>Other invoiced (untagged legacy lines)</span><span>{fmtAED(ci.untaggedInvoicedCents)}</span></div>}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 10, fontSize: 13, flexWrap: "wrap", gap: 8 }}>
+              <span style={{ fontWeight: 700, color: NAVY }}>Net expected {fmtAED(ci.netExpected)}</span>
+              <span style={{ display: "flex", gap: 16 }}>
+                <span style={{ color: "#6B7280" }}>Invoiced <strong style={{ color: "#059669" }}>{fmtAED(ci.totalInvoicedCents)}</strong></span>
+                <span style={{ color: "#6B7280" }}>Remaining to invoice <strong style={{ color: ci.remainingCents > 0 ? "#B45309" : "#059669" }}>{fmtAED(ci.remainingCents)}</strong></span>
+              </span>
+            </div>
+            {ci.totalPendingCents > 0 && <div style={{ fontSize: 11, color: "#9CA3AF", margin: "4px 0 8px", textAlign: "right" }}>+ {fmtAED(ci.totalPendingCents)} on draft invoices (not counted until issued)</div>}
+          </div>
+        </div>;
+      })()}
     </div>
     <div style={C.mftr}><button style={C.btn("secondary")} onClick={onCancel}>Cancel</button><button style={C.btn()} onClick={() => onSave(d)}>💾 Save Deal</button></div>
   </div>;
@@ -1562,7 +1626,7 @@ function PaymentsPage({ accounts, txns, saveTxn, persistTxn, journal, vendors, u
 function CRUDPage({ title, icon, items, setItems, fields, eventName, userRole, createPerm, editPerm }) {
   const [show, setShow] = useState(false);
   const [edit, setEdit] = useState(null);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = usePersistedState("crud_search_" + (eventName || title), "");
 
   useEffect(() => {
     const h = () => { setEdit(null); setShow(true); };
@@ -1728,9 +1792,9 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
   const [showTransfer, setShowTransfer] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [editTxnId, setEditTxnId] = useState("");
-  const [sortKey, setSortKey] = useState("date");
-  const [sortDir, setSortDir] = useState("desc");
-  const [dateFilter, setDateFilter] = useState(() => { const r = computeDateRange("this_month"); return { preset: "this_month", ...r }; });
+  const [sortKey, setSortKey] = usePersistedState("bank_sortKey", "date");
+  const [sortDir, setSortDir] = usePersistedState("bank_sortDir", "desc");
+  const [dateFilter, setDateFilter] = usePersistedDateFilter("bank_period");
   const [tf, setTf] = useState({ date: todayStr(), fromCode: "", toCode: "", amount: "", memo: "Bank transfer" });
   const [importFileName, setImportFileName] = useState("");
   const [importCsvText, setImportCsvText] = useState("");
@@ -2237,7 +2301,7 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
 function COAPage({ accounts, setAccounts, ledger, userRole }) {
   const [show, setShow] = useState(false);
   const [edit, setEdit] = useState(null);
-  const [filter, setFilter] = useState("All");
+  const [filter, setFilter] = usePersistedState("coa_filter", "All");
   const empty = { code: "", name: "", type: "Expense", isBank: false, isCash: false, isOutputVAT: false, isInputVAT: false };
 
   useEffect(() => {
@@ -2492,10 +2556,10 @@ function JournalPage({ accounts, txns, setTxns, saveTxn, persistTxn, journal, us
 function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn, journal, userRole }) {
   const [show, setShow] = useState(false);
   const [editTxnId, setEditTxnId] = useState("");
-  const [filter, setFilter] = useState("All");
-  const [sortKey, setSortKey] = useState("date");
-  const [sortDir, setSortDir] = useState("desc");
-  const [dateFilter, setDateFilter] = useState(() => { const r = computeDateRange("this_month"); return { preset: "this_month", ...r }; });
+  const [filter, setFilter] = usePersistedState("journal_filter", "All");
+  const [sortKey, setSortKey] = usePersistedState("journal_sortKey", "date");
+  const [sortDir, setSortDir] = usePersistedState("journal_sortDir", "desc");
+  const [dateFilter, setDateFilter] = usePersistedDateFilter("journal_period");
   const [form, setForm] = useState({ date: todayStr(), description: "", counterparty: "", lines: [{ accountId: "", debit: 0, credit: 0, memo: "" }, { accountId: "", debit: 0, credit: 0, memo: "" }] });
   const editTxn = useMemo(() => txns.find(t => t.id === editTxnId) || null, [txns, editTxnId]);
 
@@ -2709,8 +2773,8 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
 }
 
 function ReportsPage({ accounts, txns, settings }) {
-  const [tab, setTab] = useState("pnl");
-  const [dateFilter, setDateFilter] = useState(() => { const r = computeDateRange("this_month"); return { preset: "this_month", ...r }; });
+  const [tab, setTab] = usePersistedState("reports_tab", "pnl");
+  const [dateFilter, setDateFilter] = usePersistedDateFilter("reports_period");
   const tabs = [
     { id: "pnl", label: "Profit & Loss" }, { id: "bs", label: "Balance Sheet" },
     { id: "tb", label: "Trial Balance" }, { id: "gl", label: "General Ledger" },
@@ -2749,8 +2813,8 @@ function ReportsPage({ accounts, txns, settings }) {
 
   // GL account filter state (lifted so GLPrintDoc can apply same filters on print)
   const [glSelectedId,  setGlSelectedId]  = useState(null);
-  const [glTypeFilter,  setGlTypeFilter]  = useState("All");
-  const [glSearchText,  setGlSearchText]  = useState("");
+  const [glTypeFilter,  setGlTypeFilter]  = usePersistedState("reports_glType", "All");
+  const [glSearchText,  setGlSearchText]  = usePersistedState("reports_glSearch", "");
 
   // GL and TB look better in landscape (wider columns)
   const isWide = tab === "gl" || tab === "tb";
@@ -2918,7 +2982,7 @@ function ReportsPage({ accounts, txns, settings }) {
 //  VAT PAGE
 // ╚══════════════════════════════════════════════════╝
 function VATPage({ accounts, txns, ledger, settings }) {
-  const [dateFilter, setDateFilter] = useState(() => { const r = computeDateRange("this_month"); return { preset: "this_month", ...r }; });
+  const [dateFilter, setDateFilter] = usePersistedDateFilter("vat_period");
   const outputVATA = accounts.find(a => a.isOutputVAT);
   const inputVATA = accounts.find(a => a.isInputVAT);
   const inDateRange = t => (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to);
@@ -3307,11 +3371,16 @@ function PerformancePage({ deals, txns, accounts, budgets, setPage }) {
   const dealPnlMap = new Map();
   deals.forEach(d => {
     const dTxns = (txns || []).filter(t => !t.isVoid && t.deal_id === d.id);
-    const cashIn = dTxns.filter(t => t.txnType === "SR").reduce((s, t) =>
+    const cashInFromTxns = dTxns.filter(t => t.txnType === "SR").reduce((s, t) =>
       s + (t.lines || []).reduce((ss, l) => {
         const a = accountById.get(l.accountId);
         return ss + (a && (a.isBank || a.isCash || a.code === "1001" || a.code === "1002") ? (l.debit || 0) : 0);
       }, 0), 0);
+    // No linked receipt? For deals already marked "Commission Collected" the cash
+    // was collected in the past (outside the system), so fall back to the expected
+    // commission — purely a reporting figure, no bank transaction, no double-count.
+    // Mirrors the broker_paid_amount fallback used for Broker Paid just below.
+    const cashIn = cashInFromTxns > 0 ? cashInFromTxns : (d.stage === "Commission Collected" ? (d.expected_commission_net || 0) : 0);
     const brokerPaidFromTxns = dTxns.filter(t => t.txnType === "BP").reduce((s, t) =>
       s + (t.lines || []).reduce((ss, l) => {
         const a = accountById.get(l.accountId);
@@ -3341,6 +3410,8 @@ function PerformancePage({ deals, txns, accounts, budgets, setPage }) {
   const enhBrokerPerf = [...enhBrokerMap.values()]
     .map(b => ({ ...b, netContribution: b.commission - b.brokerPaid, avgCommPct: b.commPcts.length > 0 ? b.commPcts.reduce((s, p) => s + p, 0) / b.commPcts.length : 0 }))
     .sort((a, b) => b.commission - a.commission);
+  // Company retained per broker = commission generated − broker paid (for the chart's 2nd bar).
+  const brokerRetainedByName = new Map(enhBrokerPerf.map(b => [b.name, b.netContribution]));
 
   // ── Enhanced developer data ──────────────────────
   const enhDevMap = new Map();
@@ -3492,14 +3563,21 @@ function PerformancePage({ deals, txns, accounts, budgets, setPage }) {
       </div>
 
       {/* ── Broker Performance Bar Chart ── */}
-      {sectionCard("Broker Performance — Commission Generated", `Top ${brokerPerf.length} brokers ranked by expected commission`,
+      {sectionCard("Broker Performance — Generated vs Retained", `Top ${brokerPerf.length} brokers — commission generated vs company retained (after broker paid)`,
         <div>
           {brokerPerf.length === 0 && <div style={{ color: "#9CA3AF", fontSize: 13, textAlign: "center", padding: "20px 0" }}>No broker data available.</div>}
-          {brokerPerf.map((b, i) => (
+          {brokerPerf.length > 0 && <div style={{ display: "flex", gap: 16, marginBottom: 14, fontSize: 11, color: "#6B7280", flexWrap: "wrap" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: "#2563EB" }} />Commission generated</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: "#0F766E" }} />Company retained (after broker paid)</span>
+          </div>}
+          {brokerPerf.map((b, i) => {
+            const retained = brokerRetainedByName.get(b.name) || 0;
+            const genColor = i === 0 ? GOLD : i === 1 ? "#94A3B8" : i === 2 ? "#D97706" : "#2563EB";
+            return (
             <div key={b.name} style={{ marginBottom: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{ width: 26, height: 26, borderRadius: "50%", background: i === 0 ? GOLD : i === 1 ? "#94A3B8" : i === 2 ? "#D97706" : "#E5E7EB", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: i < 3 ? "#fff" : "#6B7280", flexShrink: 0 }}>{i + 1}</div>
+                  <div style={{ width: 26, height: 26, borderRadius: "50%", background: genColor, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", flexShrink: 0 }}>{i + 1}</div>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>{b.name}</div>
                     <div style={{ fontSize: 11, color: "#6B7280" }}>{b.deals} deal{b.deals !== 1 ? "s" : ""} · {b.collected} collected</div>
@@ -3507,14 +3585,18 @@ function PerformancePage({ deals, txns, accounts, budgets, setPage }) {
                 </div>
                 <div style={{ textAlign: "right" }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>{fmtAED(b.commission)}</div>
-                  <div style={{ fontSize: 11, color: "#6B7280" }}>{fmtAED(b.value)} sold</div>
+                  <div style={{ fontSize: 11, color: "#6B7280" }}>Retained <span style={{ color: "#0F766E", fontWeight: 600 }}>{fmtAED(retained)}</span> · {fmtAED(b.value)} sold</div>
                 </div>
               </div>
               <div style={{ height: 8, borderRadius: 999, background: "#F3F4F6", overflow: "hidden" }}>
-                <div style={{ width: `${Math.max(2, (b.commission / maxBrokerComm) * 100)}%`, height: "100%", background: i === 0 ? GOLD : i === 1 ? "#94A3B8" : i === 2 ? "#D97706" : "#2563EB", borderRadius: 999, transition: "width .5s ease" }} />
+                <div style={{ width: `${Math.max(2, (b.commission / maxBrokerComm) * 100)}%`, height: "100%", background: genColor, borderRadius: 999, transition: "width .5s ease" }} />
+              </div>
+              <div style={{ height: 6, borderRadius: 999, background: "#F3F4F6", overflow: "hidden", marginTop: 3 }} title={`Company retained: ${fmtAED(retained)}`}>
+                <div style={{ width: `${(Math.max(0, retained) / maxBrokerComm) * 100}%`, height: "100%", background: "#0F766E", borderRadius: 999, transition: "width .5s ease" }} />
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -4365,7 +4447,7 @@ function UsersPage({ userRole, userEmail }) {
 //  AUTH GATE
 // ╚══════════════════════════════════════════════════╝
 function SecurityAdminPage({ userRole, userEmail, settings }) {
-  const [tab, setTab] = useState("users");
+  const [tab, setTab] = usePersistedState("security_tab", "users");
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState([]);
   const [branches, setBranches] = useState([]);
@@ -4976,12 +5058,12 @@ function SidebarIcon({ id, active }) {
 }
 
 function AuditingDealsPage({ dealStageChanges, userRole }) {
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [filterType, setFilterType] = useState("All");
-  const [filterStage, setFilterStage] = useState("All");
-  const [searchText, setSearchText] = useState("");
-  const [sortDir, setSortDir] = useState("desc");
+  const [dateFrom, setDateFrom] = usePersistedState("audit_dateFrom", "");
+  const [dateTo, setDateTo] = usePersistedState("audit_dateTo", "");
+  const [filterType, setFilterType] = usePersistedState("audit_filterType", "All");
+  const [filterStage, setFilterStage] = usePersistedState("audit_filterStage", "All");
+  const [searchText, setSearchText] = usePersistedState("audit_search", "");
+  const [sortDir, setSortDir] = usePersistedState("audit_sortDir", "desc");
 
   const STAGE_BADGE = {
     "Lead":                 { bg: "#EFF6FF", cl: "#1D4ED8" },
@@ -5379,8 +5461,6 @@ function App({ userRole, userAccess, userEmail, signOut }) {
 
   const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, budgets, setBudgets: setBudgetsFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta, dealStageChanges, setInvoiceDeal };
 
-  const addMap = { deals: () => document.dispatchEvent(new CustomEvent("add-deal")), receipts: () => document.dispatchEvent(new CustomEvent("add-receipt")), payments: () => document.dispatchEvent(new CustomEvent("add-payment")), journal: () => document.dispatchEvent(new CustomEvent("add-txn")), customers: () => document.dispatchEvent(new CustomEvent("add-customer")), brokers: () => document.dispatchEvent(new CustomEvent("add-broker")), developers: () => document.dispatchEvent(new CustomEvent("add-developer")), vendors: () => document.dispatchEvent(new CustomEvent("add-vendor")), coa: () => document.dispatchEvent(new CustomEvent("add-account")), futureExpenses: () => document.dispatchEvent(new CustomEvent("add-planned-expense")), banana2: () => toast("Banana 2 action triggered!", "success") };
-
   const renderPage = () => {
     if (!canAccessPage(accessSubject, page)) {
       return <div style={{ ...C.card, padding: 24 }}>
@@ -5612,8 +5692,6 @@ function App({ userRole, userAccess, userEmail, signOut }) {
             : <div style={{ flex: 1 }} />
           }
           <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 4 : 10, flexShrink: 0 }}>
-            {!isMobile && <button style={C.btn()} onClick={() => (addMap[page] || (() => toast("Navigate to a module first", "info")))()}>+ Add New</button>}
-            {isMobile && <button style={{ ...C.btn(), padding: '7px 11px', fontSize: 13, minHeight: 36 }} onClick={() => (addMap[page] || (() => toast("Navigate first", "info")))()}>+</button>}
             <button style={{ ...C.btn("secondary"), padding: isMobile ? '7px 9px' : undefined, minHeight: isMobile ? 36 : undefined }} onClick={() => setDark(d => !d)}>{dark ? "☀️" : "🌙"}</button>
             {syncing && isMobile && <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#059669", flexShrink: 0, display: "block" }} title="Saving…" />}
             {syncing && !isMobile && <span style={{ fontSize: 11, background: "#ECFDF3", color: "#027A48", border: "1px solid #A6F4C5", borderRadius: 20, padding: "3px 11px", fontWeight: 500 }}>Saving…</span>}

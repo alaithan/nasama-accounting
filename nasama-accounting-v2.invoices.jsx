@@ -102,7 +102,7 @@ function invBlankLine() {
   const _id = (typeof uid === "function")
     ? uid()
     : Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  return { _id, projectUnit: "", specification: "", dealValue: "", commissionPct: "", commissionAmount: "", dealId: "" };
+  return { _id, projectUnit: "", specification: "", dealValue: "", commissionPct: "", commissionAmount: "", dealId: "", commissionId: "" };
 }
 
 function invBlankDoc(settings) {
@@ -518,15 +518,22 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
     }));
   };
 
-  // Auto-fill line item from deal record
-  const fillDeal = (idx, dealId) => {
+  // Auto-fill line item from a deal record + which commission (buyer/seller/single)
+  const fillDeal = (idx, dealId, commissionId) => {
+    if (!dealId) {
+      setInv(prev => { const copy = JSON.parse(JSON.stringify(prev)); copy.lineItems[idx] = { ...copy.lineItems[idx], dealId: "", commissionId: "" }; return copy; });
+      return;
+    }
     const d = (deals || []).find(x => x.id === dealId);
     if (!d) return;
+    const comms = (typeof dealCommissions === "function" ? dealCommissions(d).commissions : []);
+    const cid = commissionId || (comms[0] ? comms[0].id : "single");
+    const pct = cid === "seller" ? (parseFloat(d.seller_commission_pct) || d.commission_pct || 3) : (d.commission_pct || 3);
+    const sideLabel = cid === "buyer" ? "Buyer-side " : cid === "seller" ? "Seller-side " : "";
     const projectUnit = [d.property_name, d.unit_no ? `Unit ${d.unit_no}` : ""].filter(Boolean).join(" — ");
-    const pct         = d.commission_pct || 3;
     setInv(prev => {
       const copy = JSON.parse(JSON.stringify(prev));
-      const line = { ...copy.lineItems[idx], projectUnit, specification: `${pct}% of Agency Commission Claim`, dealValue: d.transaction_value ? invFromCents(d.transaction_value) : "", commissionPct: pct, dealId };
+      const line = { ...copy.lineItems[idx], projectUnit, specification: `${sideLabel}${pct}% of Agency Commission Claim`, dealValue: d.transaction_value ? invFromCents(d.transaction_value) : "", commissionPct: pct, dealId, commissionId: cid };
       Object.assign(copy.lineItems[idx], invNormalizeLine(line));
       return copy;
     });
@@ -660,6 +667,17 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
                           {deals.map(d => <option key={d.id} value={d.id}>{d.property_name}{d.unit_no ? ` · ${d.unit_no}` : ""}</option>)}
                         </select>
                       )}
+                      {li.dealId && (() => {
+                        const d = (deals || []).find(x => x.id === li.dealId);
+                        const comms = d && typeof dealCommissions === "function" ? dealCommissions(d).commissions : [];
+                        if (comms.length < 2) return null;
+                        return (
+                          <select style={{ ...sel, fontSize: 11, marginBottom: 6, padding: "5px 8px" }} value={li.commissionId || ""} onChange={e => fillDeal(idx, li.dealId, e.target.value)}>
+                            <option value="">— Which commission? —</option>
+                            {comms.map(c => <option key={c.id} value={c.id}>{c.label} · {invFmt(c.target / 100)}</option>)}
+                          </select>
+                        );
+                      })()}
                       <input style={{ ...inp, fontSize: 12 }} placeholder="Project name / unit no." value={li.projectUnit} onChange={e => setLine(idx, "projectUnit", e.target.value)} />
                     </td>
                     <td style={{ padding: 8, border: "1px solid #E8DCC8", verticalAlign: "top" }}>
@@ -758,7 +776,9 @@ function InvoicePage({ customers, developers, deals, settings, userEmail, userRo
     }).catch(() => {});
   }, []);
 
-  // Open a pre-filled new invoice when navigated from the Deals table
+  // Open a pre-filled new invoice when navigated from the Deals table. Bills
+  // EVERY commission side that still has an outstanding balance (so a Secondary
+  // deal gets both buyer-side and seller-side lines), not just the first one.
   React.useEffect(() => {
     if (!preselectedDeal) return;
     const blank = invBlankDoc(settings);
@@ -767,13 +787,38 @@ function InvoicePage({ customers, developers, deals, settings, userEmail, userRo
       companyName: preselectedDeal.developer || preselectedDeal.client_name || "",
       partyType: "developer",
     };
-    blank.lineItems = [{
+    const valueAED = preselectedDeal.transaction_value ? invFromCents(preselectedDeal.transaction_value) : "";
+    const tvCents = preselectedDeal.transaction_value || 0;
+    const ci = typeof commissionInvoicing === "function" ? commissionInvoicing(preselectedDeal, invoices) : null;
+    let sides = ci ? ci.commissions.filter(c => c.remainingCents > 0) : [];
+    if (preselectedDeal._commissionId) sides = sides.filter(c => c.id === preselectedDeal._commissionId);
+    if (!sides.length && ci) sides = ci.commissions.filter(c => c.target > 0);
+    const projectUnit = [preselectedDeal.property_name, preselectedDeal.unit_no].filter(Boolean).join(" – ");
+    const mkLine = (c) => {
+      const sideLabel = c.id === "buyer" ? "Buyer-side " : c.id === "seller" ? "Seller-side " : "";
+      const naturalPct = c.id === "seller" ? preselectedDeal.seller_commission_pct : preselectedDeal.commission_pct;
+      // Use the side's own % when nothing is invoiced yet; otherwise derive a %
+      // that bills exactly that side's outstanding amount.
+      const pct = (c.remainingCents >= c.target && naturalPct) ? naturalPct
+        : (tvCents > 0 ? Math.round((c.remainingCents / tvCents) * 10000) / 100 : (naturalPct || ""));
+      return {
+        ...invBlankLine(),
+        projectUnit,
+        specification: `${sideLabel || `${preselectedDeal.type || ""} `}commission — ${preselectedDeal.client_name || ""}`.trim(),
+        dealValue: valueAED,
+        commissionPct: pct,
+        dealId: preselectedDeal.id || "",
+        commissionId: c.id,
+      };
+    };
+    blank.lineItems = sides.length ? sides.map(mkLine) : [{
       ...invBlankLine(),
-      projectUnit:    [preselectedDeal.property_name, preselectedDeal.unit_no].filter(Boolean).join(" – "),
-      specification:  `${preselectedDeal.type || ""} commission — ${preselectedDeal.client_name || ""}`.trim(),
-      dealValue:      preselectedDeal.transaction_value || "",
-      commissionPct:  preselectedDeal.commission_pct   || "",
-      dealId:         preselectedDeal.id               || "",
+      projectUnit,
+      specification: `${preselectedDeal.type || ""} commission — ${preselectedDeal.client_name || ""}`.trim(),
+      dealValue: valueAED,
+      commissionPct: preselectedDeal.commission_pct || "",
+      dealId: preselectedDeal.id || "",
+      commissionId: "single",
     }];
     setEditing(blank);
     if (onClearPreselected) onClearPreselected();

@@ -204,12 +204,110 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       return Math.round(num * 100);
     };
     const fromCents = c => ((c || 0) / 100).toFixed(2);
+    // ── COMMISSION ↔ INVOICE LINKING ──────────────────
+    // Commission (excl VAT) of one invoice line, in cents. Invoice line amounts
+    // are major AED units (commission = dealValue × pct%); deals store cents.
+    const invLineCommissionCents = (li) => {
+      if (!li) return 0;
+      let amt = parseFloat(li.commissionAmount);
+      if (!isFinite(amt) || amt <= 0) {
+        const dv = parseFloat(String(li.dealValue ?? "").replace(/,/g, "")) || 0;
+        const pct = parseFloat(li.commissionPct ?? li.commission_pct) || 0;
+        amt = dv > 0 && pct > 0 ? dv * pct / 100 : 0;
+      }
+      return Math.round((amt || 0) * 100);
+    };
+    // The 1–2 commissions a deal can generate, as cents targets. Secondary deals
+    // split into buyer-side + seller-side; everything else is one commission.
+    // Discount (Secondary) is returned separately, never folded into a side.
+    const dealCommissions = (deal) => {
+      if (!deal) return { isSecondary: false, commissions: [], discount: 0, netExpected: 0 };
+      const tv = deal.transaction_value || 0;
+      if (deal.type === "Secondary") {
+        const buyerPct = parseFloat(deal.commission_pct) || 0;
+        const sellerPct = parseFloat(deal.seller_commission_pct) || 0;
+        const buyerTarget = tv && buyerPct ? Math.round(tv * buyerPct / 100) : 0;
+        const sellerTarget = (deal.seller_commission || 0) || (tv && sellerPct ? Math.round(tv * sellerPct / 100) : 0);
+        return {
+          isSecondary: true,
+          commissions: [
+            { id: "buyer", label: "Buyer-side commission", target: buyerTarget },
+            { id: "seller", label: "Seller-side commission", target: sellerTarget },
+          ],
+          discount: deal.discount || 0,
+          netExpected: deal.expected_commission_net || 0,
+        };
+      }
+      return {
+        isSecondary: false,
+        commissions: [{ id: "single", label: "Agency commission", target: deal.expected_commission_net || 0 }],
+        discount: 0,
+        netExpected: deal.expected_commission_net || 0,
+      };
+    };
+    // Combine a deal's commission targets with what has actually been invoiced
+    // (derived live). Issued invoices count as "invoiced"; drafts surface as
+    // "pending". Untagged legacy lines fall under "single". All cents.
+    const commissionInvoicing = (deal, invoices) => {
+      const base = dealCommissions(deal);
+      const dealId = deal && deal.id;
+      const agg = {};
+      const bucket = (cid) => (agg[cid] || (agg[cid] = { issued: 0, draft: 0, issuedNums: [], draftNums: [] }));
+      if (dealId) (invoices || []).forEach(inv => {
+        const isIssued = (inv.status || "draft") === "issued";
+        (inv.lineItems || []).forEach(li => {
+          if (li.dealId !== dealId) return;
+          const cents = invLineCommissionCents(li);
+          if (cents <= 0) return;
+          const b = bucket(li.commissionId || "single");
+          if (isIssued) { b.issued += cents; if (inv.invoiceNumber) b.issuedNums.push(inv.invoiceNumber); }
+          else { b.draft += cents; if (inv.invoiceNumber) b.draftNums.push(inv.invoiceNumber); }
+        });
+      });
+      const knownIds = new Set(base.commissions.map(c => c.id));
+      const commissions = base.commissions.map(c => {
+        const b = agg[c.id] || { issued: 0, draft: 0, issuedNums: [], draftNums: [] };
+        return {
+          ...c,
+          invoicedCents: b.issued,
+          pendingCents: b.draft,
+          remainingCents: Math.max(0, c.target - b.issued),
+          invoiceNumbers: [...new Set(b.issuedNums)],
+          draftNumbers: [...new Set(b.draftNums)],
+          status: b.issued <= 0 ? "none" : (c.target > 0 && b.issued >= c.target ? "full" : "partial"),
+        };
+      });
+      let untaggedIssued = 0, untaggedDraft = 0; const untaggedNums = [];
+      Object.keys(agg).forEach(cid => {
+        if (knownIds.has(cid)) return;
+        untaggedIssued += agg[cid].issued; untaggedDraft += agg[cid].draft; untaggedNums.push(...agg[cid].issuedNums);
+      });
+      const totalInvoiced = commissions.reduce((s, c) => s + c.invoicedCents, 0) + untaggedIssued;
+      const totalPending = commissions.reduce((s, c) => s + c.pendingCents, 0) + untaggedDraft;
+      const netExpected = base.netExpected || 0;
+      const invoiceNumbers = [...new Set([].concat(...commissions.map(c => c.invoiceNumbers), untaggedNums))];
+      return {
+        isSecondary: base.isSecondary, commissions, discount: base.discount, netExpected,
+        totalInvoicedCents: totalInvoiced, totalPendingCents: totalPending,
+        remainingCents: Math.max(0, netExpected - totalInvoiced),
+        untaggedInvoicedCents: untaggedIssued, invoiceNumbers,
+        fullyInvoiced: netExpected > 0 && totalInvoiced >= netExpected,
+        partiallyInvoiced: totalInvoiced > 0 && totalInvoiced < netExpected,
+      };
+    };
     const uid = () => "_" + Math.random().toString(36).substr(2, 9);
     const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
     const fmtDate = d => { if (!d) return "—"; try { return new Date(d + "T12:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); } catch { return d; } };
     const ls_get = (k, fb) => { try { const v = localStorage.getItem("na2_" + k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
     const ls_set = (k, v) => { try { localStorage.setItem("na2_" + k, JSON.stringify(v)); } catch { } };
     const ls_remove = (k) => { try { localStorage.removeItem("na2_" + k); } catch { } };
+    // useState that remembers its value in localStorage, so a section's filter /
+    // sort / tab survives leaving and re-opening the page. Use a unique key.
+    const usePersistedState = (key, fallback) => {
+      const [val, setVal] = useState(() => ls_get(key, fallback));
+      useEffect(() => { ls_set(key, val); }, [key, val]);
+      return [val, setVal];
+    };
     const normalizeReportingStartDate = value => value && value >= DEFAULT_REPORTING_START_DATE ? value : DEFAULT_REPORTING_START_DATE;
     const normalizeSettings = value => ({ ...(value || {}), openingBalanceDate: normalizeReportingStartDate(value?.openingBalanceDate) });
     const normalizeUserEmail = value => (value || "").toLowerCase().trim();
