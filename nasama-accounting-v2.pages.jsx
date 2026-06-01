@@ -158,6 +158,7 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
       snap.docs.forEach(doc => {
         const inv = doc.data();
         const status = inv.status || "draft";
+        if (status === "void") return;
         (inv.lineItems || []).forEach(li => {
           if (!li.dealId) return;
           if (!map.has(li.dealId) || status === "issued") map.set(li.dealId, status);
@@ -1113,7 +1114,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
     {show && <div style={C.modal} onClick={() => setShow(false)}>
       <div style={C.mbox(700)} onClick={e => e.stopPropagation()}>
         <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>{edit?.id ? "Edit Deal" : "New Deal"}</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
-        <DealForm initial={normalizeLinkedDealRefs(edit || empty)} onSave={save} onCancel={() => setShow(false)} customers={customers} brokers={brokers} developers={developers} invoices={dealInvoices} />
+        <DealForm initial={normalizeLinkedDealRefs(edit || empty)} onSave={save} onCancel={() => setShow(false)} customers={customers} brokers={brokers} developers={developers} invoices={dealInvoices} txns={txns} accounts={accounts} />
       </div>
     </div>}
 
@@ -1231,7 +1232,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
   </div>;
 }
 
-function DealForm({ initial, onSave, onCancel, customers, brokers, developers, invoices }) {
+function DealForm({ initial, onSave, onCancel, customers, brokers, developers, invoices, txns, accounts }) {
   const [d, setD] = useState({ ...initial });
   const up = (k, v) => setD(p => {
     const next = { ...p, [k]: v };
@@ -1298,7 +1299,8 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers, i
 
       {(() => {
         const ci = commissionInvoicing(d, invoices || []);
-        const hasContent = ci.commissions.some(c => c.target > 0) || ci.totalInvoicedCents > 0 || ci.totalPendingCents > 0;
+        const col = dealCollection(d, txns || [], accounts || []);
+        const hasContent = ci.commissions.some(c => c.target > 0) || ci.totalInvoicedCents > 0 || ci.totalPendingCents > 0 || col.collectedCents > 0;
         if (!hasContent) return null;
         const statusChip = (s) => {
           const [txt, color, bg, bd] = s === "full" ? ["Fully invoiced", "#059669", "#ECFDF5", "#D1FAE5"]
@@ -1307,7 +1309,7 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers, i
           return <span style={{ fontSize: 10, fontWeight: 600, color, background: bg, border: `1px solid ${bd}`, borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>{txt}</span>;
         };
         return <div style={{ marginTop: 16, border: "1px solid #E5E7EB", borderRadius: 8, overflow: "hidden" }}>
-          <div style={{ padding: "10px 14px", background: "#F9FAFB", borderBottom: "1px solid #E5E7EB", fontSize: 12, fontWeight: 700, color: NAVY, letterSpacing: "0.02em" }}>Commissions & Invoicing</div>
+          <div style={{ padding: "10px 14px", background: "#F9FAFB", borderBottom: "1px solid #E5E7EB", fontSize: 12, fontWeight: 700, color: NAVY, letterSpacing: "0.02em" }}>Commissions, Invoicing & Collection</div>
           <div style={{ padding: "4px 14px" }}>
             {ci.commissions.map(c => <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "8px 0", borderBottom: "1px solid #F3F4F6", fontSize: 12.5, flexWrap: "wrap" }}>
               <div style={{ minWidth: 150 }}>
@@ -1331,6 +1333,23 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers, i
               </span>
             </div>
             {ci.totalPendingCents > 0 && <div style={{ fontSize: 11, color: "#9CA3AF", margin: "4px 0 8px", textAlign: "right" }}>+ {fmtAED(ci.totalPendingCents)} on draft invoices (not counted until issued)</div>}
+
+            <div style={{ borderTop: "2px solid #F3F4F6", marginTop: 4, paddingTop: 10, paddingBottom: 4 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, flexWrap: "wrap", gap: 8 }}>
+                <span style={{ fontWeight: 700, color: NAVY }}>Collection{col.count > 0 ? ` · ${col.count} installment${col.count !== 1 ? "s" : ""} received` : ""}</span>
+                <span style={{ display: "flex", gap: 16 }}>
+                  <span style={{ color: "#6B7280" }}>Collected <strong style={{ color: "#059669" }}>{fmtAED(col.collectedCents)}</strong></span>
+                  <span style={{ color: "#6B7280" }}>Remaining to collect <strong style={{ color: col.remainingCents > 0 ? "#B45309" : "#059669" }}>{fmtAED(col.remainingCents)}</strong></span>
+                </span>
+              </div>
+              {col.receipts.length > 0 && <div style={{ marginTop: 6 }}>
+                {col.receipts.map((r, idx) => <div key={idx} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#6B7280", padding: "2px 0" }}>
+                  <span>Installment {idx + 1}{r.date ? ` · ${fmtDate(r.date)}` : ""}{r.ref ? ` · ${r.ref}` : ""}</span>
+                  <span style={{ color: "#059669", fontWeight: 600 }}>{fmtAED(r.cents)}</span>
+                </div>)}
+              </div>}
+              {col.collectedCents === 0 && <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 4 }}>No commission collected yet — record each installment as a Sale Receipt linked to this deal.</div>}
+            </div>
           </div>
         </div>;
       })()}

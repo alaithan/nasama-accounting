@@ -254,6 +254,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       const agg = {};
       const bucket = (cid) => (agg[cid] || (agg[cid] = { issued: 0, draft: 0, issuedNums: [], draftNums: [] }));
       if (dealId) (invoices || []).forEach(inv => {
+        if ((inv.status || "draft") === "void") return;
         const isIssued = (inv.status || "draft") === "issued";
         (inv.lineItems || []).forEach(li => {
           if (li.dealId !== dealId) return;
@@ -294,6 +295,24 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         fullyInvoiced: netExpected > 0 && totalInvoiced >= netExpected,
         partiallyInvoiced: totalInvoiced > 0 && totalInvoiced < netExpected,
       };
+    };
+    // Cash actually collected for a deal = bank/cash debits on Sale Receipts (SR)
+    // linked to it (each receipt is one installment). Returns cents + the list.
+    const dealCollection = (deal, txns, accounts) => {
+      const dealId = deal && deal.id;
+      const isCashAcct = (id) => {
+        const a = (accounts || []).find(x => x.id === id);
+        return !!(a && (a.isBank || a.isCash || a.code === "1001" || a.code === "1002"));
+      };
+      let collectedCents = 0; const receipts = [];
+      if (dealId) (txns || []).forEach(t => {
+        if (t.isVoid || t.deal_id !== dealId || t.txnType !== "SR") return;
+        const amt = (t.lines || []).reduce((s, l) => s + (isCashAcct(l.accountId) ? (l.debit || 0) : 0), 0);
+        if (amt > 0) { collectedCents += amt; receipts.push({ date: t.date || "", ref: t.ref || "", cents: amt }); }
+      });
+      receipts.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+      const netExpected = (deal && deal.expected_commission_net) || 0;
+      return { collectedCents, receipts, count: receipts.length, remainingCents: Math.max(0, netExpected - collectedCents), netExpected };
     };
     const uid = () => "_" + Math.random().toString(36).substr(2, 9);
     const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };

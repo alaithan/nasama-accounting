@@ -860,7 +860,19 @@ function InvoicePage({ customers, developers, deals, settings, userEmail, userRo
     setSaving(false);
   };
 
-  const handleDelete = async (id) => {
+  const handleDelete = async (inv) => {
+    const id = typeof inv === "string" ? inv : (inv && inv.id);
+    const status = (inv && typeof inv === "object") ? inv.status : "";
+    // Issued invoices are a tax record — void (keep on file) instead of deleting,
+    // so the deal link/history survives. Drafts can still be removed outright.
+    if (status === "issued") {
+      if (!window.confirm(`Void issued invoice #${inv.invoiceNumber}? It stays on record marked "Void" and no longer counts as invoiced.`)) return;
+      try {
+        await db.collection("invoices").doc(id).set({ status: "void", updatedAt: invTs() }, { merge: true });
+        toast("Invoice voided", "success");
+      } catch (err) { toast("Void failed: " + err.message, "error"); }
+      return;
+    }
     if (!window.confirm("Delete this invoice permanently?")) return;
     try {
       await db.collection("invoices").doc(id).delete();
@@ -952,12 +964,12 @@ function InvoicePage({ customers, developers, deals, settings, userEmail, userRo
                   <td style={{ ...C.td, textAlign: "right" }}>{invFmt(inv.totals?.excl)}</td>
                   <td style={{ ...C.td, textAlign: "right", color: "#6B7280" }}>{invFmt(inv.totals?.vat)}</td>
                   <td style={{ ...C.td, textAlign: "right", fontWeight: 700, color: "#C9A044" }}>{invFmt(inv.totals?.incl)}</td>
-                  <td style={C.td}><span style={C.badge(inv.status === "issued" ? "success" : "warning")}>{inv.status === "issued" ? "Issued" : "Draft"}</span></td>
+                  <td style={C.td}><span style={C.badge(inv.status === "void" ? "neutral" : inv.status === "issued" ? "success" : "warning")}>{inv.status === "void" ? "Void" : inv.status === "issued" ? "Issued" : "Draft"}</span></td>
                   <td style={C.td}>
                     <div style={{ display: "flex", gap: 6 }}>
                       {hasPermission(userRole, 'sales.edit') && <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12 }} onClick={() => setEditing({ ...inv })}>Edit</button>}
                       <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12 }} onClick={() => setPreviewInv(inv)}>Preview</button>
-                      {hasPermission(userRole, 'sales.edit') && <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12, color: "#DC2626" }} onClick={() => handleDelete(inv.id)}>Delete</button>}
+                      {hasPermission(userRole, 'sales.edit') && <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12, color: "#DC2626" }} onClick={() => handleDelete(inv)}>{inv.status === "issued" ? "Void" : "Delete"}</button>}
                     </div>
                   </td>
                 </tr>
