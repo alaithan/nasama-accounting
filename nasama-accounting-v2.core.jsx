@@ -296,8 +296,10 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         partiallyInvoiced: totalInvoiced > 0 && totalInvoiced < netExpected,
       };
     };
-    // Cash actually collected for a deal = bank/cash debits on Sale Receipts (SR)
-    // linked to it (each receipt is one installment). Returns cents + the list.
+    // Cash actually collected for a deal = bank/cash debits (money in) on ANY
+    // transaction linked to it — Sale Receipts, linked bank imports, etc. (each
+    // = one installment). Reconciled against the VAT-inclusive commission, since
+    // the client pays commission + VAT into the bank. Returns cents + the list.
     const dealCollection = (deal, txns, accounts) => {
       const dealId = deal && deal.id;
       const isCashAcct = (id) => {
@@ -306,13 +308,16 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       };
       let collectedCents = 0; const receipts = [];
       if (dealId) (txns || []).forEach(t => {
-        if (t.isVoid || t.deal_id !== dealId || t.txnType !== "SR") return;
+        if (t.isVoid) return;
+        const linkedToDeal = t.deal_id === dealId || (t.lines || []).some(l => l.deal_id === dealId);
+        if (!linkedToDeal) return;
         const amt = (t.lines || []).reduce((s, l) => s + (isCashAcct(l.accountId) ? (l.debit || 0) : 0), 0);
         if (amt > 0) { collectedCents += amt; receipts.push({ date: t.date || "", ref: t.ref || "", cents: amt }); }
       });
       receipts.sort((a, b) => String(a.date).localeCompare(String(b.date)));
       const netExpected = (deal && deal.expected_commission_net) || 0;
-      return { collectedCents, receipts, count: receipts.length, remainingCents: Math.max(0, netExpected - collectedCents), netExpected };
+      const grossExpected = (deal && deal.vat_applicable) ? Math.round(netExpected * 1.05) : netExpected;
+      return { collectedCents, receipts, count: receipts.length, remainingCents: Math.max(0, grossExpected - collectedCents), netExpected, grossExpected };
     };
     const uid = () => "_" + Math.random().toString(36).substr(2, 9);
     const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };

@@ -800,13 +800,14 @@ function ManualPage() {
 // ╔══════════════════════════════════════════════════╗
 //  DEALS PAGE
 // ╚══════════════════════════════════════════════════╝
-function DealsPage({ deals, setDeals, customers, brokers, developers, txns, accounts, journal, persistTxn, userRole, userEmail, writeMeta, setInvoiceDeal, setPage }) {
+function DealsPage({ deals, setDeals, customers, brokers, developers, txns, accounts, journal, persistTxn, userRole, userEmail, writeMeta, setInvoiceDeal, setPage, dealStageChanges, settings }) {
   const [show, setShow] = useState(false);
   const [edit, setEdit] = useState(null);
   // Filter + sort persist across navigation; default sort = newest deals first.
   const [filter, setFilter] = usePersistedState("deals_filter", "All");
   const [sortKey, setSortKey] = usePersistedState("deals_sortKey", "date");
   const [sortDir, setSortDir] = usePersistedState("deals_sortDir", "desc");
+  const [cardDeal, setCardDeal] = useState(null);
   const [dealMutationLabel, setDealMutationLabel] = useState("");
   const [dealInvoices, setDealInvoices] = useState([]);
   const [bpDeal, setBpDeal] = useState(null);
@@ -1082,6 +1083,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
             </td>
             <td style={C.td}>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button style={C.btn("secondary", true)} onClick={e => { e.stopPropagation(); setCardDeal(d); }} title="Open the full deal dossier">📋 Card</button>
                 {hasPermission(userRole, 'sales.create') && (() => {
                   const isDone = d.stage === "Commission Collected" || d.stage === "Cancelled";
                   if (isDone) return null;
@@ -1117,6 +1119,8 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
         <DealForm initial={normalizeLinkedDealRefs(edit || empty)} onSave={save} onCancel={() => setShow(false)} customers={customers} brokers={brokers} developers={developers} invoices={dealInvoices} txns={txns} accounts={accounts} />
       </div>
     </div>}
+
+    {cardDeal && <DealCard deal={cardDeal} txns={txns} accounts={accounts} invoices={dealInvoices} customers={customers} brokers={brokers} developers={developers} dealStageChanges={dealStageChanges} settings={settings} persistTxn={persistTxn} userRole={userRole} onClose={() => setCardDeal(null)} />}
 
     {/* Pay Broker Modal */}
     {bpDeal && (() => {
@@ -1229,6 +1233,334 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
         </div>
       </div>;
     })()}
+  </div>;
+}
+
+// Capture a DOM element to a multi-page A4 PDF (returns the jsPDF doc, or null).
+async function captureElementToPdf(elementId) {
+  if (!window.html2canvas || !window.jspdf) { toast("PDF libraries not loaded", "error"); return null; }
+  const el = document.getElementById(elementId);
+  if (!el) { toast("Nothing to export", "error"); return null; }
+  try {
+    const canvas = await window.html2canvas(el, { scale: 2, useCORS: true, allowTaint: true, backgroundColor: "#ffffff", logging: false, scrollX: 0, scrollY: -window.scrollY });
+    const img = canvas.toDataURL("image/png");
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const pageW = pdf.internal.pageSize.getWidth(), pageH = pdf.internal.pageSize.getHeight();
+    const imgH = (canvas.height / canvas.width) * pageW;
+    pdf.addImage(img, "PNG", 0, 0, pageW, imgH);
+    if (imgH > pageH + 2) { let y = pageH; while (y < imgH - 2) { pdf.addPage(); pdf.addImage(img, "PNG", 0, -y, pageW, imgH); y += pageH; } }
+    return pdf;
+  } catch (err) { console.error(err); toast("PDF export failed: " + err.message, "error"); return null; }
+}
+// Build the per-stage timeline (with the age spent in each stage) from the
+// deal_stage_changes records, anchored on the deal's created date.
+function buildStageTimeline(deal, changes) {
+  const recs = (changes || []).filter(r => r.deal_id === deal.id).slice().sort((a, b) => String(a.timestamp || a.date).localeCompare(String(b.timestamp || b.date)));
+  const nowIso = new Date().toISOString();
+  const daysBetween = (a, b) => { const d = (new Date(b) - new Date(a)) / 86400000; return d > 0 ? Math.floor(d) : 0; };
+  const startAt = deal.created_at ? deal.created_at + "T00:00:00" : (recs[0] ? recs[0].timestamp : nowIso);
+  if (recs.length === 0) return [{ stage: deal.stage || "—", enteredAt: startAt, current: true, days: daysBetween(startAt, nowIso) }];
+  const out = [];
+  let prevStage = recs[0].from_stage || deal.stage || "—";
+  let prevAt = startAt;
+  recs.forEach(r => {
+    const at = r.timestamp || (r.date ? r.date + "T00:00:00" : nowIso);
+    out.push({ stage: prevStage, enteredAt: prevAt, leftAt: at, days: daysBetween(prevAt, at) });
+    prevStage = r.to_stage || prevStage;
+    prevAt = at;
+  });
+  out.push({ stage: prevStage, enteredAt: prevAt, current: true, days: daysBetween(prevAt, nowIso) });
+  return out;
+}
+// Read-only "dossier" for one deal — everything the system knows, with PDF /
+// WhatsApp share. Visible to anyone with Deals access.
+function DealCard({ deal, txns, accounts, invoices, customers, brokers, developers, dealStageChanges, settings, onClose, persistTxn, userRole }) {
+  const [showFull, setShowFull] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [linkingId, setLinkingId] = useState("");
+  const [showPicker, setShowPicker] = useState(false);
+  const [pickerQ, setPickerQ] = useState("");
+  const [pickerDir, setPickerDir] = useState("in");
+  const isSecondary = deal.type === "Secondary";
+  const acctById = useMemo(() => new Map((accounts || []).map(a => [a.id, a])), [accounts]);
+  const isCash = (id) => { const a = acctById.get(id); return !!(a && (a.isBank || a.isCash || a.code === "1001" || a.code === "1002")); };
+  const acctName = (id) => (acctById.get(id) || {}).name || "—";
+
+  const linked = useMemo(() => (txns || []).filter(t => t.deal_id === deal.id || (t.lines || []).some(l => l.deal_id === deal.id)).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.ref).localeCompare(String(b.ref))), [txns, deal.id]);
+  // Transactions that look related (by client / property / seller name appearing
+  // in the description, counterparty, or line memos) but aren't linked. Surfaced
+  // so they can be verified and linked; NOT counted in the totals above.
+  const related = useMemo(() => {
+    const linkedIds = new Set(linked.map(t => t.id));
+    const norm = s => String(s || "").toLowerCase();
+    const propN = norm(deal.property_name), clientN = norm(deal.client_name), sellerN = norm(deal.seller_name);
+    return (txns || []).filter(t => {
+      if (t.isVoid || linkedIds.has(t.id) || (t.deal_id && t.deal_id !== deal.id)) return false;
+      const hay = norm(t.description) + " " + norm(t.counterparty) + " " + (t.lines || []).map(l => norm(l.memo)).join(" ");
+      return (clientN.length >= 4 && hay.includes(clientN)) || (sellerN.length >= 4 && hay.includes(sellerN)) || (propN.length >= 4 && hay.includes(propN));
+    }).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  }, [txns, deal, linked]);
+  const linkOne = async (t) => {
+    if (!persistTxn) { toast("Linking isn't available here", "error"); return; }
+    setLinkingId(t.id);
+    try {
+      await persistTxn({ ...t, deal_id: deal.id, counterparty: t.counterparty || deal.client_name || "", lines: (t.lines || []).map(l => ({ ...l, deal_id: deal.id })) });
+      toast("Transaction linked to this deal", "success");
+    } catch (err) { toast("Link failed: " + err.message, "error"); }
+    finally { setLinkingId(""); }
+  };
+  // Manual picker: every transaction not yet linked to ANY deal, searchable by
+  // amount / name / ref — the reliable way to attach raw imported bank lines.
+  const unlinkedTxns = useMemo(() => {
+    const linkedIds = new Set(linked.map(t => t.id));
+    return (txns || []).filter(t => !t.isVoid && !linkedIds.has(t.id) && !t.deal_id).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  }, [txns, linked]);
+  const txnInOut = (t) => ({
+    inAmt: (t.lines || []).reduce((s, l) => s + (isCash(l.accountId) ? (l.debit || 0) : 0), 0),
+    outAmt: (t.lines || []).reduce((s, l) => s + (isCash(l.accountId) ? (l.credit || 0) : 0), 0),
+  });
+  const pickerResults = useMemo(() => {
+    const q = pickerQ.trim().toLowerCase();
+    const qDigits = q.replace(/[^0-9]/g, "");
+    return unlinkedTxns.filter(t => {
+      const { inAmt, outAmt } = txnInOut(t);
+      if (pickerDir === "in" && inAmt <= 0) return false;
+      if (pickerDir === "out" && outAmt <= 0) return false;
+      if (pickerDir === "all" && inAmt <= 0 && outAmt <= 0) return false;
+      if (!q) return true;
+      const amt = inAmt || outAmt;
+      const hay = `${t.description || ""} ${t.ref || ""} ${t.counterparty || ""} ${(t.lines || []).map(l => l.memo || "").join(" ")}`.toLowerCase();
+      return hay.includes(q) || (qDigits.length >= 3 && String(Math.round(amt / 100)).includes(qDigits));
+    }).slice(0, 60);
+  }, [unlinkedTxns, pickerQ, pickerDir]);
+  const ci = commissionInvoicing(deal, invoices || []);
+  const col = dealCollection(deal, txns || [], accounts || []);
+  const brokerPaidFromTxns = linked.filter(t => !t.isVoid && t.txnType === "BP").reduce((s, t) => s + (t.lines || []).reduce((ss, l) => ss + ((acctById.get(l.accountId) || {}).type === "Expense" ? (l.debit || 0) : 0), 0), 0);
+  const brokerPaid = brokerPaidFromTxns > 0 ? brokerPaidFromTxns : (deal.broker_paid_amount || 0);
+  const netRetained = col.collectedCents - brokerPaid;
+  const margin = col.collectedCents > 0 ? Math.round((netRetained / col.collectedCents) * 100) : null;
+  const dealInvoices = useMemo(() => (invoices || []).filter(inv => (inv.lineItems || []).some(li => li.dealId === deal.id)), [invoices, deal.id]);
+  const broker = (brokers || []).find(b => b.id === deal.broker_id);
+  const developer = (developers || []).find(x => x.id === deal.developer_id);
+  const client = (customers || []).find(c => c.id === deal.customer_id);
+  const seller = (customers || []).find(c => c.id === deal.seller_customer_id);
+  const timeline = useMemo(() => buildStageTimeline(deal, dealStageChanges), [deal, dealStageChanges]);
+
+  const CARD_ID = "deal-card-content";
+  const fileName = `DealCard_${(deal.property_name || "deal").replace(/[^\w]+/g, "_")}${deal.unit_no ? "_" + deal.unit_no : ""}.pdf`;
+  const summaryText = `Deal Card — ${deal.property_name || ""}${deal.unit_no ? " · Unit " + deal.unit_no : ""}\nStage: ${deal.stage}\nValue: ${fmtAED(deal.transaction_value || 0)}\nExpected commission: ${fmtAED(deal.expected_commission_net || 0)}\nCollected: ${fmtAED(col.collectedCents)} · Remaining: ${fmtAED(col.remainingCents)}`;
+  const handleDownload = async () => { setBusy(true); const pdf = await captureElementToPdf(CARD_ID); if (pdf) pdf.save(fileName); setBusy(false); };
+  const handleShare = async () => {
+    setBusy(true); const pdf = await captureElementToPdf(CARD_ID); setBusy(false);
+    if (!pdf) return;
+    try {
+      const file = new File([pdf.output("blob")], fileName, { type: "application/pdf" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: "Deal Card", text: summaryText });
+      } else {
+        pdf.save(fileName);
+        window.open("https://wa.me/?text=" + encodeURIComponent(summaryText), "_blank");
+        toast("PDF downloaded — attach it in the WhatsApp chat that just opened", "info");
+      }
+    } catch (e) { /* user cancelled the share sheet */ }
+  };
+
+  const fmtDays = (d) => d < 1 ? "<1 day" : d === 1 ? "1 day" : d < 60 ? d + " days" : Math.round(d / 30) + " months";
+  const sec = (title, children, extra) => <div style={{ border: "1px solid #E5E7EB", borderRadius: 8, overflow: "hidden", marginTop: 12 }}>
+    <div style={{ padding: "8px 12px", background: "#F9FAFB", borderBottom: "1px solid #E5E7EB", fontSize: 11, fontWeight: 700, color: NAVY, letterSpacing: "0.04em", textTransform: "uppercase", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}><span>{title}</span>{extra}</div>
+    <div style={{ padding: "10px 12px" }}>{children}</div>
+  </div>;
+  const kv = (k, v) => <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "3px 0", fontSize: 12.5 }}><span style={{ color: "#6B7280" }}>{k}</span><span style={{ fontWeight: 600, color: "#374151", textAlign: "right" }}>{v}</span></div>;
+  const party = (label, rec, fallbackName) => <div style={{ padding: "6px 0", fontSize: 12.5 }}>
+    <div style={{ fontSize: 10, color: "#9CA3AF", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
+    <div style={{ fontWeight: 700, color: "#374151" }}>{(rec && rec.name) || fallbackName || "—"}</div>
+    {rec && (rec.phone || rec.contactNo) && <div style={{ color: "#6B7280", fontSize: 11.5 }}>📞 {rec.phone || rec.contactNo}</div>}
+    {rec && rec.email && <div style={{ color: "#6B7280", fontSize: 11.5 }}>✉ {rec.email}</div>}
+    {rec && rec.trn && <div style={{ color: "#6B7280", fontSize: 11.5 }}>TRN {rec.trn}</div>}
+  </div>;
+
+  return <div style={C.modal} onClick={onClose}>
+    <div style={{ ...C.mbox(860), maxHeight: "94vh" }} onClick={e => e.stopPropagation()}>
+      <div style={C.mhdr}>
+        <span style={{ fontWeight: 700, fontSize: 16 }}>📋 Deal Card</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button style={C.btn("secondary", true)} disabled={busy} onClick={handleDownload}>{busy ? "…" : "⬇ PDF"}</button>
+          <button style={C.btn("secondary", true)} disabled={busy} onClick={handleShare}>{busy ? "…" : "↗ Share / WhatsApp"}</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
+        </div>
+      </div>
+      <div style={C.mbdy}>
+        <div id={CARD_ID} style={{ background: "#fff", padding: 4 }}>
+          <div style={{ borderBottom: "2px solid #E5E7EB", paddingBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 17, fontWeight: 800, color: NAVY }}>{deal.property_name || "—"}{deal.unit_no ? <span style={{ color: "#9CA3AF", fontWeight: 600 }}> · Unit {deal.unit_no}</span> : null}</div>
+                <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                  <span style={C.badge(deal.type === "Off-Plan" ? "info" : isSecondary ? "gold" : "success")}>{deal.type}</span>
+                  <span style={C.badge(deal.stage?.includes("Collected") ? "success" : deal.stage?.includes("Earned") ? "gold" : "neutral")}>{deal.stage}</span>
+                  {deal.vat_applicable && <span style={C.badge("neutral")}>VAT 5%</span>}
+                </div>
+              </div>
+              <div style={{ textAlign: "right", fontSize: 11, color: "#9CA3AF" }}>
+                <div style={{ fontWeight: 700, color: "#6B7280" }}>{settings?.company || "NASAMA PROPERTIES"}</div>
+                <div>Created {deal.created_at ? fmtDate(deal.created_at) : "—"}</div>
+                <div>Generated {fmtDate(todayStr())}</div>
+              </div>
+            </div>
+          </div>
+
+          {sec("Parties", <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 20px" }}>
+            {party("Developer", developer, deal.developer)}
+            {party("Broker", broker, deal.broker_name)}
+            {party(isSecondary ? "Buyer client" : "Client", client, deal.client_name)}
+            {isSecondary && party("Seller client", seller, deal.seller_name)}
+          </div>)}
+
+          {sec("Deal economics", <div>
+            {kv("Transaction value", fmtAED(deal.transaction_value || 0))}
+            {kv(isSecondary ? "Buyer commission %" : "Commission %", deal.commission_pct ? deal.commission_pct + "%" : "—")}
+            {isSecondary && kv("Seller commission %", deal.seller_commission_pct ? deal.seller_commission_pct + "%" : "—")}
+            {isSecondary && kv("Seller commission", fmtAED(deal.seller_commission || 0))}
+            {(deal.discount || 0) > 0 && kv("Discount", "− " + fmtAED(deal.discount))}
+            {kv("Expected net commission", fmtAED(deal.expected_commission_net || 0))}
+            {kv("VAT", deal.vat_applicable ? "Yes — 5% added on invoice" : "No")}
+            {deal.vat_applicable && kv("Commission incl. VAT", fmtAED(Math.round((deal.expected_commission_net || 0) * 1.05)))}
+          </div>)}
+
+          {sec("Commissions & Invoicing", <div>
+            {ci.commissions.map(c => <div key={c.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "4px 0", fontSize: 12, borderBottom: "1px solid #F3F4F6", flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 600, color: "#374151" }}>{c.label}{c.invoiceNumbers.length ? <span style={{ color: "#9CA3AF", fontWeight: 400 }}> · #{c.invoiceNumbers.join(", #")}</span> : null}</span>
+              <span style={{ display: "flex", gap: 12 }}>
+                <span style={{ color: "#6B7280" }}>Target {fmtAED(c.target)}</span>
+                <span style={{ color: "#059669" }}>Invoiced {fmtAED(c.invoicedCents)}</span>
+                <span style={{ color: c.remainingCents > 0 ? "#B45309" : "#059669", fontWeight: 700 }}>Left {fmtAED(c.remainingCents)}</span>
+              </span>
+            </div>)}
+            <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 6, fontSize: 12.5, fontWeight: 700, color: NAVY, flexWrap: "wrap", gap: 8 }}>
+              <span>Net expected {fmtAED(ci.netExpected)}</span>
+              <span>Invoiced {fmtAED(ci.totalInvoicedCents)} · Remaining {fmtAED(ci.remainingCents)}</span>
+            </div>
+          </div>)}
+
+          {sec(`Collection${col.count ? ` · ${col.count} installment${col.count !== 1 ? "s" : ""} received` : ""}`, <div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: col.receipts.length ? 6 : 0, flexWrap: "wrap", gap: 8 }}>
+              <span>Collected {fmtAED(col.collectedCents)}</span>
+              <span style={{ color: col.remainingCents > 0 ? "#B45309" : "#059669" }}>Remaining to collect {fmtAED(col.remainingCents)}</span>
+            </div>
+            {col.receipts.map((r, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "#6B7280", padding: "2px 0" }}><span>Installment {i + 1}{r.date ? " · " + fmtDate(r.date) : ""}{r.ref ? " · " + r.ref : ""}</span><span style={{ color: "#059669", fontWeight: 600 }}>{fmtAED(r.cents)}</span></div>)}
+            {col.collectedCents === 0 && <div style={{ fontSize: 11.5, color: "#9CA3AF" }}>Nothing collected yet.</div>}
+          </div>)}
+
+          {sec("Profitability", <div>
+            {kv("Cash collected", fmtAED(col.collectedCents))}
+            {kv("Broker paid", brokerPaid > 0 ? "− " + fmtAED(brokerPaid) : "—")}
+            {kv("Net retained", fmtAED(netRetained))}
+            {kv("Margin", margin !== null ? margin + "%" : "—")}
+          </div>)}
+
+          {sec(`Linked transactions${linked.length ? ` · ${linked.length}` : ""}`,
+            <div>
+              {linked.length === 0 ? <div style={{ fontSize: 12, color: "#9CA3AF" }}>No transactions linked to this deal yet.</div> :
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                <thead><tr style={{ background: "#F9FAFB" }}>{["Date", "Ref", "Type", "Description", "In", "Out"].map(h => <th key={h} style={{ ...C.th, fontSize: 10, padding: "5px 6px", textAlign: ["In", "Out"].includes(h) ? "right" : "left" }}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {linked.map((t, i) => {
+                    const inAmt = (t.lines || []).reduce((s, l) => s + (!t.isVoid && isCash(l.accountId) ? (l.debit || 0) : 0), 0);
+                    const outAmt = (t.lines || []).reduce((s, l) => s + (!t.isVoid && isCash(l.accountId) ? (l.credit || 0) : 0), 0);
+                    return <React.Fragment key={t.id || i}>
+                      <tr style={{ borderTop: "1px solid #F2F4F7", opacity: t.isVoid ? 0.5 : 1 }}>
+                        <td style={{ padding: "4px 6px" }}>{t.date ? fmtDate(t.date) : "—"}</td>
+                        <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{t.ref || "—"}{t.isVoid ? " (void)" : ""}</td>
+                        <td style={{ padding: "4px 6px" }}>{TXN_TYPES[t.txnType]?.label || t.txnType || "—"}</td>
+                        <td style={{ padding: "4px 6px" }}>{t.description || "—"}</td>
+                        <td style={{ padding: "4px 6px", textAlign: "right", color: "#059669" }}>{inAmt > 0 ? fmtAED(inAmt) : ""}</td>
+                        <td style={{ padding: "4px 6px", textAlign: "right", color: "#DC2626" }}>{outAmt > 0 ? fmtAED(outAmt) : ""}</td>
+                      </tr>
+                      {showFull && (t.lines || []).map((l, li) => <tr key={li} style={{ fontSize: 10.5, color: "#6B7280" }}>
+                        <td></td><td></td>
+                        <td colSpan={2} style={{ padding: "1px 6px 1px 16px" }}>{acctName(l.accountId)}{l.memo ? ` — ${l.memo}` : ""}</td>
+                        <td style={{ padding: "1px 6px", textAlign: "right" }}>{(l.debit || 0) > 0 ? fmtAED(l.debit) : ""}</td>
+                        <td style={{ padding: "1px 6px", textAlign: "right" }}>{(l.credit || 0) > 0 ? fmtAED(l.credit) : ""}</td>
+                      </tr>)}
+                    </React.Fragment>;
+                  })}
+                </tbody>
+              </table>}
+              {showPicker && <div style={{ marginTop: 10, borderTop: "1px dashed #E5E7EB", paddingTop: 8 }}>
+                <div style={{ display: "flex", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+                  {[["in", "Money in (received)"], ["out", "Money out (paid)"], ["all", "All"]].map(([id, label]) => <button key={id} onClick={() => setPickerDir(id)} style={{ ...C.btn(pickerDir === id ? "primary" : "secondary", true), fontSize: 11, padding: "4px 10px" }}>{label}</button>)}
+                </div>
+                <input type="text" placeholder="Search by amount, name, or ref…" value={pickerQ} onChange={e => setPickerQ(e.target.value)} style={{ ...C.input, fontSize: 12, marginBottom: 6 }} />
+                <div style={{ maxHeight: 240, overflowY: "auto", border: "1px solid #F3F4F6", borderRadius: 6 }}>
+                  {pickerResults.length === 0 ? <div style={{ padding: 10, fontSize: 11.5, color: "#9CA3AF" }}>No matching unlinked transactions.</div> :
+                  pickerResults.map(t => {
+                    const { inAmt, outAmt } = txnInOut(t);
+                    const isIn = inAmt > 0;
+                    return <div key={t.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "5px 8px", borderTop: "1px solid #F3F4F6", fontSize: 11.5 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 400 }}>{t.description || t.ref || "—"}</div>
+                        <div style={{ color: "#9CA3AF", fontSize: 10.5 }}>{t.date ? fmtDate(t.date) : ""} · {t.ref || ""} · {TXN_TYPES[t.txnType]?.label || t.txnType}</div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                        <span style={{ fontWeight: 600, color: isIn ? "#059669" : "#DC2626" }}>{isIn ? "" : "− "}{fmtAED(isIn ? inAmt : outAmt)}</span>
+                        <button style={C.btn("secondary", true)} disabled={linkingId === t.id} onClick={() => linkOne(t)}>{linkingId === t.id ? "…" : "Link"}</button>
+                      </div>
+                    </div>;
+                  })}
+                </div>
+                {pickerResults.length >= 60 && <div style={{ fontSize: 10.5, color: "#9CA3AF", marginTop: 4 }}>Showing first 60 — refine your search.</div>}
+              </div>}
+            </div>,
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              {linked.length > 0 && <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10.5, color: "#6B7280", cursor: "pointer", textTransform: "none", letterSpacing: 0, fontWeight: 500 }}><input type="checkbox" checked={showFull} onChange={e => setShowFull(e.target.checked)} /> Show full entries</label>}
+              {persistTxn && hasPermission(userRole, 'canEditTxns') && <button style={C.btn("secondary", true)} onClick={() => setShowPicker(s => !s)}>{showPicker ? "Close" : "＋ Link transaction"}</button>}
+            </div>
+          )}
+
+          {related.length > 0 && sec(`Possibly related — not linked · ${related.length}`, <div>
+            <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 6 }}>These match this deal by client or property name but aren't linked, so they are NOT counted above. Verify, then Link to attach them (updates Collection & Profitability).</div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+              <thead><tr style={{ background: "#FFFBEB" }}>{["Date", "Ref", "Type", "Description", "Amount", ""].map(h => <th key={h} style={{ ...C.th, fontSize: 10, padding: "5px 6px", textAlign: h === "Amount" ? "right" : "left" }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {related.map(t => {
+                  const amt = (t.lines || []).reduce((s, l) => s + (l.debit || 0), 0);
+                  return <tr key={t.id} style={{ borderTop: "1px solid #FDE68A" }}>
+                    <td style={{ padding: "4px 6px" }}>{t.date ? fmtDate(t.date) : "—"}</td>
+                    <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{t.ref || "—"}</td>
+                    <td style={{ padding: "4px 6px" }}>{TXN_TYPES[t.txnType]?.label || t.txnType || "—"}</td>
+                    <td style={{ padding: "4px 6px" }}>{t.description || "—"}</td>
+                    <td style={{ padding: "4px 6px", textAlign: "right", fontWeight: 600 }}>{fmtAED(amt)}</td>
+                    <td style={{ padding: "4px 6px", textAlign: "right" }}>{persistTxn && hasPermission(userRole, 'canEditTxns') ? <button style={{ ...C.btn("secondary", true), borderColor: "#D97706", color: "#B45309" }} disabled={linkingId === t.id} onClick={() => linkOne(t)}>{linkingId === t.id ? "…" : "Link"}</button> : null}</td>
+                  </tr>;
+                })}
+              </tbody>
+            </table>
+          </div>)}
+
+          {dealInvoices.length > 0 && sec("Invoices", <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+            <thead><tr style={{ background: "#F9FAFB" }}>{["Invoice #", "Date", "Status", "Total incl VAT"].map(h => <th key={h} style={{ ...C.th, fontSize: 10, padding: "5px 6px", textAlign: h.includes("Total") ? "right" : "left" }}>{h}</th>)}</tr></thead>
+            <tbody>{dealInvoices.map(inv => <tr key={inv.id} style={{ borderTop: "1px solid #F2F4F7" }}>
+              <td style={{ padding: "4px 6px", fontFamily: "monospace", color: "#C9A044", fontWeight: 700 }}>{inv.invoiceNumber || "—"}</td>
+              <td style={{ padding: "4px 6px" }}>{inv.invoiceDate ? invFmtDate(inv.invoiceDate) : "—"}</td>
+              <td style={{ padding: "4px 6px" }}>{inv.status === "void" ? "Void" : inv.status === "issued" ? "Issued" : "Draft"}</td>
+              <td style={{ padding: "4px 6px", textAlign: "right", fontWeight: 600 }}>AED {invFmt(inv.totals?.incl)}</td>
+            </tr>)}</tbody>
+          </table>)}
+
+          {sec("Stage history", <div>
+            {timeline.map((s, i) => <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0", fontSize: 12, borderBottom: i < timeline.length - 1 ? "1px solid #F3F4F6" : "none", flexWrap: "wrap" }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: s.current ? "#059669" : "#D1D5DB", flexShrink: 0 }} />
+              <span style={{ fontWeight: 600, color: "#374151", minWidth: 150 }}>{s.stage}</span>
+              <span style={{ color: "#9CA3AF", flex: 1, minWidth: 120 }}>{s.enteredAt ? fmtDate(String(s.enteredAt).slice(0, 10)) : ""}{s.leftAt ? ` → ${fmtDate(String(s.leftAt).slice(0, 10))}` : ""}</span>
+              <span style={{ fontWeight: 700, color: s.current ? "#059669" : "#6B7280" }}>{fmtDays(s.days)}{s.current ? " · current" : ""}</span>
+            </div>)}
+          </div>)}
+
+          {deal.notes && sec("Notes", <div style={{ fontSize: 12.5, color: "#374151", whiteSpace: "pre-wrap" }}>{deal.notes}</div>)}
+        </div>
+      </div>
+    </div>
   </div>;
 }
 
