@@ -140,7 +140,7 @@ function computePeriodKpis(ft, accounts) {
 // ╔══════════════════════════════════════════════════╗
 //  DASHBOARD
 // ╚══════════════════════════════════════════════════╝
-function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, plannedExpenses }) {
+function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, plannedExpenses, setCardDealId }) {
   const { isMobile, isTablet } = useWindowSize();
   const reportingStartLabel = fmtDate(kpis.reportingStartDate || DEFAULT_REPORTING_START_DATE);
   const [dateFilter, setDateFilter] = usePersistedDateFilter("dash_period");
@@ -149,8 +149,36 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
   const cashAccounts = accounts.filter(a => a.isBank || a.code === "1001");
   const maxCashFlow = Math.max(1, ...kpis.cashFlowSeries.map(item => Math.max(item.inflow, item.outflow, Math.abs(item.net))));
   const maxPerformance = Math.max(1, ...kpis.monthlyPerformance.map(item => Math.max(item.revenue, item.expense, Math.abs(item.net))));
+  // Monthly income (net revenue) for the last 6 months vs the same month a year
+  // earlier. Income = credits − debits on Revenue accounts (same as the KPI rev).
+  const incomeYoY = useMemo(() => {
+    const acctById = new Map((accounts || []).map(a => [a.id, a]));
+    const byMonth = {};
+    (txns || []).forEach(t => {
+      if (t.isVoid || !t.date) return;
+      const key = String(t.date).slice(0, 7);
+      let rev = 0;
+      (t.lines || []).forEach(l => { const a = acctById.get(l.accountId); if (a && a.type === "Revenue") rev += (l.credit || 0) - (l.debit || 0); });
+      if (rev) byMonth[key] = (byMonth[key] || 0) + rev;
+    });
+    const now = new Date();
+    const out = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      out.push({
+        label: d.toLocaleDateString("en-GB", { month: "short", year: "2-digit" }),
+        year: d.getFullYear(), prevYear: d.getFullYear() - 1,
+        current: byMonth[`${d.getFullYear()}-${mm}`] || 0,
+        previous: byMonth[`${d.getFullYear() - 1}-${mm}`] || 0,
+      });
+    }
+    return out;
+  }, [txns, accounts]);
+  const maxIncomeYoY = Math.max(1, ...incomeYoY.flatMap(s => [s.current, s.previous]));
   const [includePending, setIncludePending] = usePersistedState("dash_includePending", false);
   const [showRecentTxns, setShowRecentTxns] = useState(false);
+  const [expandedAlert, setExpandedAlert] = useState(null);
   const [dealInvoiceStatus, setDealInvoiceStatus] = useState(new Map());
   useEffect(() => {
     const unsub = db.collection("invoices").onSnapshot(snap => {
@@ -340,11 +368,11 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
   const mgmtAlerts = [];
   if (dealsOverdue60.length > 0) {
     const tot = dealsOverdue60.reduce((s, d) => s + (d.expected_commission_net || 0), 0);
-    mgmtAlerts.push({ level: tot > 100000 ? "critical" : "warning", title: `${dealsOverdue60.length} deal${dealsOverdue60.length !== 1 ? "s" : ""} overdue — over 60 days in pipeline`, detail: `${fmtAED(tot)} in expected commission has been in the pipeline for more than 60 days without collection. Chase these deals to protect cash flow.`, action: { label: "View Deals", page: "deals" } });
+    mgmtAlerts.push({ level: tot > 100000 ? "critical" : "warning", title: `${dealsOverdue60.length} deal${dealsOverdue60.length !== 1 ? "s" : ""} overdue — over 60 days in pipeline`, detail: `${fmtAED(tot)} in expected commission has been in the pipeline for more than 60 days without collection. Chase these deals to protect cash flow.`, deals: dealsOverdue60, action: { label: "View Deals", page: "deals" } });
   }
   if (dealsEarnedNoReceipt.length > 0) {
     const tot = dealsEarnedNoReceipt.reduce((s, d) => s + (d.expected_commission_net || 0), 0);
-    mgmtAlerts.push({ level: "warning", title: `${dealsEarnedNoReceipt.length} deal${dealsEarnedNoReceipt.length !== 1 ? "s" : ""} at Commission Earned with no receipt recorded`, detail: `${fmtAED(tot)} has been marked as earned but no cash receipt exists. Confirm collection or update the deal stage.`, action: { label: "Record Receipt", page: "receipts" } });
+    mgmtAlerts.push({ level: "warning", title: `${dealsEarnedNoReceipt.length} deal${dealsEarnedNoReceipt.length !== 1 ? "s" : ""} at Commission Earned with no receipt recorded`, detail: `${fmtAED(tot)} has been marked as earned but no cash receipt exists. Confirm collection or update the deal stage.`, deals: dealsEarnedNoReceipt, action: { label: "Record Receipt", page: "receipts" } });
   }
   const AGING_BUCKETS = [
     { label: "0–30 days",  min: 0,  max: 30,       color: "#059669", bg: "#ECFDF5" },
@@ -445,14 +473,38 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     {mgmtAlerts.length > 0 && <div style={{ ...C.card, marginBottom: 20 }}>
       {sectionTitle("Management Alerts", "Action required — commission and pipeline issues detected")}
       <div style={{ padding: "4px 18px 14px" }}>
-        {mgmtAlerts.map((alert, i) => <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 0", borderBottom: i < mgmtAlerts.length - 1 ? "1px solid #F3F4F6" : "none" }}>
-          <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>{alert.level === "critical" ? "🔴" : "⚠️"}</span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 13, color: alert.level === "critical" ? "#991B1B" : "#92400E" }}>{alert.title}</div>
-            <div style={{ fontSize: 12, color: "#6B7280", marginTop: 3, lineHeight: 1.5 }}>{alert.detail}</div>
-          </div>
-          {alert.action && <button onClick={() => setPage(alert.action.page)} style={{ flexShrink: 0, fontSize: 11, padding: "5px 12px", borderRadius: 6, border: "1px solid #E5E7EB", background: "white", color: NAVY, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>{alert.action.label}</button>}
-        </div>)}
+        {mgmtAlerts.map((alert, i) => {
+          const expanded = expandedAlert === i;
+          const hasDeals = alert.deals && alert.deals.length > 0;
+          return <div key={i} style={{ padding: "12px 0", borderBottom: i < mgmtAlerts.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+              <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>{alert.level === "critical" ? "🔴" : "⚠️"}</span>
+              <div style={{ flex: 1, minWidth: 0, cursor: hasDeals ? "pointer" : "default" }} onClick={() => hasDeals && setExpandedAlert(expanded ? null : i)}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: alert.level === "critical" ? "#991B1B" : "#92400E" }}>{alert.title}{hasDeals && <span style={{ marginLeft: 8, fontSize: 11, color: "#9CA3AF", fontWeight: 600 }}>{expanded ? "▲ hide" : "▼ show deals"}</span>}</div>
+                <div style={{ fontSize: 12, color: "#6B7280", marginTop: 3, lineHeight: 1.5 }}>{alert.detail}</div>
+              </div>
+              {alert.action && <button onClick={() => setPage(alert.action.page)} style={{ flexShrink: 0, fontSize: 11, padding: "5px 12px", borderRadius: 6, border: "1px solid #E5E7EB", background: "white", color: NAVY, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>{alert.action.label}</button>}
+            </div>
+            {expanded && hasDeals && <div style={{ marginTop: 10, marginLeft: 28, border: "1px solid #F3F4F6", borderRadius: 6, overflow: "hidden" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                <thead><tr style={{ background: "#F9FAFB" }}>{["Property", "Client", "Broker", "In pipeline", "Expected", ""].map(h => <th key={h} style={{ ...C.th, fontSize: 10, padding: "5px 8px", textAlign: h === "Expected" ? "right" : "left" }}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {alert.deals.map(d => {
+                    const days = d.created_at ? Math.floor((todayMs - new Date(d.created_at + "T12:00:00").getTime()) / 86400000) : null;
+                    return <tr key={d.id} onClick={() => { if (setCardDealId) { setCardDealId(d.id); setPage("deals"); } }} title="Open Deal Card" style={{ borderTop: "1px solid #F3F4F6", cursor: setCardDealId ? "pointer" : "default" }}>
+                      <td style={{ padding: "5px 8px", fontWeight: 600, color: NAVY }}>{d.property_name || "—"}{d.unit_no ? <span style={{ color: "#9CA3AF", fontWeight: 400 }}> · {d.unit_no}</span> : null}</td>
+                      <td style={{ padding: "5px 8px" }}>{d.client_name || "—"}</td>
+                      <td style={{ padding: "5px 8px" }}>{d.broker_name || "—"}</td>
+                      <td style={{ padding: "5px 8px", color: days != null && days > 60 ? "#DC2626" : "#6B7280" }}>{days != null ? `${days} days` : "—"}</td>
+                      <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600 }}>{fmtAED(d.expected_commission_net || 0)}</td>
+                      <td style={{ padding: "5px 8px", textAlign: "right", color: "#C9A044" }}>📋</td>
+                    </tr>;
+                  })}
+                </tbody>
+              </table>
+            </div>}
+          </div>;
+        })}
       </div>
     </div>}
 
@@ -508,31 +560,28 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
       </div>
 
       <div style={C.card}>
-        {sectionTitle("Liquidity - Cash Coverage Trend", "Liquidity vs average fixed costs over the last 6 months")}
-        <div style={{ padding: "0 18px", display: "flex", alignItems: "center", gap: 8, marginTop: -5, marginBottom: 5 }}>
-          <input id="toggle-pending" type="checkbox" checked={includePending} onChange={e => setIncludePending(e.target.checked)} style={{ cursor: "pointer" }} />
-          <label htmlFor="toggle-pending" style={{ fontSize: 11, fontWeight: 600, color: "#6B7280", cursor: "pointer" }}>
-            Include Pending Commission (50% Collection Projection)
-          </label>
-        </div>
-        <div style={{ padding: 18, display: "flex", alignItems: "flex-end", justifyContent: "space-between", height: 180, gap: 10 }}>
-          {feKpis.coverageSeries.map((s, i) => {
-            const heightPct = Math.min(100, (s.ratio / feKpis.maxRatio) * 100);
-            const isHealthy = s.ratio >= 1.2;
-            const isWarning = s.ratio > 0 && s.ratio < 1.1;
-            return <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: isHealthy ? "#059669" : isWarning ? "#DC2626" : "#6B7280" }}>
-                {s.ratio.toFixed(1)}x
+        {sectionTitle("Income — This Year vs Last Year", "6 months · net commission income vs the same month a year earlier")}
+        <div style={{ padding: "10px 18px 18px" }}>
+          {incomeYoY.map((s, i) => {
+            const delta = s.previous > 0 ? Math.round(((s.current - s.previous) / s.previous) * 100) : null;
+            return <div key={i} style={{ marginBottom: i < incomeYoY.length - 1 ? 18 : 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: NAVY }}>{s.label}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 10, color: "#98A2B3", fontWeight: 500 }}>YoY</span>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: delta == null ? "#98A2B3" : delta >= 0 ? "#059669" : "#DC2626", fontVariantNumeric: "tabular-nums" }}>{delta == null ? "—" : (delta >= 0 ? "+" : "") + delta + "%"}</span>
+                </div>
               </div>
-              <div style={{ 
-                width: "100%", 
-                height: `${heightPct}%`, 
-                minHeight: 4,
-                background: isHealthy ? "#86EFAC" : isWarning ? "#FCA5A5" : "#CBD5E1", 
-                borderRadius: "4px 4px 0 0",
-                transition: "height 0.5s ease"
-              }} />
-              <div style={{ fontSize: 10, color: "#6B7280", fontWeight: 600 }}>{s.label}</div>
+              <div style={{ display: "grid", gap: 5 }}>
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "#6B7280", marginBottom: 4 }}><span>This year</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtAED(s.current)}</span></div>
+                  <div style={{ height: 10, borderRadius: 999, background: "#E5E7EB", overflow: "hidden" }}><div style={{ width: `${Math.max(s.current > 0 ? 4 : 0, (s.current / maxIncomeYoY) * 100)}%`, height: "100%", background: "#38BDF8", transition: "width .4s" }} /></div>
+                </div>
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "#6B7280", marginBottom: 4 }}><span>Last year</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtAED(s.previous)}</span></div>
+                  <div style={{ height: 10, borderRadius: 999, background: "#E5E7EB", overflow: "hidden" }}><div style={{ width: `${Math.max(s.previous > 0 ? 4 : 0, (s.previous / maxIncomeYoY) * 100)}%`, height: "100%", background: "#FBD38D", transition: "width .4s" }} /></div>
+                </div>
+              </div>
             </div>;
           })}
         </div>
@@ -800,7 +849,7 @@ function ManualPage() {
 // ╔══════════════════════════════════════════════════╗
 //  DEALS PAGE
 // ╚══════════════════════════════════════════════════╝
-function DealsPage({ deals, setDeals, customers, brokers, developers, txns, accounts, journal, persistTxn, userRole, userEmail, writeMeta, setInvoiceDeal, setPage, dealStageChanges, settings }) {
+function DealsPage({ deals, setDeals, customers, brokers, developers, txns, accounts, journal, persistTxn, userRole, userEmail, writeMeta, setInvoiceDeal, setPage, dealStageChanges, settings, cardDealId, setCardDealId }) {
   const [show, setShow] = useState(false);
   const [edit, setEdit] = useState(null);
   // Filter + sort persist across navigation; default sort = newest deals first.
@@ -808,6 +857,13 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
   const [sortKey, setSortKey] = usePersistedState("deals_sortKey", "date");
   const [sortDir, setSortDir] = usePersistedState("deals_sortDir", "desc");
   const [cardDeal, setCardDeal] = useState(null);
+  // Open a deal's card when another page (e.g. a dashboard alert) requests it.
+  useEffect(() => {
+    if (!cardDealId) return;
+    const d = (deals || []).find(x => x.id === cardDealId);
+    if (d) setCardDeal(d);
+    if (setCardDealId) setCardDealId(null);
+  }, [cardDealId]);
   const [dealMutationLabel, setDealMutationLabel] = useState("");
   const [dealInvoices, setDealInvoices] = useState([]);
   const [bpDeal, setBpDeal] = useState(null);
@@ -3688,6 +3744,29 @@ function PerformancePage({ deals, txns, accounts, budgets, setPage }) {
     return { type, count: ds.length, value: ds.reduce((s, d) => s + (d.transaction_value || 0), 0), commission: ds.reduce((s, d) => s + (d.expected_commission_net || 0), 0) };
   }).filter(r => r.count > 0);
   const maxTypeCount = Math.max(1, ...byType.map(r => r.count));
+  // Deals created per month, split by type (Off-Plan / Secondary / Rental), last 12 months.
+  const dealsPerMonth = (() => {
+    const byMonth = {};
+    (deals || []).forEach(d => {
+      if (!d.created_at) return;
+      const k = String(d.created_at).slice(0, 7);
+      if (!byMonth[k]) byMonth[k] = {};
+      const ty = d.type || "Other";
+      byMonth[k][ty] = (byMonth[k][ty] || 0) + 1;
+    });
+    const now = new Date();
+    const out = [];
+    for (let i = 11; i >= 0; i--) {
+      const dt = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const k = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+      const t = byMonth[k] || {};
+      const offplan = t["Off-Plan"] || 0, secondary = t["Secondary"] || 0, rental = t["Rental"] || 0;
+      out.push({ label: dt.toLocaleDateString("en-GB", { month: "short", year: "2-digit" }), offplan, secondary, rental, count: offplan + secondary + rental });
+    }
+    return out;
+  })();
+  const maxDealsPerMonth = Math.max(1, ...dealsPerMonth.map(m => m.count));
+  const dealsPerMonthTotal = dealsPerMonth.reduce((s, m) => s + m.count, 0);
 
   // ── Broker Performance ───────────────────────────
   const brokerMap = new Map();
@@ -3912,6 +3991,33 @@ function PerformancePage({ deals, txns, accounts, budgets, setPage }) {
           </div>
         )}
       </div>
+
+      {/* ── Deals per Month ── */}
+      {sectionCard("Deals per Month", `Deals created per month — all stages included · ${dealsPerMonthTotal} in the last 12 months`,
+        <div>
+          <div style={{ display: "flex", gap: 16, padding: "0 6px 10px", fontSize: 10.5, color: "#6B7280", flexWrap: "wrap" }}>
+            {["Off-Plan", "Secondary", "Rental"].map(t => <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: TYPE_COLOR[t] }} />{t}</span>)}
+          </div>
+          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", height: 188, gap: 10, padding: "4px 6px 0", borderBottom: "2px solid #EEF0F3" }}>
+            {dealsPerMonth.map((m, i) => {
+              const h = m.count > 0 ? Math.max(8, (m.count / maxDealsPerMonth) * 100) : 0;
+              const segs = [["Rental", m.rental], ["Secondary", m.secondary], ["Off-Plan", m.offplan]];
+              return <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", height: "100%" }}>
+                <div style={{ fontSize: 11.5, fontWeight: 800, color: m.count > 0 ? NAVY : "#D1D5DB", height: 18 }}>{m.count}</div>
+                <div style={{ flex: 1, display: "flex", alignItems: "flex-end", width: "100%", justifyContent: "center" }}>
+                  <div title={`${m.label}: ${m.count} total — Off-Plan ${m.offplan}, Secondary ${m.secondary}, Rental ${m.rental}`} style={{ width: "72%", height: `${h}%`, minHeight: m.count > 0 ? 8 : 0, borderRadius: "7px 7px 2px 2px", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 3px 8px rgba(16,24,40,.13)" }}>
+                    {segs.map(([t, c]) => c > 0 ? <div key={t} title={`${t}: ${c}`} style={{ height: `${(c / m.count) * 100}%`, background: TYPE_COLOR[t] }} /> : null)}
+                  </div>
+                </div>
+              </div>;
+            })}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "8px 6px 2px" }}>
+            {dealsPerMonth.map((m, i) => <div key={i} style={{ flex: 1, textAlign: "center", fontSize: 10, fontWeight: 600, color: "#6B7280", whiteSpace: "nowrap" }}>{m.label}</div>)}
+          </div>
+        </div>,
+        <button style={C.btn("ghost", true)} onClick={() => setPage("deals")}>View Deals →</button>
+      )}
 
       {/* ── Broker Performance Bar Chart ── */}
       {sectionCard("Broker Performance — Generated vs Retained", `Top ${brokerPerf.length} brokers — commission generated vs company retained (after broker paid)`,
@@ -5591,6 +5697,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
   const [settings, setSettings] = useState(() => ls_get("settings", { company: "Nasama Properties Company LLC", trn: "", vatRate: 5, currency: "AED", openingBalance: 0, openingBalanceDate: DEFAULT_REPORTING_START_DATE }));
   const [page, setPage] = useState(() => canAccessPage(userAccess || userRole, "dashboard") ? "dashboard" : "deals");
   const [invoiceDeal, setInvoiceDeal] = useState(null);
+  const [cardDealId, setCardDealId] = useState(null);
   const [dark, setDark] = useState(false);
   const [fbLoaded, setFbLoaded] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -5810,7 +5917,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     <style>{`@keyframes npLoad{0%{width:0%}60%{width:90%}100%{width:100%}}`}</style>
   </div>;
 
-  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, budgets, setBudgets: setBudgetsFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta, dealStageChanges, setInvoiceDeal };
+  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, budgets, setBudgets: setBudgetsFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta, dealStageChanges, setInvoiceDeal, cardDealId, setCardDealId };
 
   const renderPage = () => {
     if (!canAccessPage(accessSubject, page)) {
