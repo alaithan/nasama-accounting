@@ -861,9 +861,8 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
   useEffect(() => {
     if (!cardDealId) return;
     const d = (deals || []).find(x => x.id === cardDealId);
-    if (d) setCardDeal(d);
-    if (setCardDealId) setCardDealId(null);
-  }, [cardDealId]);
+    if (d) { setCardDeal(d); if (setCardDealId) setCardDealId(null); }
+  }, [cardDealId, deals]);
   const [dealMutationLabel, setDealMutationLabel] = useState("");
   const [dealInvoices, setDealInvoices] = useState([]);
   const [bpDeal, setBpDeal] = useState(null);
@@ -1292,20 +1291,55 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
   </div>;
 }
 
-// Capture a DOM element to a multi-page A4 PDF (returns the jsPDF doc, or null).
+// Capture a DOM element to a multi-page A4 PDF. Pages are broken at whitespace
+// so rows / boxes / tables are never sliced through ("interrupted by the page
+// end"). A fixed wide windowWidth forces mobile to render exactly like desktop
+// (otherwise mobile font-boosting inflates the text). Returns jsPDF or null.
 async function captureElementToPdf(elementId) {
   if (!window.html2canvas || !window.jspdf) { toast("PDF libraries not loaded", "error"); return null; }
   const el = document.getElementById(elementId);
   if (!el) { toast("Nothing to export", "error"); return null; }
   try {
-    const canvas = await window.html2canvas(el, { scale: 2, useCORS: true, allowTaint: true, backgroundColor: "#ffffff", logging: false, scrollX: 0, scrollY: -window.scrollY });
-    const img = canvas.toDataURL("image/png");
+    const canvas = await window.html2canvas(el, { scale: 2, useCORS: true, allowTaint: true, backgroundColor: "#ffffff", logging: false, scrollX: 0, scrollY: -window.scrollY, windowWidth: 1100, windowHeight: 1400 });
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     const pageW = pdf.internal.pageSize.getWidth(), pageH = pdf.internal.pageSize.getHeight();
-    const imgH = (canvas.height / canvas.width) * pageW;
-    pdf.addImage(img, "PNG", 0, 0, pageW, imgH);
-    if (imgH > pageH + 2) { let y = pageH; while (y < imgH - 2) { pdf.addPage(); pdf.addImage(img, "PNG", 0, -y, pageW, imgH); y += pageH; } }
+    const cw = canvas.width, ch = canvas.height;
+    const pxPerMm = cw / pageW;                          // canvas px that map to 1mm at full page width
+    const pageCanvasH = Math.floor(pageH * pxPerMm);     // one A4 page worth of canvas rows
+    // Fits on a single page — add as-is, no slicing.
+    if (ch <= pageCanvasH + 4) {
+      pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, 0, pageW, ch / pxPerMm);
+      return pdf;
+    }
+    // Read pixels so we can break pages on near-white rows (skips text/boxes).
+    let pix = null;
+    try { pix = canvas.getContext("2d").getImageData(0, 0, cw, ch).data; } catch (e) { pix = null; }
+    const isWhiteRow = (y) => {
+      if (!pix) return false;
+      const limit = Math.max(2, Math.floor(cw * 0.004)); let dirty = 0;
+      for (let x = 0; x < cw; x += 4) {
+        const i = (y * cw + x) * 4;
+        if (pix[i] < 248 || pix[i + 1] < 248 || pix[i + 2] < 248) { if (++dirty > limit) return false; }
+      }
+      return true;
+    };
+    const maxScanBack = Math.floor(pageCanvasH * 0.18);  // how far up to hunt for a clean cut
+    const tmp = document.createElement("canvas"), tctx = tmp.getContext("2d");
+    let start = 0, first = true;
+    while (start < ch) {
+      let end = Math.min(start + pageCanvasH, ch);
+      if (end < ch) {                                    // not the last slice — find a clean break
+        for (let y = end; y > end - maxScanBack && y > start + 10; y--) { if (isWhiteRow(y)) { end = y; break; } }
+      }
+      const sliceH = end - start;
+      tmp.width = cw; tmp.height = sliceH;
+      tctx.fillStyle = "#ffffff"; tctx.fillRect(0, 0, cw, sliceH);
+      tctx.drawImage(canvas, 0, start, cw, sliceH, 0, 0, cw, sliceH);
+      if (!first) pdf.addPage();
+      pdf.addImage(tmp.toDataURL("image/png"), "PNG", 0, 0, pageW, sliceH / pxPerMm);
+      first = false; start = end;
+    }
     return pdf;
   } catch (err) { console.error(err); toast("PDF export failed: " + err.message, "error"); return null; }
 }
@@ -1338,6 +1372,7 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
   const [showPicker, setShowPicker] = useState(false);
   const [pickerQ, setPickerQ] = useState("");
   const [pickerDir, setPickerDir] = useState("in");
+  const { isMobile } = useWindowSize();
   const isSecondary = deal.type === "Secondary";
   const acctById = useMemo(() => new Map((accounts || []).map(a => [a.id, a])), [accounts]);
   const isCash = (id) => { const a = acctById.get(id); return !!(a && (a.isBank || a.isCash || a.code === "1001" || a.code === "1002")); };
@@ -1406,9 +1441,9 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
   const CARD_ID = "deal-card-content";
   const fileName = `DealCard_${(deal.property_name || "deal").replace(/[^\w]+/g, "_")}${deal.unit_no ? "_" + deal.unit_no : ""}.pdf`;
   const summaryText = `Deal Card — ${deal.property_name || ""}${deal.unit_no ? " · Unit " + deal.unit_no : ""}\nStage: ${deal.stage}\nValue: ${fmtAED(deal.transaction_value || 0)}\nExpected commission: ${fmtAED(deal.expected_commission_net || 0)}\nCollected: ${fmtAED(col.collectedCents)} · Remaining: ${fmtAED(col.remainingCents)}`;
-  const handleDownload = async () => { setBusy(true); const pdf = await captureElementToPdf(CARD_ID); if (pdf) pdf.save(fileName); setBusy(false); };
+  const handleDownload = async () => { setBusy(true); const pdf = await captureElementToPdf(REPORT_ID); if (pdf) pdf.save(fileName); setBusy(false); };
   const handleShare = async () => {
-    setBusy(true); const pdf = await captureElementToPdf(CARD_ID); setBusy(false);
+    setBusy(true); const pdf = await captureElementToPdf(REPORT_ID); setBusy(false);
     if (!pdf) return;
     try {
       const file = new File([pdf.output("blob")], fileName, { type: "application/pdf" });
@@ -1423,9 +1458,16 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
   };
 
   const fmtDays = (d) => d < 1 ? "<1 day" : d === 1 ? "1 day" : d < 60 ? d + " days" : Math.round(d / 30) + " months";
+  // Styled A4 report (for PDF / WhatsApp) — rendered off-screen, captured by id.
+  const REPORT_ID = "deal-card-report";
+  const RGOLD = "#B8902F";
+  const reportRef = `NP-${new Date().getFullYear()}-${((deal.id || "").replace(/[^A-Za-z0-9]/g, "").slice(-6) || "DEAL").toUpperCase()}`;
+  const rTh = { fontSize: 9, fontWeight: 700, letterSpacing: "0.08em", color: "#9CA3AF", textTransform: "uppercase", padding: "7px 10px", textAlign: "left", borderBottom: "1.5px solid #E5E7EB", background: "#FAFAFB" };
+  const rTd = { fontSize: 10.5, color: "#1F2937", padding: "7px 10px", borderBottom: "1px solid #F1F2F4" };
+  const rSecTitle = (t) => <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: "#0C0F1E", textTransform: "uppercase", paddingBottom: 8, marginTop: 22, marginBottom: 10, borderBottom: `2px solid ${RGOLD}` }}>{t}</div>;
   const sec = (title, children, extra) => <div style={{ border: "1px solid #E5E7EB", borderRadius: 8, overflow: "hidden", marginTop: 12 }}>
     <div style={{ padding: "8px 12px", background: "#F9FAFB", borderBottom: "1px solid #E5E7EB", fontSize: 11, fontWeight: 700, color: NAVY, letterSpacing: "0.04em", textTransform: "uppercase", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}><span>{title}</span>{extra}</div>
-    <div style={{ padding: "10px 12px" }}>{children}</div>
+    <div style={{ padding: "10px 12px", overflowX: "auto" }}>{children}</div>
   </div>;
   const kv = (k, v) => <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "3px 0", fontSize: 12.5 }}><span style={{ color: "#6B7280" }}>{k}</span><span style={{ fontWeight: 600, color: "#374151", textAlign: "right" }}>{v}</span></div>;
   const party = (label, rec, fallbackName) => <div style={{ padding: "6px 0", fontSize: 12.5 }}>
@@ -1438,12 +1480,12 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
 
   return <div style={C.modal} onClick={onClose}>
     <div style={{ ...C.mbox(860), maxHeight: "94vh" }} onClick={e => e.stopPropagation()}>
-      <div style={C.mhdr}>
-        <span style={{ fontWeight: 700, fontSize: 16 }}>📋 Deal Card</span>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div style={{ ...C.mhdr, flexWrap: "wrap", gap: 8, padding: isMobile ? "12px 16px" : "18px 24px" }}>
+        <span style={{ fontWeight: 700, fontSize: isMobile ? 15 : 16, whiteSpace: "nowrap" }}>📋 Deal Card</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
           <button style={C.btn("secondary", true)} disabled={busy} onClick={handleDownload}>{busy ? "…" : "⬇ PDF"}</button>
-          <button style={C.btn("secondary", true)} disabled={busy} onClick={handleShare}>{busy ? "…" : "↗ Share / WhatsApp"}</button>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
+          <button style={C.btn("secondary", true)} disabled={busy} onClick={handleShare}>{busy ? "…" : (isMobile ? "↗ Share" : "↗ Share / WhatsApp")}</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
         </div>
       </div>
       <div style={C.mbdy}>
@@ -1466,7 +1508,7 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
             </div>
           </div>
 
-          {sec("Parties", <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 20px" }}>
+          {sec("Parties", <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: "0 20px" }}>
             {party("Developer", developer, deal.developer)}
             {party("Broker", broker, deal.broker_name)}
             {party(isSecondary ? "Buyer client" : "Client", client, deal.client_name)}
@@ -1615,6 +1657,144 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
 
           {deal.notes && sec("Notes", <div style={{ fontSize: 12.5, color: "#374151", whiteSpace: "pre-wrap" }}>{deal.notes}</div>)}
         </div>
+      </div>
+    </div>
+
+    {/* Off-screen A4-styled report — captured for PDF / WhatsApp */}
+    <div style={{ position: "fixed", left: -10000, top: 0, zIndex: -1 }} aria-hidden="true">
+      <div id={REPORT_ID} style={{ width: 794, boxSizing: "border-box", background: "#fff", fontFamily: "Inter, Arial, Helvetica, sans-serif", color: "#2B2F3A", WebkitTextSizeAdjust: "100%", textSizeAdjust: "100%" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "34px 44px 16px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <img src={NASAMA_ICON_SRC} alt="" style={{ width: 42, height: 42, objectFit: "contain" }} />
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "0.04em", color: "#1A1F36", lineHeight: 1 }}>NASAMA PROPERTIES</div>
+              <div style={{ fontSize: 8, fontWeight: 600, letterSpacing: "0.24em", color: "#9AA0AC", marginTop: 6 }}>PREMIUM REAL ESTATE SOLUTIONS</div>
+            </div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 23, fontWeight: 800, color: "#1A1F36", letterSpacing: "0.01em", lineHeight: 1 }}>DEAL CARD</div>
+            <div style={{ display: "inline-block", marginTop: 8, background: "#1A1F36", color: "#E7B43A", fontSize: 8, fontWeight: 800, letterSpacing: "0.16em", padding: "4px 11px", borderRadius: 3 }}>CONFIDENTIAL DOSSIER</div>
+          </div>
+        </div>
+        <div style={{ height: 3, background: "linear-gradient(90deg, #C9A038, #ECD9A0)", margin: "0 44px" }} />
+
+        <div style={{ margin: "22px 44px 0", background: "#F4F6F9", borderRadius: 8, padding: "18px 26px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "15px 40px" }}>
+          {[
+            ["PROPERTY", `${deal.property_name || "—"}${deal.unit_no ? " · Unit " + deal.unit_no : ""}`],
+            ["REFERENCE NO", reportRef],
+            ["BROKER", deal.broker_name || "—"],
+            ["STAGE", deal.stage || "—"],
+            ["CLIENT", deal.client_name || "—"],
+            ["GENERATED", fmtDate(todayStr())],
+          ].map((f, idx) => <div key={idx}>
+            <div style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.16em", color: "#9AA0AC" }}>{f[0]}</div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#1A1F36", marginTop: 4 }}>{f[1]}</div>
+          </div>)}
+        </div>
+
+        <div style={{ margin: "24px 44px 0" }}>
+          {[
+            ["Deal Type", deal.type || "—"],
+            ["Developer", (developer && developer.name) || deal.developer || "—"],
+            ["Transaction Value", fmtAED(deal.transaction_value || 0)],
+            [isSecondary ? "Buyer Commission %" : "Commission %", deal.commission_pct ? deal.commission_pct + "%" : "—"],
+            ...(isSecondary ? [["Seller Commission %", deal.seller_commission_pct ? deal.seller_commission_pct + "%" : "—"]] : []),
+            ["VAT", deal.vat_applicable ? "Yes — 5% added on invoice" : "No"],
+          ].map((row, idx) => <div key={idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 2px", borderBottom: "1px solid #EFF1F4" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#C9A038", minWidth: 18 }}>{String(idx + 1).padStart(2, "0")}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 800, color: "#1A1F36" }}>{row[0]}</span>
+            </div>
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: "#2B2F3A" }}>{row[1]}</span>
+          </div>)}
+        </div>
+
+        <div style={{ margin: "24px 44px 0", display: "flex", gap: 14 }}>
+          {[["EXPECTED COMMISSION", fmtAED(ci.netExpected), "#E7B43A", "#1A1F36", "#9AA0AC"], ["COLLECTED", fmtAED(col.collectedCents), "#0E8A52", "#fff", "#9AA0AC"], ["REMAINING", fmtAED(col.remainingCents), col.remainingCents > 0 ? "#C2710C" : "#0E8A52", "#fff", "#9AA0AC"]].map((b, idx) => <div key={idx} style={{ flex: 1, background: idx === 0 ? "#1A1F36" : "#fff", border: idx === 0 ? "none" : "1.5px solid #E8EBEF", borderRadius: 8, padding: "16px 22px" }}>
+            <div style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.14em", color: b[4] }}>{b[0]}</div>
+            <div style={{ fontSize: 21, fontWeight: 800, color: b[2], marginTop: 5 }}>{b[1]}</div>
+          </div>)}
+        </div>
+
+        <div style={{ padding: "0 44px" }}>
+          {rSecTitle("Parties")}
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{["Role", "Name", "Phone", "Email", "TRN"].map(h => <th key={h} style={rTh}>{h}</th>)}</tr></thead>
+            <tbody>
+              {[["Developer", developer, deal.developer], ["Broker", broker, deal.broker_name], [isSecondary ? "Buyer client" : "Client", client, deal.client_name], ...(isSecondary ? [["Seller client", seller, deal.seller_name]] : [])].map((p, idx) => <tr key={idx}>
+                <td style={{ ...rTd, color: "#6B7280" }}>{p[0]}</td>
+                <td style={{ ...rTd, fontWeight: 700 }}>{(p[1] && p[1].name) || p[2] || "—"}</td>
+                <td style={rTd}>{(p[1] && (p[1].phone || p[1].contactNo)) || "—"}</td>
+                <td style={rTd}>{(p[1] && p[1].email) || "—"}</td>
+                <td style={rTd}>{(p[1] && p[1].trn) || "—"}</td>
+              </tr>)}
+            </tbody>
+          </table>
+
+          {rSecTitle("Commissions & Invoicing")}
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{["Commission", "Target", "Invoiced", "Remaining", "Invoice #"].map((h, hi) => <th key={h} style={{ ...rTh, textAlign: hi >= 1 && hi <= 3 ? "right" : "left" }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {ci.commissions.map(c => <tr key={c.id}>
+                <td style={{ ...rTd, fontWeight: 700 }}>{c.label}</td>
+                <td style={{ ...rTd, textAlign: "right" }}>{fmtAED(c.target)}</td>
+                <td style={{ ...rTd, textAlign: "right", color: "#065F46" }}>{fmtAED(c.invoicedCents)}</td>
+                <td style={{ ...rTd, textAlign: "right", color: c.remainingCents > 0 ? "#B45309" : "#065F46", fontWeight: 700 }}>{fmtAED(c.remainingCents)}</td>
+                <td style={rTd}>{c.invoiceNumbers.length ? c.invoiceNumbers.map(n => "#" + n).join(", ") : "—"}</td>
+              </tr>)}
+              <tr>
+                <td style={{ ...rTd, fontWeight: 800, borderTop: "1.5px solid #E5E7EB" }}>Net expected</td>
+                <td style={{ ...rTd, textAlign: "right", fontWeight: 800, borderTop: "1.5px solid #E5E7EB" }}>{fmtAED(ci.netExpected)}</td>
+                <td style={{ ...rTd, textAlign: "right", fontWeight: 800, color: "#065F46", borderTop: "1.5px solid #E5E7EB" }}>{fmtAED(ci.totalInvoicedCents)}</td>
+                <td style={{ ...rTd, textAlign: "right", fontWeight: 800, color: ci.remainingCents > 0 ? "#B45309" : "#065F46", borderTop: "1.5px solid #E5E7EB" }}>{fmtAED(ci.remainingCents)}</td>
+                <td style={{ ...rTd, borderTop: "1.5px solid #E5E7EB" }}></td>
+              </tr>
+            </tbody>
+          </table>
+
+          {col.receipts.length > 0 && <div>
+            {rSecTitle(`Collection — ${col.count} installment${col.count !== 1 ? "s" : ""} received`)}
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr>{["#", "Date", "Ref", "Amount"].map((h, hi) => <th key={h} style={{ ...rTh, textAlign: hi === 3 ? "right" : "left" }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {col.receipts.map((r, idx) => <tr key={idx}>
+                  <td style={rTd}>{idx + 1}</td>
+                  <td style={rTd}>{r.date ? fmtDate(r.date) : "—"}</td>
+                  <td style={rTd}>{r.ref || "—"}</td>
+                  <td style={{ ...rTd, textAlign: "right", color: "#065F46", fontWeight: 700 }}>{fmtAED(r.cents)}</td>
+                </tr>)}
+                <tr><td style={{ ...rTd, fontWeight: 800, borderTop: "1.5px solid #E5E7EB" }} colSpan={3}>Total collected</td><td style={{ ...rTd, textAlign: "right", fontWeight: 800, color: "#065F46", borderTop: "1.5px solid #E5E7EB" }}>{fmtAED(col.collectedCents)}</td></tr>
+              </tbody>
+            </table>
+          </div>}
+
+          {linked.length > 0 && <div>
+            {rSecTitle("Linked Transactions")}
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr>{["Date", "Ref", "Type", "Description", "In", "Out"].map((h, hi) => <th key={h} style={{ ...rTh, textAlign: hi >= 4 ? "right" : "left" }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {linked.map((t, idx) => {
+                  const inAmt = (t.lines || []).reduce((s, l) => s + (!t.isVoid && isCash(l.accountId) ? (l.debit || 0) : 0), 0);
+                  const outAmt = (t.lines || []).reduce((s, l) => s + (!t.isVoid && isCash(l.accountId) ? (l.credit || 0) : 0), 0);
+                  return <tr key={t.id || idx}>
+                    <td style={rTd}>{t.date ? fmtDate(t.date) : "—"}</td>
+                    <td style={{ ...rTd, fontFamily: "monospace", fontSize: 9.5 }}>{t.ref || "—"}</td>
+                    <td style={rTd}>{TXN_TYPES[t.txnType]?.label || t.txnType || "—"}</td>
+                    <td style={{ ...rTd, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.description || "—"}</td>
+                    <td style={{ ...rTd, textAlign: "right", color: "#065F46" }}>{inAmt > 0 ? fmtAED(inAmt) : ""}</td>
+                    <td style={{ ...rTd, textAlign: "right", color: "#991B1B" }}>{outAmt > 0 ? fmtAED(outAmt) : ""}</td>
+                  </tr>;
+                })}
+              </tbody>
+            </table>
+          </div>}
+
+        </div>
+
+        <div style={{ marginTop: 30, borderLeft: "4px solid #C9A038", background: "#FBF7EC", padding: "11px 44px", textAlign: "center" }}>
+          <span style={{ fontSize: 10, fontWeight: 800, color: "#A8822B", letterSpacing: "0.07em" }}>Generated by Nasama Accounting System · {fmtDate(todayStr())}</span>
+        </div>
+        <div style={{ padding: "9px 44px 18px", fontSize: 8, color: "#B0B5BE", letterSpacing: "0.06em", textAlign: "center" }}>© {new Date().getFullYear()} {(settings?.company || "NASAMA PROPERTIES COMPANY LLC").toUpperCase()} · PRIVATE & CONFIDENTIAL</div>
       </div>
     </div>
   </div>;
