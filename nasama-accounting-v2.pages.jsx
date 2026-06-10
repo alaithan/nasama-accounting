@@ -374,6 +374,18 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     const tot = dealsEarnedNoReceipt.reduce((s, d) => s + (d.expected_commission_net || 0), 0);
     mgmtAlerts.push({ level: "warning", title: `${dealsEarnedNoReceipt.length} deal${dealsEarnedNoReceipt.length !== 1 ? "s" : ""} at Commission Earned with no receipt recorded`, detail: `${fmtAED(tot)} has been marked as earned but no cash receipt exists. Confirm collection or update the deal stage.`, deals: dealsEarnedNoReceipt, action: { label: "Record Receipt", page: "receipts" } });
   }
+  // Overdue installments (Phase 3): deals whose payment plan has a past-due
+  // amount not yet covered by collected cash.
+  const dealsOverdueInstallments = (deals || []).map(d => {
+    if (!Array.isArray(d.installment_schedule) || d.installment_schedule.length === 0) return null;
+    const inst = installmentStatus(d, dealCollection(d, txns || [], accounts || []).collectedCents);
+    return inst.overdueCents > 0 ? { deal: d, inst } : null;
+  }).filter(Boolean);
+  if (dealsOverdueInstallments.length > 0) {
+    const tot = dealsOverdueInstallments.reduce((s, x) => s + x.inst.overdueCents, 0);
+    const cnt = dealsOverdueInstallments.reduce((s, x) => s + x.inst.overdueCount, 0);
+    mgmtAlerts.push({ level: tot > 100000 ? "critical" : "warning", title: `${cnt} installment${cnt !== 1 ? "s" : ""} overdue across ${dealsOverdueInstallments.length} deal${dealsOverdueInstallments.length !== 1 ? "s" : ""}`, detail: `${fmtAED(tot)} in scheduled commission payments is past its due date and not yet collected. Follow up to keep collections on plan.`, deals: dealsOverdueInstallments.map(x => x.deal), action: { label: "View Deals", page: "deals" } });
+  }
   const AGING_BUCKETS = [
     { label: "0–30 days",  min: 0,  max: 30,       color: "#059669", bg: "#ECFDF5" },
     { label: "31–60 days", min: 31, max: 60,       color: "#2563EB", bg: "#EFF6FF" },
@@ -1427,6 +1439,7 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
   }, [unlinkedTxns, pickerQ, pickerDir]);
   const ci = commissionInvoicing(deal, invoices || []);
   const col = dealCollection(deal, txns || [], accounts || []);
+  const inst = installmentStatus(deal, col.collectedCents);
   const brokerPaidFromTxns = linked.filter(t => !t.isVoid && t.txnType === "BP").reduce((s, t) => s + (t.lines || []).reduce((ss, l) => ss + ((acctById.get(l.accountId) || {}).type === "Expense" ? (l.debit || 0) : 0), 0), 0);
   const brokerPaid = brokerPaidFromTxns > 0 ? brokerPaidFromTxns : (deal.broker_paid_amount || 0);
   const netRetained = col.collectedCents - brokerPaid;
@@ -1458,6 +1471,11 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
   };
 
   const fmtDays = (d) => d < 1 ? "<1 day" : d === 1 ? "1 day" : d < 60 ? d + " days" : Math.round(d / 30) + " months";
+  const instChip = (s) => {
+    const m = { paid: ["Paid", "#059669", "#ECFDF5", "#A7F3D0"], partial: ["Partial", "#B45309", "#FFFBEB", "#FDE68A"], overdue: ["Overdue", "#B91C1C", "#FEF2F2", "#FECACA"], upcoming: ["Upcoming", "#6B7280", "#F3F4F6", "#E5E7EB"] };
+    const [txt, color, bg, bd] = m[s] || m.upcoming;
+    return <span style={{ fontSize: 10, fontWeight: 700, color, background: bg, border: `1px solid ${bd}`, borderRadius: 4, padding: "1px 7px", whiteSpace: "nowrap" }}>{txt}</span>;
+  };
   // Styled A4 report (for PDF / WhatsApp) — rendered off-screen, captured by id.
   const REPORT_ID = "deal-card-report";
   const RGOLD = "#B8902F";
@@ -1548,6 +1566,26 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
             </div>
             {col.receipts.map((r, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "#6B7280", padding: "2px 0" }}><span>Installment {i + 1}{r.date ? " · " + fmtDate(r.date) : ""}{r.ref ? " · " + r.ref : ""}</span><span style={{ color: "#059669", fontWeight: 600 }}>{fmtAED(r.cents)}</span></div>)}
             {col.collectedCents === 0 && <div style={{ fontSize: 11.5, color: "#9CA3AF" }}>Nothing collected yet.</div>}
+          </div>)}
+
+          {inst.hasSchedule && sec(`Payment Schedule · ${inst.paidCount}/${inst.rows.length} paid`, <div>
+            {inst.nextDue && <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8, fontSize: 12.5 }}>
+              <span style={{ fontWeight: 700, color: inst.overdueCents > 0 ? "#B91C1C" : NAVY }}>{inst.overdueCents > 0 ? `⚠ ${fmtAED(inst.overdueCents)} overdue` : "Next due"}</span>
+              <span style={{ color: "#6B7280" }}>{fmtAED(inst.nextDue.dueCents)}{inst.nextDue.dueDate ? " · " + fmtDate(inst.nextDue.dueDate) : ""}</span>
+            </div>}
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+              <thead><tr style={{ background: "#F9FAFB" }}>{["#", "Due date", "Planned", "Received", "Status"].map((h, hi) => <th key={h} style={{ ...C.th, fontSize: 10, padding: "5px 6px", textAlign: hi === 2 || hi === 3 ? "right" : "left" }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {inst.rows.map(r => <tr key={r.id} style={{ borderTop: "1px solid #F2F4F7" }}>
+                  <td style={{ padding: "4px 6px", color: "#9CA3AF" }}>{r.index}</td>
+                  <td style={{ padding: "4px 6px" }}>{r.dueDate ? fmtDate(r.dueDate) : "—"}</td>
+                  <td style={{ padding: "4px 6px", textAlign: "right" }}>{fmtAED(r.amountCents)}</td>
+                  <td style={{ padding: "4px 6px", textAlign: "right", color: "#059669" }}>{r.paidCents > 0 ? fmtAED(r.paidCents) : ""}</td>
+                  <td style={{ padding: "4px 6px" }}>{instChip(r.status)}</td>
+                </tr>)}
+              </tbody>
+            </table>
+            {inst.surplusCents > 0 && <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 6 }}>Collected {fmtAED(inst.surplusCents)} beyond the scheduled plan.</div>}
           </div>)}
 
           {sec("Profitability", <div>
@@ -1768,6 +1806,22 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
             </table>
           </div>}
 
+          {inst.hasSchedule && <div>
+            {rSecTitle(inst.overdueCents > 0 ? `Payment Schedule — ${fmtAED(inst.overdueCents)} overdue` : "Payment Schedule")}
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr>{["#", "Due Date", "Planned", "Received", "Status"].map((h, hi) => <th key={h} style={{ ...rTh, textAlign: hi === 2 || hi === 3 ? "right" : "left" }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {inst.rows.map(r => <tr key={r.id}>
+                  <td style={rTd}>{r.index}</td>
+                  <td style={rTd}>{r.dueDate ? fmtDate(r.dueDate) : "—"}</td>
+                  <td style={{ ...rTd, textAlign: "right" }}>{fmtAED(r.amountCents)}</td>
+                  <td style={{ ...rTd, textAlign: "right", color: "#065F46" }}>{r.paidCents > 0 ? fmtAED(r.paidCents) : "—"}</td>
+                  <td style={{ ...rTd, fontWeight: 700, color: r.status === "paid" ? "#065F46" : r.status === "overdue" ? "#991B1B" : r.status === "partial" ? "#B45309" : "#6B7280" }}>{r.status === "paid" ? "Paid" : r.status === "overdue" ? "Overdue" : r.status === "partial" ? "Partial" : "Upcoming"}</td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>}
+
           {linked.length > 0 && <div>
             {rSecTitle("Linked Transactions")}
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -1864,6 +1918,55 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers, i
         <div><label style={C.label}>Date Created</label><Inp type="date" value={d.created_at} onChange={e => up("created_at", e.target.value)} /></div>
       </div>
       <div style={{ marginTop: 14 }}><label style={C.label}>Notes</label><textarea style={{ ...C.input, minHeight: 60, resize: "vertical" }} value={d.notes || ""} onChange={e => up("notes", e.target.value)} /></div>
+
+      {(() => {
+        // Payment schedule editor — the agreed installment plan (planned due
+        // dates). Amounts are gross cash (incl VAT) so they reconcile directly
+        // against what's collected. Stored as deal.installment_schedule.
+        const sched = Array.isArray(d.installment_schedule) ? d.installment_schedule : [];
+        const setSched = (next) => up("installment_schedule", next);
+        const updateRow = (i, patch) => setSched(sched.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+        const addRow = () => setSched([...sched, { id: uid(), dueDate: "", amountCents: 0 }]);
+        const removeRow = (i) => setSched(sched.filter((_, idx) => idx !== i));
+        const grossExpected = d.vat_applicable ? Math.round((d.expected_commission_net || 0) * 1.05) : (d.expected_commission_net || 0);
+        const addMonths = (iso, n) => { const dt = iso ? new Date(iso + "T00:00:00") : new Date(); dt.setMonth(dt.getMonth() + n); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`; };
+        const generate = (n) => {
+          if (!grossExpected || n < 1) { toast("Set the expected commission first", "warning"); return; }
+          const base = Math.floor(grossExpected / n / 100) * 100;   // whole-AED base; last row absorbs the remainder
+          const start = d.created_at || todayStr();
+          const rows = []; let acc = 0;
+          for (let i = 0; i < n; i++) { const amt = i === n - 1 ? grossExpected - acc : base; acc += amt; rows.push({ id: uid(), dueDate: addMonths(start, i), amountCents: amt }); }
+          setSched(rows);
+        };
+        const total = sched.reduce((s, r) => s + (r.amountCents || 0), 0);
+        const diff = total - grossExpected;
+        return <div style={{ marginTop: 16, border: "1px solid #E5E7EB", borderRadius: 8, overflow: "hidden" }}>
+          <div style={{ padding: "10px 14px", background: "#F9FAFB", borderBottom: "1px solid #E5E7EB", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: NAVY, letterSpacing: "0.02em" }}>Payment Schedule <span style={{ fontWeight: 500, color: "#9CA3AF" }}>· optional</span></span>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              {[2, 3, 4].map(n => <button key={n} type="button" style={{ ...C.btn("secondary", true), fontSize: 11, padding: "4px 9px" }} onClick={() => generate(n)} title={`Split expected commission into ${n} equal monthly installments`}>Split ÷{n}</button>)}
+              <button type="button" style={{ ...C.btn("secondary", true), fontSize: 11, padding: "4px 9px" }} onClick={addRow}>＋ Add</button>
+            </div>
+          </div>
+          <div style={{ padding: "8px 14px" }}>
+            {sched.length === 0 ? <div style={{ fontSize: 11.5, color: "#9CA3AF", padding: "4px 0" }}>No payment plan set. Add installments (or use Split) to track planned due dates, what's been received, and overdue amounts.</div> :
+            <div>
+              {sched.map((r, i) => <div key={r.id || i} style={{ display: "flex", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: "1px solid #F3F4F6" }}>
+                <span style={{ fontSize: 11, color: "#9CA3AF", width: 20, textAlign: "right", flexShrink: 0 }}>{i + 1}</span>
+                <Inp type="date" value={r.dueDate || ""} onChange={e => updateRow(i, { dueDate: e.target.value })} style={{ flex: "0 0 150px" }} />
+                <div style={{ flex: 1 }}><NumInp value={r.amountCents ? r.amountCents / 100 : 0} onValue={n => updateRow(i, { amountCents: Math.round((n || 0) * 100) })} placeholder="Amount (AED, incl VAT)" /></div>
+                <button type="button" onClick={() => removeRow(i)} style={{ background: "none", border: "none", color: "#9CA3AF", cursor: "pointer", fontSize: 16, lineHeight: 1, flexShrink: 0 }} title="Remove">✕</button>
+              </div>)}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 8, fontSize: 12, flexWrap: "wrap", gap: 6 }}>
+                <span style={{ color: "#6B7280" }}>Scheduled total <strong style={{ color: NAVY }}>{fmtAED(total)}</strong></span>
+                {grossExpected > 0 && (Math.abs(diff) > 100
+                  ? <span style={{ color: "#B45309", fontWeight: 600 }}>{diff > 0 ? "Over" : "Under"} expected by {fmtAED(Math.abs(diff))} (expected {fmtAED(grossExpected)})</span>
+                  : <span style={{ color: "#059669", fontWeight: 600 }}>✓ Matches expected {fmtAED(grossExpected)}</span>)}
+              </div>
+            </div>}
+          </div>
+        </div>;
+      })()}
 
       {(() => {
         const ci = commissionInvoicing(d, invoices || []);

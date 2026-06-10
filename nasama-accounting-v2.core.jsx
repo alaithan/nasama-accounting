@@ -319,6 +319,36 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       const grossExpected = (deal && deal.vat_applicable) ? Math.round(netExpected * 1.05) : netExpected;
       return { collectedCents, receipts, count: receipts.length, remainingCents: Math.max(0, grossExpected - collectedCents), netExpected, grossExpected };
     };
+    // Forward-looking payment plan (Phase 3): reconcile the deal's stored
+    // installment schedule against the cash actually collected — FIFO, by due
+    // date. Status is derived, never stored. Each row's amountCents = gross cash
+    // expected (incl VAT) so it nets directly against collectedCents. Safe on
+    // deals with no schedule (returns hasSchedule:false, empty rows).
+    const installmentStatus = (deal, collectedCents) => {
+      const raw = (deal && Array.isArray(deal.installment_schedule)) ? deal.installment_schedule : [];
+      const rows0 = raw
+        .filter(r => r && (r.amountCents || 0) > 0)
+        .map(r => ({ id: r.id || uid(), label: r.label || "", dueDate: r.dueDate || "", amountCents: r.amountCents || 0 }))
+        .sort((a, b) => String(a.dueDate || "9999-12-31").localeCompare(String(b.dueDate || "9999-12-31")));
+      const scheduledTotal = rows0.reduce((s, r) => s + r.amountCents, 0);
+      const today = todayStr();
+      let pool = Math.max(0, collectedCents || 0);
+      let overdueCount = 0, overdueCents = 0, nextDue = null, paidCount = 0;
+      const rows = rows0.map((r, i) => {
+        const paidCents = Math.min(r.amountCents, pool);
+        pool -= paidCents;
+        const dueCents = r.amountCents - paidCents;
+        const isPast = !!r.dueDate && r.dueDate < today;
+        let status;
+        if (dueCents <= 0) { status = "paid"; paidCount++; }
+        else if (paidCents > 0) status = isPast ? "overdue" : "partial";
+        else status = isPast ? "overdue" : "upcoming";
+        if (status === "overdue") { overdueCount++; overdueCents += dueCents; }
+        if (dueCents > 0 && !nextDue) nextDue = { index: i + 1, label: r.label, dueDate: r.dueDate, dueCents, status };
+        return { ...r, index: i + 1, paidCents, dueCents, status, isPast };
+      });
+      return { hasSchedule: rows.length > 0, rows, scheduledTotal, paidCount, overdueCount, overdueCents, nextDue, surplusCents: pool };
+    };
     const uid = () => "_" + Math.random().toString(36).substr(2, 9);
     const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
     const fmtDate = d => { if (!d) return "—"; try { return new Date(d + "T12:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); } catch { return d; } };
