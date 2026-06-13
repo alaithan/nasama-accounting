@@ -748,23 +748,27 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
 // ═══════════════════════════════════════════════════════════════════
 //  H. InvoicePage — list + orchestration
 // ═══════════════════════════════════════════════════════════════════
-function InvoicePage({ customers, developers, deals, settings, userEmail, userRole, preselectedDeal, onClearPreselected }) {
-  const [invoices,   setInvoices]   = React.useState([]);
+function InvoicePage({ customers, developers, deals, txns, settings, userEmail, userRole, preselectedDeal, onClearPreselected, onCreateReceipt }) {
+  const [invoices,   setInvoices]   = React.useState(() => ls_get("invoices", []));
   const [editing,    setEditing]    = React.useState(null);
   const [previewInv, setPreviewInv] = React.useState(null);
-  const [loading,    setLoading]    = React.useState(true);
+  // Start "loaded" if we have a cached copy — paint instantly, refresh in the
+  // background. Only the very first visit (empty cache) shows the spinner.
+  const [loading,    setLoading]    = React.useState(() => ls_get("invoices", []).length === 0);
   const [saving,     setSaving]     = React.useState(false);
   const [sortKey,    setSortKey]    = React.useState("date");
   const [sortDir,    setSortDir]    = React.useState("desc");
 
   // Real-time Firestore listener
   React.useEffect(() => {
-    const unsub = db.collection("invoices")
-      .orderBy("createdAt", "desc")
-      .onSnapshot(
-        snap => { setInvoices(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); },
-        err  => { console.error(err); setLoading(false); }
-      );
+    // No server-side orderBy: the list re-sorts client-side anyway, so ordering
+    // here only added a separate (uncached) query target and silently dropped any
+    // invoice missing a createdAt field. Cache each snapshot to localStorage so
+    // the next visit hydrates instantly instead of waiting on a network round-trip.
+    const unsub = db.collection("invoices").onSnapshot(
+      snap => { const data = snap.docs.map(d => ({ id: d.id, ...d.data() })); setInvoices(data); ls_set("invoices", data); setLoading(false); },
+      err  => { console.error(err); setLoading(false); }
+    );
     return () => unsub();
   }, []);
 
@@ -882,6 +886,43 @@ function InvoicePage({ customers, developers, deals, settings, userEmail, userRo
     }
   };
 
+  // Invoices that already have a (non-void) Sale Receipt linked by invoice_id, so
+  // the "+ Receipt" button can switch to a disabled "✓ Receipted" state and the
+  // same invoice can't be receipted twice by mistake. Live via the txns listener,
+  // and self-heals if the receipt is later voided (the button re-enables).
+  const receiptByInvoiceId = React.useMemo(() => {
+    const m = new Map();
+    (txns || []).forEach(t => { if (t.txnType === "SR" && !t.isVoid && t.invoice_id) m.set(t.invoice_id, t); });
+    return m;
+  }, [txns]);
+
+  // Hand off to the Sale Receipts page with a receipt pre-filled from this invoice
+  // (deal, amount incl VAT, today's date) so the collection lands on the deal card
+  // with no re-entry. Mirrors the deals→invoice navigation pattern.
+  const handleCreateReceipt = (inv) => {
+    if (!onCreateReceipt) { toast("Receipt hand-off isn't available here", "error"); return; }
+    if (receiptByInvoiceId.has(inv.id)) { toast(`Invoice #${inv.invoiceNumber} already has a Sale Receipt`, "warning"); return; }
+    const lis = inv.lineItems || [];
+    const dealIds = [...new Set(lis.map(li => li.dealId).filter(Boolean))];
+    const dealId = dealIds[0] || "";
+    // Gross = commission incl VAT. One linked deal (the usual case) = the whole
+    // invoice; if it spans several deals, receipt the first deal's share and
+    // prompt to repeat for the rest.
+    const gross = dealId
+      ? lis.filter(li => li.dealId === dealId).reduce((s, li) => s + invLineCalc(li).total, 0)
+      : (inv.totals?.incl || 0);
+    if (dealIds.length > 1) toast(`Invoice #${inv.invoiceNumber} covers ${dealIds.length} deals — receipting the first; repeat for the others.`, "info");
+    onCreateReceipt({
+      deal_id:     dealId,
+      grossAmount: gross ? parseFloat(gross.toFixed(2)) : "",
+      vatRate:     5,
+      bankCode:    "1002",
+      date:        todayStr(),
+      invoice_id:  inv.id || "",
+      invoice_no:  inv.invoiceNumber || "",
+    });
+  };
+
   // Editor view
   if (editing) return (
     <>
@@ -969,6 +1010,9 @@ function InvoicePage({ customers, developers, deals, settings, userEmail, userRo
                     <div style={{ display: "flex", gap: 6 }}>
                       {hasPermission(userRole, 'sales.edit') && <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12 }} onClick={() => setEditing({ ...inv })}>Edit</button>}
                       <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12 }} onClick={() => setPreviewInv(inv)}>Preview</button>
+                      {inv.status === "issued" && hasPermission(userRole, 'sales.create') && (receiptByInvoiceId.has(inv.id)
+                        ? <button disabled title={`Already receipted${receiptByInvoiceId.get(inv.id).ref ? " · " + receiptByInvoiceId.get(inv.id).ref : ""}`} style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12, color: "#059669", borderColor: "#A7F3D0", background: "#F0FDF4", cursor: "not-allowed", opacity: 0.7 }}>✓ Receipted</button>
+                        : <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12, color: "#047857", borderColor: "#A7F3D0", background: "#ECFDF5" }} title="Record commission collected against this invoice" onClick={() => handleCreateReceipt(inv)}>+ Receipt</button>)}
                       {hasPermission(userRole, 'sales.edit') && <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12, color: "#DC2626" }} onClick={() => handleDelete(inv)}>{inv.status === "issued" ? "Void" : "Delete"}</button>}
                     </div>
                   </td>

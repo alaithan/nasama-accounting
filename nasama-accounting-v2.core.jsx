@@ -1259,7 +1259,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
       // SALE RECEIPT — Commission collected immediately (no AR step)
       // DR Bank (gross) / CR Revenue (net) / CR Output VAT
-      const postSaleReceipt = ({ date, deal, gross, vatRate = 5, bankCode = "1002", memo = "", commit = true }) => {
+      const postSaleReceipt = ({ date, deal, gross, vatRate = 5, bankCode = "1002", memo = "", invoiceId = "", invoiceNo = "", commit = true }) => {
         if (!deal || !deal.id) throw new Error("deal_id is required for commission revenue tracking");
         if (!bankCode) throw new Error("bankCode is mandatory for a sale receipt");
         if (!deal.type || !["Off-Plan", "Secondary", "Rental"].includes(deal.type)) throw new Error(`Invalid deal type: ${deal.type}. Must be Off-Plan, Secondary, or Rental`);
@@ -1294,7 +1294,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         }
 
         const ref = `SR-${Date.now().toString(36).toUpperCase()}`;
-        const txn = { id: uid(), date, description: `Sale Receipt: ${deal?.property_name || memo}`, ref, counterparty: deal?.client_name || "", tags: "sale-receipt", txnType: "SR", isVoid: false, lines, createdAt: new Date().toISOString(), deal_id: deal?.id };
+        const txn = { id: uid(), date, description: `Sale Receipt: ${deal?.property_name || memo}${invoiceNo ? ` (Inv #${invoiceNo})` : ""}`, ref, counterparty: deal?.client_name || "", tags: "sale-receipt", txnType: "SR", isVoid: false, lines, createdAt: new Date().toISOString(), deal_id: deal?.id, invoice_id: invoiceId || "", invoice_no: invoiceNo || "" };
         validateBalanced(lines);
         if (commit) {
           saveTxn(txn);

@@ -1445,6 +1445,13 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
   const netRetained = col.collectedCents - brokerPaid;
   const margin = col.collectedCents > 0 ? Math.round((netRetained / col.collectedCents) * 100) : null;
   const dealInvoices = useMemo(() => (invoices || []).filter(inv => (inv.lineItems || []).some(li => li.dealId === deal.id)), [invoices, deal.id]);
+  // Sale Receipts posted from a specific invoice, keyed by invoice id, so the
+  // Invoices table can flag which invoices have been collected ("✓ Receipted").
+  const receiptByInvoiceId = useMemo(() => {
+    const m = new Map();
+    (txns || []).forEach(t => { if (t.txnType === "SR" && !t.isVoid && t.invoice_id) m.set(t.invoice_id, t); });
+    return m;
+  }, [txns]);
   const broker = (brokers || []).find(b => b.id === deal.broker_id);
   const developer = (developers || []).find(x => x.id === deal.developer_id);
   const client = (customers || []).find(c => c.id === deal.customer_id);
@@ -1675,11 +1682,17 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
           </div>)}
 
           {dealInvoices.length > 0 && sec("Invoices", <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
-            <thead><tr style={{ background: "#F9FAFB" }}>{["Invoice #", "Date", "Status", "Total incl VAT"].map(h => <th key={h} style={{ ...C.th, fontSize: 10, padding: "5px 6px", textAlign: h.includes("Total") ? "right" : "left" }}>{h}</th>)}</tr></thead>
+            <thead><tr style={{ background: "#F9FAFB" }}>{["Invoice #", "Date", "Status", "Collected", "Total incl VAT"].map(h => <th key={h} style={{ ...C.th, fontSize: 10, padding: "5px 6px", textAlign: h.includes("Total") ? "right" : "left" }}>{h}</th>)}</tr></thead>
             <tbody>{dealInvoices.map(inv => <tr key={inv.id} style={{ borderTop: "1px solid #F2F4F7" }}>
               <td style={{ padding: "4px 6px", fontFamily: "monospace", color: "#C9A044", fontWeight: 700 }}>{inv.invoiceNumber || "—"}</td>
               <td style={{ padding: "4px 6px" }}>{inv.invoiceDate ? invFmtDate(inv.invoiceDate) : "—"}</td>
               <td style={{ padding: "4px 6px" }}>{inv.status === "void" ? "Void" : inv.status === "issued" ? "Issued" : "Draft"}</td>
+              <td style={{ padding: "4px 6px" }}>{(() => {
+                const rc = receiptByInvoiceId.get(inv.id);
+                return rc
+                  ? <span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>✓ {rc.ref || "Receipted"}</span>
+                  : <span style={{ color: "#9CA3AF" }}>—</span>;
+              })()}</td>
               <td style={{ padding: "4px 6px", textAlign: "right", fontWeight: 600 }}>AED {invFmt(inv.totals?.incl)}</td>
             </tr>)}</tbody>
           </table>)}
@@ -2032,19 +2045,37 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers, i
 // ╔══════════════════════════════════════════════════╗
 //  SALE RECEIPTS (replaces Invoices — cash-settled)
 // ╚══════════════════════════════════════════════════╝
-function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, userRole, setPage }) {
+function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, userRole, setPage, receiptDraft, clearReceiptDraft }) {
   const [show, setShow] = useState(false);
   const [preview, setPreview] = useState(null);
-  const [form, setForm] = useState({ deal_id: "", date: todayStr(), bankCode: "1002", vatRate: 5, grossAmount: "" });
+  const [form, setForm] = useState({ deal_id: "", date: todayStr(), bankCode: "1002", vatRate: 5, grossAmount: "", invoice_id: "", invoice_no: "" });
   const [linkTxn, setLinkTxn] = useState(null);
   const [linkDealId, setLinkDealId] = useState("");
   const [linkSaving, setLinkSaving] = useState(false);
 
   useEffect(() => {
-    const h = () => setShow(true);
+    const h = () => { setForm(p => ({ ...p, invoice_id: "", invoice_no: "" })); setShow(true); };
     document.addEventListener("add-receipt", h);
     return () => document.removeEventListener("add-receipt", h);
   }, []);
+
+  // Pre-fill + open when navigated here from an invoice's "Create Sale Receipt"
+  // button. receiptDraft carries the deal, amount (incl VAT), date and the
+  // originating invoice number so the posted receipt links back to that invoice.
+  useEffect(() => {
+    if (!receiptDraft) return;
+    setForm({
+      deal_id:     receiptDraft.deal_id || "",
+      date:        receiptDraft.date || todayStr(),
+      bankCode:    receiptDraft.bankCode || "1002",
+      vatRate:     receiptDraft.vatRate != null ? receiptDraft.vatRate : 5,
+      grossAmount: (receiptDraft.grossAmount != null && receiptDraft.grossAmount !== "") ? String(receiptDraft.grossAmount) : "",
+      invoice_id:  receiptDraft.invoice_id || "",
+      invoice_no:  receiptDraft.invoice_no || "",
+    });
+    setShow(true);
+    if (clearReceiptDraft) clearReceiptDraft();
+  }, [receiptDraft]);
 
   const saleReceipts = txns.filter(t => t.txnType === "SR" && !t.isVoid);
   const dealById = useMemo(() => new Map((deals || []).map(d => [d.id, d])), [deals]);
@@ -2056,7 +2087,7 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
     const gross = parseFloat(form.grossAmount);
     if (!gross || gross <= 0) { toast("Enter a valid amount", "warning"); return; }
     try {
-      const txn = journal.postSaleReceipt({ date: form.date, deal, gross, vatRate: form.vatRate, bankCode: form.bankCode, commit: false });
+      const txn = journal.postSaleReceipt({ date: form.date, deal, gross, vatRate: form.vatRate, bankCode: form.bankCode, invoiceId: form.invoice_id, invoiceNo: form.invoice_no, commit: false });
       setPreview(txn);
     } catch (err) { toast(err.message, "error"); }
   };
@@ -2064,11 +2095,11 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
   const handleConfirm = async () => {
     const deal = deals.find(d => d.id === form.deal_id);
     try {
-      const txn = journal.postSaleReceipt({ date: form.date, deal, gross: parseFloat(form.grossAmount), vatRate: form.vatRate, bankCode: form.bankCode, commit: false });
+      const txn = journal.postSaleReceipt({ date: form.date, deal, gross: parseFloat(form.grossAmount), vatRate: form.vatRate, bankCode: form.bankCode, invoiceId: form.invoice_id, invoiceNo: form.invoice_no, commit: false });
       await persistTxn(txn);
-      toast("Sale receipt posted!", "success");
+      toast(form.invoice_no ? `Sale receipt posted & linked to Invoice #${form.invoice_no}` : "Sale receipt posted!", "success");
       setShow(false); setPreview(null);
-      setForm({ deal_id: "", date: todayStr(), bankCode: "1002", vatRate: 5, grossAmount: "" });
+      setForm({ deal_id: "", date: todayStr(), bankCode: "1002", vatRate: 5, grossAmount: "", invoice_id: "", invoice_no: "" });
     } catch (err) { toast(err.message, "error"); }
   };
 
@@ -2099,7 +2130,7 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
 
   return <div>
     <PageHeader title="Sale Receipts" sub={`Cash-settled commission collections — ${saleReceipts.length} receipts${unlinkedCount > 0 ? ` • ${unlinkedCount} not linked to a deal` : ""}`}>
-      {hasPermission(userRole, 'sales.create') && <button style={C.btn()} onClick={() => setShow(true)}>+ New Receipt</button>}
+      {hasPermission(userRole, 'sales.create') && <button style={C.btn()} onClick={() => { setForm(p => ({ ...p, invoice_id: "", invoice_no: "" })); setShow(true); }}>+ New Receipt</button>}
     </PageHeader>
 
     {unlinkedCount > 0 && <div style={{ ...C.card, padding: "12px 16px", marginBottom: 14, borderLeft: "4px solid #D97706", background: "#FFFBEB", color: "#92400E", fontSize: 13 }}>
@@ -2149,7 +2180,7 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
     {/* New Receipt Modal */}
     {show && <div style={C.modal} onClick={() => setShow(false)}>
       <div style={C.mbox(560)} onClick={e => e.stopPropagation()}>
-        <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>New Sale Receipt</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
+        <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>New Sale Receipt{form.invoice_no ? <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 600, color: "#C9A044" }}>· from Invoice #{form.invoice_no}</span> : ""}</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
         <div style={C.mbdy}>
           <p style={{ fontSize: 13, color: "#6B7280", marginBottom: 16 }}>Record a commission collected. This posts a single journal entry: DR Bank / CR Revenue / CR Output VAT.</p>
           <div style={C.fg}>
@@ -2481,6 +2512,8 @@ function BankingPage({ accounts, txns, ledger, persistTxn, journal, userRole }) 
 function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTxn, journal, userRole }) {
   const [showTransfer, setShowTransfer] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showReconcile, setShowReconcile] = useState(false);
+  const [showDuplicates, setShowDuplicates] = useState(false);
   const [editTxnId, setEditTxnId] = useState("");
   const [sortKey, setSortKey] = usePersistedState("bank_sortKey", "date");
   const [sortDir, setSortDir] = usePersistedState("bank_sortDir", "desc");
@@ -2516,7 +2549,7 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
         const lines = (t.lines || []).filter(l => targetAccts.some(a => a.id === l.accountId));
         if (lines.length === 0) return null;
         return {
-          id: t.id, date: t.date || "", ref: t.ref || "",
+          id: t.id, date: t.date || "", ref: t.ref || "", createdAt: t.createdAt || "",
           description: t.description || "", counterparty: t.counterparty || "",
           txnType: TXN_TYPES[t.txnType]?.label || t.txnType || "",
           acctName: lines.map(l => targetAccts.find(a => a.id === l.accountId)?.name || "").join(", "),
@@ -2527,28 +2560,41 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
       })
       .filter(Boolean);
 
-    // Compute running balance in chronological order (always date ASC)
-    const dateSorted = [...rows].sort((a, b) => {
-      const d = a.date.localeCompare(b.date);
-      return d !== 0 ? d : a.ref.localeCompare(b.ref);
-    });
+    // True chronological order for the running balance: transaction date, then
+    // entry time (createdAt), then ref as a last resort. createdAt — not ref — is
+    // what matters: ref sorts by type prefix (BP < PV < SR), which is NOT the order
+    // the money actually moved within a single day.
+    const chrono = (a, b) =>
+      String(a.date || "").localeCompare(String(b.date || "")) ||
+      String(a.createdAt || "").localeCompare(String(b.createdAt || "")) ||
+      String(a.ref || "").localeCompare(String(b.ref || ""));
+
     let running = openingBalance;
-    dateSorted.forEach(row => {
+    [...rows].sort(chrono).forEach(row => {
       running += (row.inAmt || 0) - (row.outAmt || 0);
       row.balance = running;
     });
 
     const getVal = (row) => {
       switch (sortKey) {
-        case "date": return row.date || ""; case "ref": return row.ref || "";
+        case "ref": return row.ref || "";
         case "description": return row.description || "";
         case "in": return row.inAmt || 0; case "out": return row.outAmt || 0;
         default: return "";
       }
     };
+    // Display rows by the SAME chronological key the balance uses, so the column
+    // reads correctly top-to-bottom and the newest row equals the account's current
+    // balance. Other sort columns fall back to chrono for stable, balance-coherent ties.
     rows.sort((a, b) => {
-      const av = getVal(a), bv = getVal(b);
-      let cmp = (typeof av === "number" || typeof bv === "number") ? Number(av || 0) - Number(bv || 0) : String(av || "").localeCompare(String(bv || ""));
+      let cmp;
+      if (sortKey === "date") {
+        cmp = chrono(a, b);
+      } else {
+        const av = getVal(a), bv = getVal(b);
+        cmp = (typeof av === "number" || typeof bv === "number") ? Number(av || 0) - Number(bv || 0) : String(av || "").localeCompare(String(bv || ""));
+        if (cmp === 0) cmp = chrono(a, b);
+      }
       return sortDir === "asc" ? cmp : -cmp;
     });
     return rows;
@@ -2766,6 +2812,8 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
     <PageHeader title="Banking" sub="Bank accounts and cash — kept separate">
       <button style={C.btn("secondary")} onClick={handleExportBankRows}>Export Excel</button>
       {hasPermission(userRole, 'canCreateTxns') && <button style={C.btn("secondary")} onClick={() => setShowImport(true)}>Import Bank CSV</button>}
+      {hasPermission(userRole, 'accounting.read') && <button style={C.btn("secondary")} onClick={() => setShowReconcile(true)}>🔄 Reconcile</button>}
+      {hasPermission(userRole, 'accounting.read') && <button style={C.btn("secondary")} onClick={() => setShowDuplicates(true)}>⚠ Duplicates</button>}
       {hasPermission(userRole, 'canVoidTxns') && (() => {
         const today = todayStr();
         const bpTodayCount = txns.filter(t => t.date === today && (t.txnType === "BP" || (t.ref || "").startsWith("REV-BP-"))).length;
@@ -2955,6 +3003,12 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
         </div>
       </div>
     </div>}
+
+    {showReconcile && typeof BankReconcileModal !== "undefined" &&
+      <BankReconcileModal accounts={accounts} txns={txns} ledger={ledger} journal={journal} persistTxn={persistTxn} onClose={() => setShowReconcile(false)} />}
+
+    {showDuplicates && typeof DuplicatesModal !== "undefined" &&
+      <DuplicatesModal txns={txns} accounts={accounts} persistTxn={persistTxn} onClose={() => setShowDuplicates(false)} />}
 
     {showTransfer && <div style={C.modal} onClick={() => setShowTransfer(false)}>
       <div style={C.mbox(460)} onClick={e => e.stopPropagation()}>
@@ -5980,6 +6034,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
   const [settings, setSettings] = useState(() => ls_get("settings", { company: "Nasama Properties Company LLC", trn: "", vatRate: 5, currency: "AED", openingBalance: 0, openingBalanceDate: DEFAULT_REPORTING_START_DATE }));
   const [page, setPage] = useState(() => canAccessPage(userAccess || userRole, "dashboard") ? "dashboard" : "deals");
   const [invoiceDeal, setInvoiceDeal] = useState(null);
+  const [receiptDraft, setReceiptDraft] = useState(null);
   const [cardDealId, setCardDealId] = useState(null);
   const [dark, setDark] = useState(false);
   const [fbLoaded, setFbLoaded] = useState(false);
@@ -6200,7 +6255,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     <style>{`@keyframes npLoad{0%{width:0%}60%{width:90%}100%{width:100%}}`}</style>
   </div>;
 
-  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, budgets, setBudgets: setBudgetsFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta, dealStageChanges, setInvoiceDeal, cardDealId, setCardDealId };
+  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, budgets, setBudgets: setBudgetsFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta, dealStageChanges, setInvoiceDeal, cardDealId, setCardDealId, receiptDraft, clearReceiptDraft: () => setReceiptDraft(null) };
 
   const renderPage = () => {
     if (!canAccessPage(accessSubject, page)) {
@@ -6214,7 +6269,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       case "deals": return <DealsPage {...shared} />;
       case "auditDeals": return <AuditingDealsPage dealStageChanges={dealStageChanges} userRole={accessSubject} />;
       case "receipts": return <ReceiptsPage {...shared} />;
-      case "invoices": return <InvoicePage customers={customers} developers={developers} deals={deals} settings={settings} userEmail={userEmail} userRole={accessSubject} preselectedDeal={invoiceDeal} onClearPreselected={() => setInvoiceDeal(null)} />;
+      case "invoices": return <InvoicePage customers={customers} developers={developers} deals={deals} txns={txns} settings={settings} userEmail={userEmail} userRole={accessSubject} preselectedDeal={invoiceDeal} onClearPreselected={() => setInvoiceDeal(null)} onCreateReceipt={(payload) => { setReceiptDraft(payload); setPage("receipts"); }} />;
       case "payments": return <PaymentsPage {...shared} />;
       case "customers": return <CustomersPage {...shared} />;
       case "brokers": return <BrokersPage {...shared} />;
