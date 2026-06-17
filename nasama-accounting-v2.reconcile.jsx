@@ -258,8 +258,8 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, onClo
   const [amountTol, setAmountTol] = React.useState(1);        // AED — pair near-amounts (rounding/fees/typos)
   const [showMap, setShowMap] = React.useState(false);
   const [showMatched, setShowMatched] = React.useState(false);
-  const [addAcct, setAddAcct] = React.useState({});           // lineId -> offset account id
-  const [posting, setPosting] = React.useState("");
+  const [addAcct, setAddAcct] = React.useState({});           // lineId -> offset account id (quick pre-pick)
+  const [addLine, setAddLine] = React.useState(null);         // statement line being added via the detail window
 
   const acct = bankAccts.find(a => a.code === bankCode) || bankAccts[0];
   const lines = React.useMemo(() => parsed ? reconRowsToLines(parsed.rows, colMap) : [], [parsed, colMap]);
@@ -350,26 +350,6 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, onClo
       setStep("review");
     } catch (e) { setError(e.message || String(e)); }
     setBusy(false);
-  };
-
-  const addToBooks = async (line) => {
-    const offsetId = addAcct[line.id];
-    if (!offsetId) { toast("Pick an account to post against first", "warning"); return; }
-    if (!acct) { toast("Select a bank account", "warning"); return; }
-    const offsetA = (accounts || []).find(a => a.id === offsetId);
-    if (!offsetA) { toast("Account not found", "error"); return; }
-    const absC = Math.abs(line.amountC);
-    const memo = `${line.desc || "Bank reconciliation"} | reconciled`;
-    const lns = line.amountC > 0
-      ? [{ id: uid(), accountId: acct.id, debit: absC, credit: 0, memo }, { id: uid(), accountId: offsetA.id, debit: 0, credit: absC, memo }]
-      : [{ id: uid(), accountId: offsetA.id, debit: absC, credit: 0, memo }, { id: uid(), accountId: acct.id, debit: 0, credit: absC, memo }];
-    setPosting(line.id);
-    try {
-      const txn = journal.post({ date: line.date || todayStr(), description: line.desc || "Bank reconciliation entry", ref: "REC-" + Date.now().toString(36).toUpperCase(), counterparty: "", tags: "reconcile bank-import", txnType: "BK", lines: lns, commit: false });
-      await persistTxn(txn);
-      toast("Posted — statement line now matched", "success");
-    } catch (e) { toast("Post failed: " + e.message, "error"); }
-    setPosting("");
   };
 
   // ── styles ──
@@ -557,7 +537,7 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, onClo
                               </select>
                             </td>
                             <td style={{ ...td, textAlign: "right" }}>
-                              <button style={{ ...C.btn(), padding: "4px 12px", fontSize: 12 }} disabled={posting === l.id} onClick={() => addToBooks(l)}>{posting === l.id ? "…" : "Add"}</button>
+                              <button style={{ ...C.btn(), padding: "4px 12px", fontSize: 12 }} onClick={() => setAddLine(l)}>Add…</button>
                             </td>
                           </tr>
                         ))}
@@ -671,6 +651,171 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, onClo
         <div style={{ ...C.mftr, justifyContent: "space-between" }}>
           <span style={{ fontSize: 12, color: "#9CA3AF" }}>{step === "review" && acct ? `Reconciling ${acct.name}` : "Statement → Ledger"}</span>
           <button style={C.btn("secondary")} onClick={onClose}>Close</button>
+        </div>
+
+        {addLine && (
+          <ReconAddTxnModal
+            line={addLine}
+            bankAcct={acct}
+            accounts={accounts}
+            defaultOffsetId={addAcct[addLine.id]}
+            journal={journal}
+            persistTxn={persistTxn}
+            onClose={() => setAddLine(null)}
+            onPosted={() => setAddLine(null)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ReconAddTxnModal — full transaction entry for an unrecorded statement
+//  line. Pre-filled from the line; lets you set date / description /
+//  counterparty / category account and optionally split out VAT.
+//  The bank amount (gross) is fixed — it's the real money movement.
+//   • Money OUT (payment): DR category (net) / DR Input VAT / CR bank (gross)
+//   • Money IN  (receipt): DR bank (gross) / CR category (net) / CR Output VAT
+// ═══════════════════════════════════════════════════════════════════
+function ReconAddTxnModal({ line, bankAcct, accounts, defaultOffsetId, journal, persistTxn, onClose, onPosted }) {
+  const moneyIn = line.amountC > 0;
+  const grossC = Math.abs(line.amountC);
+  const [date, setDate] = React.useState(line.date || todayStr());
+  const [desc, setDesc] = React.useState(line.desc || "");
+  const [counterparty, setCounterparty] = React.useState("");
+  const [offsetId, setOffsetId] = React.useState(defaultOffsetId || "");
+  const [vatOn, setVatOn] = React.useState(false);
+  const [vatRate, setVatRate] = React.useState(5);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState("");
+
+  const rate = vatOn ? (parseFloat(vatRate) || 0) : 0;
+  // Bank amount is VAT-inclusive (gross). Net = gross / (1 + rate); VAT = remainder (keeps it balanced to the cent).
+  const netC = rate > 0 ? Math.round(grossC / (1 + rate / 100)) : grossC;
+  const vatC = grossC - netC;
+
+  const outputVATA = accounts.find(a => a.isOutputVAT);
+  const inputVATA = accounts.find(a => a.isInputVAT);
+  const vatAcct = moneyIn ? outputVATA : inputVATA;
+
+  // Categories: everything except the bank account itself and the VAT accounts (VAT is auto-handled).
+  const categoryAccts = (accounts || []).filter(a => a.id !== (bankAcct && bankAcct.id) && !a.isOutputVAT && !a.isInputVAT);
+  const offset = (accounts || []).find(a => a.id === offsetId);
+
+  const fmtC = (c) => "AED " + (c / 100).toLocaleString("en-AE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const post = async () => {
+    setErr("");
+    if (!bankAcct) { setErr("No bank account selected."); return; }
+    if (!offset) { setErr("Choose a category / account to post against."); return; }
+    if (rate > 0 && !vatAcct) { setErr(`Missing ${moneyIn ? "Output" : "Input"} VAT account in the chart of accounts.`); return; }
+    const memo = desc || (moneyIn ? "Bank receipt" : "Bank payment");
+    const lns = [];
+    if (moneyIn) {
+      lns.push({ id: uid(), accountId: bankAcct.id, debit: grossC, credit: 0, memo });
+      lns.push({ id: uid(), accountId: offset.id, debit: 0, credit: netC, memo });
+      if (vatC > 0) lns.push({ id: uid(), accountId: vatAcct.id, debit: 0, credit: vatC, memo: `Output VAT ${rate}%` });
+    } else {
+      lns.push({ id: uid(), accountId: offset.id, debit: netC, credit: 0, memo });
+      if (vatC > 0) lns.push({ id: uid(), accountId: vatAcct.id, debit: vatC, credit: 0, memo: `Input VAT ${rate}%` });
+      lns.push({ id: uid(), accountId: bankAcct.id, debit: 0, credit: grossC, memo });
+    }
+    setBusy(true);
+    try {
+      const txn = journal.post({
+        date: date || todayStr(),
+        description: desc || (moneyIn ? "Bank receipt (reconciliation)" : "Bank payment (reconciliation)"),
+        ref: "REC-" + Date.now().toString(36).toUpperCase(),
+        counterparty,
+        tags: "reconcile bank-import",
+        txnType: "BK",
+        lines: lns,
+        commit: false,
+      });
+      await persistTxn(txn);
+      toast("Posted — statement line now recorded", "success");
+      onPosted && onPosted(txn);
+    } catch (e) {
+      setErr(e.message || String(e));
+      setBusy(false);
+    }
+  };
+
+  const lbl = { fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: "#6B7280" };
+  const sel = { border: "1.5px solid #D0D5DD", borderRadius: 8, padding: "8px 10px", fontSize: 13, background: "#fff", outline: "none", width: "100%", boxSizing: "border-box" };
+  const accent = moneyIn ? "#059669" : "#DC2626";
+
+  return (
+    <div style={{ ...C.modal, zIndex: 1100 }} onClick={onClose}>
+      <div style={{ ...C.mbox(560) }} onClick={e => e.stopPropagation()}>
+        <div style={{ ...C.mhdr, alignItems: "center" }}>
+          <span style={{ fontWeight: 700, fontSize: 16 }}>Add transaction to books</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
+        </div>
+
+        <div style={C.mbdy}>
+          {/* Direction + amount banner */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", borderRadius: 10, background: moneyIn ? "#ECFDF5" : "#FEF2F2", border: `1px solid ${moneyIn ? "#A7F3D0" : "#FECACA"}`, marginBottom: 16 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: accent, textTransform: "uppercase", letterSpacing: "0.04em" }}>{moneyIn ? "Money in — receipt" : "Money out — payment"}</div>
+              <div style={{ fontSize: 11.5, color: "#6B7280", marginTop: 2 }}>{bankAcct ? `into / from ${bankAcct.name}` : ""}</div>
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: accent, fontVariantNumeric: "tabular-nums" }}>{fmtC(grossC)}</div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div>
+              <label style={lbl}>Date</label>
+              <input type="date" style={{ ...sel, marginTop: 5 }} value={date} onChange={e => setDate(e.target.value)} />
+            </div>
+            <div>
+              <label style={lbl}>Counterparty <span style={{ textTransform: "none", fontWeight: 400, color: "#9CA3AF" }}>(optional)</span></label>
+              <input style={{ ...sel, marginTop: 5 }} value={counterparty} onChange={e => setCounterparty(e.target.value)} placeholder="who it's to / from" />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <label style={lbl}>Description</label>
+            <input style={{ ...sel, marginTop: 5 }} value={desc} onChange={e => setDesc(e.target.value)} placeholder="what this is for" />
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <label style={lbl}>{moneyIn ? "Income / account to credit" : "Expense / account to debit"}</label>
+            <select style={{ ...sel, marginTop: 5 }} value={offsetId} onChange={e => setOffsetId(e.target.value)}>
+              <option value="">— choose account —</option>
+              {categoryAccts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+            </select>
+          </div>
+
+          {/* VAT */}
+          <div style={{ border: "1px solid #E5E7EB", borderRadius: 10, padding: "12px 14px", marginBottom: 12, background: "#F9FAFB" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#1A1A2E" }}>
+              <input type="checkbox" checked={vatOn} onChange={e => setVatOn(e.target.checked)} />
+              This amount includes VAT
+              {vatOn && (
+                <select style={{ ...sel, width: "auto", padding: "4px 8px", marginLeft: 4 }} value={vatRate} onChange={e => setVatRate(parseFloat(e.target.value))}>
+                  {[5, 0].map(r => <option key={r} value={r}>{r}%</option>)}
+                </select>
+              )}
+            </label>
+            {vatOn && (
+              <div style={{ marginTop: 10, fontSize: 12.5 }}>
+                {!vatAcct && <div style={{ color: "#B91C1C", marginBottom: 6 }}>⚠ No {moneyIn ? "Output" : "Input"} VAT account found — VAT can't be posted.</div>}
+                <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", color: "#6B7280" }}><span>Net ({moneyIn ? "income" : "expense"})</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtC(netC)}</span></div>
+                <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", color: "#6B7280" }}><span>{moneyIn ? "Output" : "Input"} VAT {rate}%</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtC(vatC)}</span></div>
+                <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0 0", marginTop: 4, borderTop: "1px solid #E5E7EB", fontWeight: 700, color: "#1A1A2E" }}><span>Total (bank)</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtC(grossC)}</span></div>
+              </div>
+            )}
+            {!vatOn && <div style={{ fontSize: 11.5, color: "#9CA3AF", marginTop: 6 }}>Leave off for VAT-free items (salaries, bank transfers, government fees…).</div>}
+          </div>
+
+          {err && <div style={{ padding: "10px 14px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, color: "#B91C1C", fontSize: 13 }}>{err}</div>}
+        </div>
+
+        <div style={C.mftr}>
+          <button style={C.btn("secondary")} onClick={onClose} disabled={busy}>Cancel</button>
+          <button style={C.btn("success")} onClick={post} disabled={busy || !offsetId}>{busy ? "Posting…" : "Post entry"}</button>
         </div>
       </div>
     </div>
