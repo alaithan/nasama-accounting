@@ -4978,7 +4978,15 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
   };
 
   // ── Backup: read all collections from Firestore → JSON file ──
-  const BACKUP_COLS = ["accounts", "transactions", "deals", "customers", "vendors", "brokers", "developers", "planned_expenses"];
+  // Every collection that holds real data. `user_presence` is intentionally
+  // excluded (ephemeral online-status, regenerated live). `settings/company`
+  // is captured separately below.
+  const BACKUP_COLS = [
+    "accounts", "transactions", "deals", "customers", "vendors", "brokers", "developers",
+    "planned_expenses", "invoices", "meta",
+    "authorized_users", "security_roles", "company_branches", "approval_policies",
+    "deal_stage_changes", "deleted_deals_archive", "audit_logs",
+  ];
 
   const handleBackup = async () => {
     setBackupStatus("loading");
@@ -4988,7 +4996,7 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
         db.collection("settings").doc("company").get()
       ]);
       const backup = {
-        version: "2.0",
+        version: "2.1",
         app: "Nasama Accounting",
         company: settings.company || "Nasama Properties",
         exportedAt: new Date().toISOString(),
@@ -5111,15 +5119,15 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
       <div style={{ borderTop: "1px solid #E5E7EB", marginTop: 28, paddingTop: 22 }}>
         <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4, color: NAVY }}>🗄️ Database Backup</div>
         <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 14, lineHeight: 1.6 }}>
-          Downloads a complete snapshot of all your data — accounts, transactions, deals, customers, brokers, vendors, planned expenses — as a single JSON file. Store the file in Google Drive, email it to yourself, or keep it on a USB drive.
+          Downloads a complete snapshot of <strong>all {BACKUP_COLS.length} data collections</strong> — accounts, transactions, deals, customers, brokers, vendors, planned expenses, <strong>invoices</strong> &amp; invoice counter, users &amp; roles, branches, approval policies, and the audit trail — plus company settings, as a single JSON file. Store the file in Google Drive, email it to yourself, or keep it on a USB drive.
           {lastBackupDate && <span style={{ color: "#059669", fontWeight: 600 }}> Last backup: {lastBackupDate}.</span>}
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <button style={{ ...C.btn(), background: backupStatus === "done" ? "#059669" : NAVY, borderColor: backupStatus === "done" ? "#059669" : NAVY, minWidth: 180 }} onClick={handleBackup} disabled={backupStatus === "loading"}>
             {backupStatus === "loading" ? "⏳ Reading data…" : backupStatus === "done" ? "✅ Backup downloaded" : backupStatus === "error" ? "❌ Failed — retry" : "⬇️ Download Backup"}
           </button>
-          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-            {BACKUP_COLS.map(c => <span key={c} style={{ fontSize: 10, color: "#98A2B3", fontFamily: "monospace" }}>{c}</span>)}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: 360 }}>
+            {BACKUP_COLS.map(c => <span key={c} style={{ fontSize: 10, color: "#667085", fontFamily: "monospace", background: "#F2F4F7", border: "1px solid #E4E7EC", borderRadius: 4, padding: "1px 6px" }}>{c}</span>)}
           </div>
         </div>
       </div>
