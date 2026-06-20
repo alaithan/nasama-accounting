@@ -4936,11 +4936,31 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
   const [restoreFileName, setRestoreFileName] = useState("");
   const [restoreConfirm, setRestoreConfirm] = useState(false);
   const [restoreStatus, setRestoreStatus]   = useState("idle"); // idle | loading | done | error
+  const [obUnlocked, setObUnlocked] = useState(false);          // admin temporarily editing the (otherwise locked) opening balance
   const fileRef = React.useRef();
 
   // ── localStorage helpers (local to this component) ──
   const lsGet = (k, fb) => { try { const v = localStorage.getItem("na2_" + k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
   const lsSet = (k, v) => { try { localStorage.setItem("na2_" + k, JSON.stringify(v)); } catch {} };
+
+  // ── Opening balance protection ──
+  // Once the opening-balance journal entry exists, the amount/date are locked so
+  // they can't be changed by accident (it underpins every historical report).
+  // Only an admin can unlock and deliberately correct it.
+  const canEditOB = hasPermission(userRole, "canEditSettings");
+  const openingBalanceTxn = (txns || []).find(t => (t.tags || "").includes("opening-balance") && !t.isVoid);
+  const obLocked = !!openingBalanceTxn;
+  const obEditable = !obLocked || obUnlocked;
+  const obEntryRef = openingBalanceTxn ? openingBalanceTxn.ref : "";
+  const lockedField = { padding: "9px 12px", background: "#F2F4F7", border: "1px solid #E4E7EC", borderRadius: 8, fontSize: 14, fontWeight: 600, color: "#475467" };
+
+  const handleUnlockOB = () => {
+    if (!canEditOB) return;
+    const ok = window.confirm(
+      "Editing the opening balance will rewrite the opening journal entry (OB) and change every historical report.\n\nOnly do this to correct a setup mistake. Continue?"
+    );
+    if (ok) setObUnlocked(true);
+  };
 
   // ── Weekly backup reminder ──
   const lastBackupDate = lsGet("last_backup_date", null);
@@ -4954,23 +4974,41 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
     setSettings(nextSettings);
     try {
       const writes = [window.fsSaveSettings(nextSettings)];
-      if (nextSettings.openingBalance > 0 && accounts && persistTxn) {
+      if (accounts && persistTxn) {
         const bankA = accounts.find(a => a.code === "1002");
         const capitalA = accounts.find(a => a.code === "3000");
+        const existingOB = txns?.find(t => (t.tags || "").includes("opening-balance") && !t.isVoid);
+        const amountCents = toCents(nextSettings.openingBalance);
         if (bankA && capitalA) {
-          const existingOB = txns?.find(t => t.tags?.includes("opening-balance"));
-          if (!existingOB) {
-            const amountCents = toCents(nextSettings.openingBalance);
+          if (!existingOB && nextSettings.openingBalance > 0) {
+            // First-time setup: create the opening balance journal entry.
             const lines = [
               { id: uid(), accountId: bankA.id, debit: amountCents, credit: 0, memo: "Opening Balance — Bank deposit", deal_id: null, broker_id: null, developer_id: null },
               { id: uid(), accountId: capitalA.id, debit: 0, credit: amountCents, memo: "Opening Balance — Capital Injection", deal_id: null, broker_id: null, developer_id: null }
             ];
             const txn = { id: uid(), date: nextSettings.openingBalanceDate, description: "Opening Balance", ref: `OB-${Date.now().toString(36).toUpperCase()}`, counterparty: "Opening Balance", tags: "opening-balance", txnType: "JV", isVoid: false, lines, createdAt: new Date().toISOString() };
             writes.push(persistTxn(txn));
+          } else if (existingOB && obUnlocked) {
+            // Opening balance is protected: only touch the journal entry when an admin
+            // has explicitly unlocked it, and keep the ledger in sync with the new value.
+            if (amountCents > 0) {
+              const l0 = existingOB.lines?.[0] || { id: uid() };
+              const l1 = existingOB.lines?.[1] || { id: uid() };
+              const lines = [
+                { ...l0, accountId: bankA.id, debit: amountCents, credit: 0, memo: "Opening Balance — Bank deposit" },
+                { ...l1, accountId: capitalA.id, debit: 0, credit: amountCents, memo: "Opening Balance — Capital Injection" }
+              ];
+              writes.push(persistTxn({ ...existingOB, date: nextSettings.openingBalanceDate, lines, updatedAt: new Date().toISOString() }));
+            } else {
+              // Cleared to zero → void the opening entry rather than leave a junk 0 row.
+              writes.push(persistTxn({ ...existingOB, isVoid: true, updatedAt: new Date().toISOString() }));
+            }
           }
+          // Locked (existingOB && !obUnlocked): the opening entry is left untouched.
         }
       }
       await Promise.all(writes);
+      setObUnlocked(false);
       toast("Settings saved", "success");
     } catch (err) {
       toast("Save failed: " + err.message, "error");
@@ -5106,12 +5144,33 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
 
       {/* ── Opening Balance ── */}
       <div style={{ borderTop: "1px solid #E5E7EB", marginTop: 20, paddingTop: 20 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>🏦 Opening Balance</div>
-        <div style={C.fg}>
-          <div><label style={C.label}>Opening Balance (AED)</label><NumInp value={s.openingBalance} onValue={v => setS(p => ({ ...p, openingBalance: v }))} allowNegative placeholder="e.g., 95548.02" /></div>
-          <div><label style={C.label}>As of Date</label><Inp type="date" value={normalizeReportingStartDate(s.openingBalanceDate)} min={DEFAULT_REPORTING_START_DATE} onChange={e => setS(p => ({ ...p, openingBalanceDate: e.target.value }))} /></div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <span style={{ fontSize: 14, fontWeight: 700 }}>🏦 Opening Balance</span>
+          {obLocked && !obUnlocked && <span style={{ fontSize: 11, fontWeight: 700, color: "#047857", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 999, padding: "2px 9px" }}>🔒 Locked</span>}
+          {obUnlocked && <span style={{ fontSize: 11, fontWeight: 700, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 999, padding: "2px 9px" }}>✎ Editing</span>}
         </div>
-        <div style={{ fontSize: 12, color: "#6B7280", marginTop: 8 }}>This will create an opening balance journal entry (OB) debiting Bank and crediting Capital Injection on save.</div>
+
+        {obEditable ? <>
+          <div style={C.fg}>
+            <div><label style={C.label}>Opening Balance (AED)</label><NumInp value={s.openingBalance} onValue={v => setS(p => ({ ...p, openingBalance: v }))} allowNegative placeholder="e.g., 95548.02" /></div>
+            <div><label style={C.label}>As of Date</label><Inp type="date" value={normalizeReportingStartDate(s.openingBalanceDate)} min={DEFAULT_REPORTING_START_DATE} onChange={e => setS(p => ({ ...p, openingBalanceDate: e.target.value }))} /></div>
+          </div>
+          <div style={{ fontSize: 12, color: obUnlocked ? "#B45309" : "#6B7280", marginTop: 8, lineHeight: 1.6 }}>
+            {obUnlocked
+              ? "⚠ Saving will rewrite the opening journal entry (OB) and change every historical report. Double-check the amount and date before saving."
+              : "This will create an opening balance journal entry (OB) debiting Bank and crediting Capital Injection on save."}
+          </div>
+        </> : <>
+          <div style={C.fg}>
+            <div><label style={C.label}>Opening Balance (AED)</label><div style={lockedField}>{fmtAED(toCents(s.openingBalance || 0))}</div></div>
+            <div><label style={C.label}>As of Date</label><div style={lockedField}>{fmtDate(s.openingBalanceDate) || "—"}</div></div>
+          </div>
+          <div style={{ fontSize: 12, color: "#6B7280", marginTop: 8, lineHeight: 1.6 }}>
+            🔒 The opening balance is locked to protect your books — it's tied to journal entry <strong>{obEntryRef || "OB"}</strong>, and changing it would alter every report since {fmtDate(s.openingBalanceDate)}.
+            {canEditOB ? " Only an admin can change it." : " Only an admin can change it — ask your administrator if it needs correcting."}
+          </div>
+          {canEditOB && <button style={{ ...C.btn("secondary", true), marginTop: 10 }} onClick={handleUnlockOB}>🔓 Unlock to edit (admin)</button>}
+        </>}
       </div>
       <div style={{ marginTop: 20 }}><button style={C.btn()} onClick={save}>💾 Save Settings</button></div>
 
