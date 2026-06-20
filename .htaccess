@@ -1,0 +1,33 @@
+# ──────────────────────────────────────────────────────────────
+#  Nasama Accounting — performance headers (Apache / Hostinger)
+#  Safe on GitHub Pages & Firebase (they ignore .htaccess).
+# ──────────────────────────────────────────────────────────────
+
+# Serve .jsx as JavaScript so it is compressed & cached correctly.
+<IfModule mod_mime.c>
+  AddType application/javascript .jsx
+</IfModule>
+
+# ── Compression ──
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css text/plain text/xml application/javascript application/json application/xml image/svg+xml
+</IfModule>
+<IfModule mod_brotli.c>
+  AddOutputFilterByType BROTLI_COMPRESS text/html text/css text/plain text/xml application/javascript application/json application/xml image/svg+xml
+</IfModule>
+
+# ── Browser caching ──
+<IfModule mod_headers.c>
+  # App code & styles — short cache so updates appear quickly (revalidated).
+  <FilesMatch "\.(css|js|jsx)$">
+    Header set Cache-Control "public, max-age=3600"
+  </FilesMatch>
+  # Images & icons — long cache (they rarely change).
+  <FilesMatch "\.(png|ico|svg|jpe?g|gif|webp)$">
+    Header set Cache-Control "public, max-age=2592000"
+  </FilesMatch>
+  # HTML — always revalidate so new versions show up.
+  <FilesMatch "\.html?$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>
