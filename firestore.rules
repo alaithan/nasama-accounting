@@ -1,0 +1,22 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Require an authenticated session for all data access.
+    //
+    // The app ALWAYS signs in before touching Firestore — either with
+    // email/password, or the anonymous "access-code" backend session
+    // (ensureBackendSession → signInAnonymously). So this rule keeps every
+    // legitimate login working while blocking anonymous public access from
+    // the open internet (the cause of Firebase's "insecure rules" warning).
+    //
+    // NOTE: because the access-code login uses anonymous auth, request.auth
+    // is also non-null for anonymous app users. This is a big step up from
+    // world-open, but not airtight against someone who deliberately signs in
+    // anonymously outside the app. Hardening further (e.g. dropping anonymous
+    // auth, per-user rules) is a larger change — ask if you want it.
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
