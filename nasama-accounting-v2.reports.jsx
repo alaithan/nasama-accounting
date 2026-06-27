@@ -150,10 +150,6 @@ var PC = {
   printColorAdjust:        "exact",
 };
 
-// ── TABLE COLUMN WIDTHS ──────────────────────────────────
-var COL_CODE   = { width: 80,  minWidth: 70  };
-var COL_AMOUNT = { width: 180, minWidth: 160 };
-
 /* ════════════════════════════════════════════════════════
    REPORT HEADER
    ════════════════════════════════════════════════════════ */

@@ -6,7 +6,6 @@
 
 // ── CONSTANTS ──────────────────────────────────────
 const FE_STATUSES = ["Planned", "Due Soon", "Overdue", "Paid", "Skipped", "Cancelled"];
-const FE_EXPENSE_TYPES = ["recurring", "one-time"];
 const FE_FREQUENCIES = ["monthly", "quarterly", "yearly", "custom"];
 const FE_STATUS_BADGE = {
   Planned: "info",
