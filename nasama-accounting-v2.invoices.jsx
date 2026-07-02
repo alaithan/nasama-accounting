@@ -748,10 +748,146 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
   );
 }
 
+// "Received" = cash actually banked = debits on cash/bank accounts only (matches
+// core's dealCollection). Summing every debit would double-count non-bank lines.
+// Txn line amounts are in CENTS; invoice totals are in AED — so convert to AED.
+function srReceivedAED(t, accounts) {
+  const isCashAcct = id => { const a = (accounts || []).find(x => x.id === id); return !!(a && (a.isBank || a.isCash || a.code === "1001" || a.code === "1002")); };
+  return (t.lines || []).reduce((s, l) => s + (isCashAcct(l.accountId) ? (l.debit || 0) : 0), 0) / 100;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  H0. LinkReceiptModal — manage the Sale Receipt(s) linked to an invoice
+//  An invoice can be collected in several receipts (partial / installments).
+//  Linking stamps invoice_id/invoice_no onto an SR txn — no new entry posted.
+// ═══════════════════════════════════════════════════════════════════
+function LinkReceiptModal({ invoice, txns, deals, accounts, linked, onLink, onUnlink, onCreateNew, onClose }) {
+  const invDealIds = new Set((invoice.lineItems || []).map(li => li.dealId).filter(Boolean));
+  const invIncl = invoice.totals?.incl || 0;
+  const dealName = id => (deals || []).find(d => d.id === id)?.property_name || "";
+  const srGross = t => srReceivedAED(t, accounts);
+
+  const linkedTotal = (linked || []).reduce((s, t) => s + srGross(t), 0);
+  const remaining = invIncl - linkedTotal;
+
+  // Candidate = any non-void transaction that received cash into a bank/cash
+  // account, is not yet linked to an invoice, and isn't an internal bank transfer.
+  // This includes both Sale Receipts (SR) and manual Journal Vouchers (JV) used
+  // to book a commission collection. Ranked: same deal, then amount, then recency.
+  const candidates = React.useMemo(() => (txns || [])
+    .filter(t => !t.isVoid && !t.invoice_id && t.txnType !== "BT" && srGross(t) > 0)
+    .map(t => {
+      const g = srGross(t);
+      const dealMatch = !!(t.deal_id && invDealIds.has(t.deal_id));
+      const amtDiff = Math.abs(g - (remaining > 0.01 ? remaining : invIncl));
+      const amtMatch = invIncl > 0 && amtDiff <= Math.max(1, invIncl * 0.01);
+      return { t, g, dealMatch, amtMatch, amtDiff, score: (dealMatch ? 2 : 0) + (amtMatch ? 1 : 0) };
+    })
+    .sort((a, b) => b.score - a.score || a.amtDiff - b.amtDiff || (b.t.date || "").localeCompare(a.t.date || "")),
+    [txns, invoice, linkedTotal]);
+
+  const money = n => <span style={{ fontVariantNumeric: "tabular-nums" }}>AED {invFmt(n)}</span>;
+
+  return (
+    <div style={C.modal} onClick={onClose}>
+      <div style={C.mbox(860)} onClick={e => e.stopPropagation()}>
+        <div style={C.mhdr}>
+          <span style={{ fontWeight: 700, fontSize: 16 }}>Receipts for Invoice #{invoice.invoiceNumber}</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
+        </div>
+        <div style={C.mbdy}>
+          {/* Collection summary */}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+            {[
+              { label: "Invoice total", val: invIncl, color: "#C9A044" },
+              { label: `Collected (${(linked || []).length})`, val: linkedTotal, color: "#059669" },
+              { label: remaining > 0.01 ? "Remaining" : "Fully collected", val: Math.abs(remaining) < 0.005 ? 0 : remaining, color: remaining > 0.01 ? "#DC2626" : "#059669" },
+            ].map((c, i) => (
+              <div key={i} style={{ flex: "1 1 150px", padding: "10px 14px", background: "#F9FAFB", border: "1px solid #EAECF0", borderRadius: 8 }}>
+                <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "#6B7280", fontWeight: 700, marginBottom: 3 }}>{c.label}</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: c.color }}>{money(c.val)}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Already-linked receipts */}
+          {(linked || []).length > 0 && <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>Linked receipts</div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
+              <colgroup>
+                <col style={{ width: 74 }} />
+                <col style={{ width: 96 }} />
+                <col />
+                <col style={{ width: 104 }} />
+                <col style={{ width: 76 }} />
+              </colgroup>
+              <tbody>
+                {(linked || []).map(t => (
+                  <tr key={t.id}>
+                    <td style={{ ...C.td, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.date ? fmtDate(t.date) : "—"}</td>
+                    <td style={{ ...C.td, fontFamily: "monospace", color: "#6B7280", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={t.ref || ""}>{t.ref || "—"}</td>
+                    <td style={{ ...C.td, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={dealName(t.deal_id) || t.counterparty || ""}>{dealName(t.deal_id) || t.counterparty || <span style={{ color: "#9CA3AF" }}>—</span>}</td>
+                    <td style={{ ...C.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{invFmt(srGross(t))}</td>
+                    <td style={{ ...C.td, textAlign: "right" }}>
+                      <button style={{ ...C.btn("secondary"), padding: "4px 8px", fontSize: 12, color: "#DC2626" }} onClick={() => onUnlink(t)}>Unlink</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>}
+
+          {/* Add another existing receipt */}
+          <div style={{ padding: "10px 14px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, marginBottom: 12, fontSize: 13, color: "#1D4ED8" }}>
+            Link an existing collection already in your books — a Sale Receipt (<code>SR-</code>) or a manual Journal Voucher (<code>JV-</code>) where the commission was banked. <strong>No new entry is posted.</strong> You can link several to one invoice (partial / instalments). Best matches first.
+          </div>
+          {candidates.length === 0
+            ? <div style={{ padding: 24, textAlign: "center", color: "#9CA3AF", fontSize: 13 }}>No unlinked bank collections available. {onCreateNew && "Use “+ New receipt” below to record a new collection."}</div>
+            : <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
+                <colgroup>
+                  <col style={{ width: 74 }} />
+                  <col style={{ width: 96 }} />
+                  <col />
+                  <col style={{ width: 104 }} />
+                  <col style={{ width: 92 }} />
+                  <col style={{ width: 62 }} />
+                </colgroup>
+                <thead><tr>
+                  {["Date", "Receipt", "Deal / Property", "Received", "Match", ""].map((h, i) => <th key={i} style={{ ...C.th, textAlign: i === 3 ? "right" : "left" }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {candidates.map(({ t, g, dealMatch, amtMatch }) => (
+                    <tr key={t.id}>
+                      <td style={{ ...C.td, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.date ? fmtDate(t.date) : "—"}</td>
+                      <td style={{ ...C.td, fontFamily: "monospace", color: "#6B7280", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={t.ref || ""}>{t.ref || "—"}</td>
+                      <td style={{ ...C.td, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={dealName(t.deal_id) || t.counterparty || ""}>{dealName(t.deal_id) || t.counterparty || <span style={{ color: "#9CA3AF" }}>—</span>}</td>
+                      <td style={{ ...C.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{invFmt(g)}</td>
+                      <td style={{ ...C.td, whiteSpace: "nowrap" }}>
+                        {dealMatch && <span style={{ ...C.badge("success") }}>deal ✓</span>}
+                        {amtMatch && <span style={{ ...C.badge("info"), marginLeft: dealMatch ? 4 : 0 }}>amt ✓</span>}
+                        {!dealMatch && !amtMatch && <span style={{ color: "#9CA3AF", fontSize: 12 }}>—</span>}
+                      </td>
+                      <td style={{ ...C.td, textAlign: "right" }}>
+                        <button style={{ ...C.btn("secondary"), padding: "4px 8px", fontSize: 12, color: "#047857", borderColor: "#A7F3D0", background: "#ECFDF5" }} onClick={() => onLink(t)}>Link</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>}
+        </div>
+        <div style={C.mftr}>
+          {onCreateNew && <button style={{ ...C.btn("secondary"), color: "#047857", borderColor: "#A7F3D0", background: "#ECFDF5" }} onClick={onCreateNew}>+ New receipt</button>}
+          <button style={C.btn("secondary")} onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  H. InvoicePage — list + orchestration
 // ═══════════════════════════════════════════════════════════════════
-function InvoicePage({ customers, developers, deals, txns, settings, userEmail, userRole, preselectedDeal, onClearPreselected, onCreateReceipt }) {
+function InvoicePage({ accounts, customers, developers, deals, txns, settings, userEmail, userRole, preselectedDeal, onClearPreselected, onCreateReceipt, onLinkReceipt }) {
   const [invoices,   setInvoices]   = React.useState(() => ls_get("invoices", []));
   const [editing,    setEditing]    = React.useState(null);
   const [previewInv, setPreviewInv] = React.useState(null);
@@ -889,13 +1025,18 @@ function InvoicePage({ customers, developers, deals, txns, settings, userEmail, 
     }
   };
 
-  // Invoices that already have a (non-void) Sale Receipt linked by invoice_id, so
-  // the "+ Receipt" button can switch to a disabled "✓ Receipted" state and the
-  // same invoice can't be receipted twice by mistake. Live via the txns listener,
-  // and self-heals if the receipt is later voided (the button re-enables).
-  const receiptByInvoiceId = React.useMemo(() => {
+  // Every (non-void) transaction linked to each invoice by invoice_id, as an
+  // array — an invoice can be collected across several receipts (partial /
+  // instalments), and the collection may be booked as a Sale Receipt (SR) OR a
+  // manual Journal Voucher (JV). Live via the txns listener; self-heals on void.
+  const receiptsByInvoiceId = React.useMemo(() => {
     const m = new Map();
-    (txns || []).forEach(t => { if (t.txnType === "SR" && !t.isVoid && t.invoice_id) m.set(t.invoice_id, t); });
+    (txns || []).forEach(t => {
+      if (!t.isVoid && t.invoice_id) {
+        if (!m.has(t.invoice_id)) m.set(t.invoice_id, []);
+        m.get(t.invoice_id).push(t);
+      }
+    });
     return m;
   }, [txns]);
 
@@ -904,7 +1045,6 @@ function InvoicePage({ customers, developers, deals, txns, settings, userEmail, 
   // with no re-entry. Mirrors the deals→invoice navigation pattern.
   const handleCreateReceipt = (inv) => {
     if (!onCreateReceipt) { toast("Receipt hand-off isn't available here", "error"); return; }
-    if (receiptByInvoiceId.has(inv.id)) { toast(`Invoice #${inv.invoiceNumber} already has a Sale Receipt`, "warning"); return; }
     const lis = inv.lineItems || [];
     const dealIds = [...new Set(lis.map(li => li.dealId).filter(Boolean))];
     const dealId = dealIds[0] || "";
@@ -924,6 +1064,27 @@ function InvoicePage({ customers, developers, deals, txns, settings, userEmail, 
       invoice_id:  inv.id || "",
       invoice_no:  inv.invoiceNumber || "",
     });
+  };
+
+  // Attach an already-recorded Sale Receipt to an invoice (stamps invoice_id on
+  // the SR txn) — for collections booked before the "+ Receipt" flow existed.
+  const [linkInv, setLinkInv] = React.useState(null);
+  const handleLink = async (srTxn) => {
+    if (!onLinkReceipt || !linkInv) return;
+    // Keep the modal open so several receipts can be linked in a row; the linked
+    // list / candidates refresh live as txns update.
+    try {
+      await onLinkReceipt(srTxn, linkInv);
+      toast(`Linked ${srTxn.ref || "receipt"} to Invoice #${linkInv.invoiceNumber}`, "success");
+    } catch (e) { toast("Link failed: " + e.message, "error"); }
+  };
+  const handleUnlink = async (srTxn) => {
+    if (!onLinkReceipt || !srTxn) return;
+    if (!window.confirm(`Unlink ${srTxn.ref || "this receipt"} from the invoice?\n\nThe Sale Receipt stays in your books — only the link is removed.`)) return;
+    try {
+      await onLinkReceipt(srTxn, null);
+      toast("Receipt unlinked", "success");
+    } catch (e) { toast("Unlink failed: " + e.message, "error"); }
   };
 
   // Editor view
@@ -1013,9 +1174,18 @@ function InvoicePage({ customers, developers, deals, txns, settings, userEmail, 
                     <div style={{ display: "flex", gap: 6 }}>
                       {hasPermission(userRole, 'sales.edit') && <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12 }} onClick={() => setEditing({ ...inv })}>Edit</button>}
                       <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12 }} onClick={() => setPreviewInv(inv)}>Preview</button>
-                      {inv.status === "issued" && hasPermission(userRole, 'sales.create') && (receiptByInvoiceId.has(inv.id)
-                        ? <button disabled title={`Already receipted${receiptByInvoiceId.get(inv.id).ref ? " · " + receiptByInvoiceId.get(inv.id).ref : ""}`} style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12, color: "#059669", borderColor: "#A7F3D0", background: "#F0FDF4", cursor: "not-allowed", opacity: 0.7 }}>✓ Receipted</button>
-                        : <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12, color: "#047857", borderColor: "#A7F3D0", background: "#ECFDF5" }} title="Record commission collected against this invoice" onClick={() => handleCreateReceipt(inv)}>+ Receipt</button>)}
+                      {inv.status === "issued" && hasPermission(userRole, 'sales.create') && (() => {
+                        const rcs = receiptsByInvoiceId.get(inv.id) || [];
+                        if (rcs.length > 0) {
+                          const total = rcs.reduce((s, t) => s + srReceivedAED(t, accounts), 0);
+                          const title = `${rcs.length} receipt${rcs.length > 1 ? "s" : ""} · AED ${invFmt(total)}\n${rcs.map(t => t.ref).filter(Boolean).join(", ")}\nClick to view / add / unlink`;
+                          return <button title={title} onClick={() => setLinkInv(inv)} style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12, color: "#059669", borderColor: "#A7F3D0", background: "#F0FDF4" }}>✓ {rcs.length} Receipt{rcs.length > 1 ? "s" : ""}</button>;
+                        }
+                        return <>
+                          <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12, color: "#047857", borderColor: "#A7F3D0", background: "#ECFDF5" }} title="Record commission collected against this invoice" onClick={() => handleCreateReceipt(inv)}>+ Receipt</button>
+                          {onLinkReceipt && <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12 }} title="Link an existing Sale Receipt already in your books to this invoice" onClick={() => setLinkInv(inv)}>⇄ Link</button>}
+                        </>;
+                      })()}
                       {hasPermission(userRole, 'sales.edit') && <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12, color: "#DC2626" }} onClick={() => handleDelete(inv)}>{inv.status === "issued" ? "Void" : "Delete"}</button>}
                     </div>
                   </td>
@@ -1033,8 +1203,20 @@ function InvoicePage({ customers, developers, deals, txns, settings, userEmail, 
         onCreateReceipt={previewInv.status === "issued" && hasPermission(userRole, 'sales.create')
           ? () => { const inv = previewInv; setPreviewInv(null); handleCreateReceipt(inv); }
           : null}
-        alreadyReceipted={receiptByInvoiceId.has(previewInv.id)}
-        receiptRef={receiptByInvoiceId.get(previewInv.id)?.ref}
+        alreadyReceipted={receiptsByInvoiceId.has(previewInv.id)}
+        receiptRef={(receiptsByInvoiceId.get(previewInv.id) || [])[0]?.ref}
+      />}
+
+      {linkInv && <LinkReceiptModal
+        invoice={linkInv}
+        txns={txns}
+        deals={deals}
+        accounts={accounts}
+        linked={receiptsByInvoiceId.get(linkInv.id) || []}
+        onLink={handleLink}
+        onUnlink={handleUnlink}
+        onCreateNew={onCreateReceipt ? () => { const inv = linkInv; setLinkInv(null); handleCreateReceipt(inv); } : null}
+        onClose={() => setLinkInv(null)}
       />}
     </div>
   );

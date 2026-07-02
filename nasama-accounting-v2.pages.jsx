@@ -6074,7 +6074,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       case "deals": return <DealsPage {...shared} />;
       case "auditDeals": return <AuditingDealsPage dealStageChanges={dealStageChanges} userRole={accessSubject} />;
       case "receipts": return <ReceiptsPage {...shared} />;
-      case "invoices": return <InvoicePage customers={customers} developers={developers} deals={deals} txns={txns} settings={settings} userEmail={userEmail} userRole={accessSubject} preselectedDeal={invoiceDeal} onClearPreselected={() => setInvoiceDeal(null)} onCreateReceipt={(payload) => { setReceiptDraft(payload); setPage("receipts"); }} />;
+      case "invoices": return <InvoicePage accounts={accounts} customers={customers} developers={developers} deals={deals} txns={txns} settings={settings} userEmail={userEmail} userRole={accessSubject} preselectedDeal={invoiceDeal} onClearPreselected={() => setInvoiceDeal(null)} onCreateReceipt={(payload) => { setReceiptDraft(payload); setPage("receipts"); }} onLinkReceipt={(srTxn, invoice) => persistTxn({ ...srTxn, invoice_id: invoice ? invoice.id : "", invoice_no: invoice ? (invoice.invoiceNumber || "") : "" })} />;
       case "payments": return <PaymentsPage {...shared} />;
       case "customers": return <CustomersPage {...shared} />;
       case "brokers": return <BrokersPage {...shared} />;
