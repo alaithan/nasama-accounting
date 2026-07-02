@@ -368,11 +368,14 @@ function EquityPrintDoc({ accounts, filteredLedger, openingLedger, toDateLedger,
 /* ════════════════════════════════════════════════════════
    NOTES TO FINANCIAL STATEMENTS — PRINT DOCUMENT
    ════════════════════════════════════════════════════════ */
-function NotesPrintDoc({ accounts, filteredLedger, toDateLedger, filteredTxns, totalRev, totalExp, totalAssets, totalLiabilities, totalEquity, dateFilter, settings }) {
+function NotesPrintDoc({ accounts, filteredLedger, toDateLedger, priorLedger, hasComparative, priorTotalRev, priorTotalExp, curYearLabel, priorYearLabel, filteredTxns, totalRev, totalExp, totalAssets, totalLiabilities, totalEquity, dateFilter, settings }) {
   const company  = settings?.company  || "Nasama Properties";
   const currency = settings?.currency || "AED";
   const trn      = settings?.trn;
   const netIncome = (totalRev || 0) - (totalExp || 0);
+  priorLedger = priorLedger || {};
+  curYearLabel = curYearLabel || "Current";
+  priorYearLabel = priorYearLabel || "Prior";
 
   const periodLine = dateFilter.from && dateFilter.to
     ? `For the period ${fmtDate(dateFilter.from)} to ${fmtDate(dateFilter.to)}`
@@ -387,9 +390,10 @@ function NotesPrintDoc({ accounts, filteredLedger, toDateLedger, filteredTxns, t
     hour: "2-digit", minute: "2-digit",
   });
 
-  const revenueAccts   = (accounts || []).filter(a => a.type === "Revenue" && accountBalance(a, filteredLedger) !== 0)
+  const pnlActive = (a) => accountBalance(a, filteredLedger) !== 0 || (hasComparative && accountBalance(a, priorLedger) !== 0);
+  const revenueAccts   = (accounts || []).filter(a => a.type === "Revenue" && pnlActive(a))
     .sort((a, b) => accountBalance(b, filteredLedger) - accountBalance(a, filteredLedger));
-  const expenseAccts   = (accounts || []).filter(a => a.type === "Expense" && accountBalance(a, filteredLedger) !== 0)
+  const expenseAccts   = (accounts || []).filter(a => a.type === "Expense" && pnlActive(a))
     .sort((a, b) => accountBalance(b, filteredLedger) - accountBalance(a, filteredLedger));
   const cashAccts      = (accounts || []).filter(isCashAccount);
   const liabilityAccts = (accounts || []).filter(a => a.type === "Liability" && accountBalance(a, toDateLedger) !== 0);
@@ -464,6 +468,70 @@ function NotesPrintDoc({ accounts, filteredLedger, toDateLedger, filteredTxns, t
     );
   }
 
+  // ── Comparative account table — current period vs corresponding prior-year period
+  function CompTable({ rows, totalCur, totalPrior, totalLabel, totalColor }) {
+    if (!rows || rows.length === 0) {
+      return <div style={{ fontSize: PD.fXs, color: PD.inkSub, fontStyle: "italic", padding: "4px 0" }}>No activity in the current or comparative period.</div>;
+    }
+    const numCell = (v, extra) => (
+      <td style={{ padding: "3px 8px", textAlign: "right", fontSize: PD.fBase, fontWeight: 500, color: PD.inkDk, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", ...extra }}>{pFmt(v)}</td>
+    );
+    const chgCell = (cur, prior, extra) => {
+      const chg = cur - prior;
+      const color = chg > 0 ? PD.green : chg < 0 ? PD.red : PD.inkSub;
+      const pct = prior !== 0 ? (chg >= 0 ? "+" : "−") + Math.abs(chg / prior * 100).toFixed(1) + "%" : (cur !== 0 ? "new" : "—");
+      return (
+        <td style={{ padding: "3px 0", textAlign: "right", fontSize: PD.fXs, color, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", ...extra }}>
+          {(chg >= 0 ? "" : "−") + pFmt(Math.abs(chg))}<span style={{ color: PD.inkSub, marginLeft: 4 }}>({pct})</span>
+        </td>
+      );
+    };
+    const yh = { padding: "2px 8px", textAlign: "right", fontSize: PD.fXs, fontWeight: 800, color: PD.navy, borderBottom: "0.75px solid " + PD.rule, whiteSpace: "nowrap" };
+    return (
+      <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", fontFamily: PD.sans }}>
+        <colgroup>
+          <col style={{ width: 46 }} />
+          <col />
+          <col style={{ width: 92 }} />
+          <col style={{ width: 92 }} />
+          <col style={{ width: 96 }} />
+        </colgroup>
+        <thead>
+          <tr>
+            <th style={{ ...yh, textAlign: "left", fontWeight: 700, color: PD.inkSub }}>Code</th>
+            <th style={{ ...yh, textAlign: "left", fontWeight: 700, color: PD.inkSub }}>Account</th>
+            <th style={yh}>{curYearLabel}</th>
+            <th style={yh}>{priorYearLabel}</th>
+            <th style={yh}>Change</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(a => {
+            const cur = accountBalance(a, filteredLedger);
+            const prior = accountBalance(a, priorLedger);
+            return (
+              <tr key={a.id} style={{ pageBreakInside: "avoid" }}>
+                <td style={{ padding: "3px 8px", fontSize: PD.fXs, color: PD.inkSub, fontFamily: PD.mono }}>{a.code}</td>
+                <td style={{ padding: "3px 8px", fontSize: PD.fBase, color: PD.inkMd }}>{a.name}</td>
+                {numCell(cur)}
+                {numCell(prior, { color: PD.inkSub })}
+                {chgCell(cur, prior)}
+              </tr>
+            );
+          })}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colSpan={2} style={{ padding: "6px 8px", fontSize: PD.fBase, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em", color: PD.navy, borderTop: "1.5px solid " + PD.inkDk, borderBottom: "3px double " + PD.inkDk }}>{totalLabel}</td>
+            {numCell(totalCur, { fontWeight: 700, color: totalColor || PD.inkDk, borderTop: "1.5px solid " + PD.inkDk, borderBottom: "3px double " + PD.inkDk })}
+            {numCell(totalPrior, { fontWeight: 700, color: PD.inkSub, borderTop: "1.5px solid " + PD.inkDk, borderBottom: "3px double " + PD.inkDk })}
+            {chgCell(totalCur, totalPrior, { fontWeight: 700, borderTop: "1.5px solid " + PD.inkDk, borderBottom: "3px double " + PD.inkDk })}
+          </tr>
+        </tfoot>
+      </table>
+    );
+  }
+
   // ── Policy bullet
   function Bullet({ text }) {
     return (
@@ -514,13 +582,17 @@ function NotesPrintDoc({ accounts, filteredLedger, toDateLedger, filteredTxns, t
 
       {/* Note 4 — Revenue */}
       <NoteHead number="4" title="Revenue" />
-      <AcctTable rows={revenueAccts} ledger={filteredLedger} />
-      {totalRev > 0 && <PrintTotalRow label="Total Revenue" amount={totalRev} color={PD.green} />}
+      {hasComparative && <div style={{ fontSize: PD.fXs, color: PD.inkSub, marginBottom: 5, fontFamily: PD.sans }}>Current period ({curYearLabel}) with the corresponding period of the preceding year ({priorYearLabel}).</div>}
+      {hasComparative
+        ? <CompTable rows={revenueAccts} totalCur={totalRev} totalPrior={priorTotalRev} totalLabel="Total Revenue" totalColor={PD.green} />
+        : <React.Fragment><AcctTable rows={revenueAccts} ledger={filteredLedger} />{totalRev > 0 && <PrintTotalRow label="Total Revenue" amount={totalRev} color={PD.green} />}</React.Fragment>}
 
       {/* Note 5 — Expenses */}
       <NoteHead number="5" title="Expenses" />
-      <AcctTable rows={expenseAccts} ledger={filteredLedger} />
-      {totalExp > 0 && <PrintTotalRow label="Total Expenses" amount={totalExp} />}
+      {hasComparative && <div style={{ fontSize: PD.fXs, color: PD.inkSub, marginBottom: 5, fontFamily: PD.sans }}>Current period ({curYearLabel}) with the corresponding period of the preceding year ({priorYearLabel}).</div>}
+      {hasComparative
+        ? <CompTable rows={expenseAccts} totalCur={totalExp} totalPrior={priorTotalExp} totalLabel="Total Expenses" totalColor={PD.red} />
+        : <React.Fragment><AcctTable rows={expenseAccts} ledger={filteredLedger} />{totalExp > 0 && <PrintTotalRow label="Total Expenses" amount={totalExp} />}</React.Fragment>}
 
       {/* Note 6 — Equity */}
       <NoteHead number="6" title="Equity" />
@@ -547,6 +619,7 @@ function NotesPrintDoc({ accounts, filteredLedger, toDateLedger, filteredTxns, t
       <Bullet text="These financial statements have not been audited and represent management accounts prepared from the company's accounting records." />
       <Bullet text="The company operates under UAE law and is subject to Federal Tax Authority regulations including VAT legislation." />
       <Bullet text="There are no known contingent liabilities or material post-balance sheet events at the time of preparation, unless specifically disclosed above." />
+      {hasComparative && <Bullet text={`Comparative figures for the corresponding period of the preceding financial year (${priorYearLabel}) are presented alongside the current period (${curYearLabel}) in the Revenue and Expenses notes, consistent with interim reporting requirements.`} />}
 
       <div style={{ marginTop: 16, paddingTop: 8, borderTop: "0.75px solid " + PD.ruleLt, fontSize: PD.fXs, color: PD.inkSub, fontFamily: PD.sans }}>
         Prepared by: {company} · Accounting System v2 · {generated}

@@ -3308,6 +3308,20 @@ function ReportsPage({ accounts, txns, settings }) {
   const totalRev = revenues.reduce((s, a) => s + accountBalance(a, filteredLedger), 0);
   const totalExp = expenses.reduce((s, a) => s + accountBalance(a, filteredLedger), 0);
 
+  // Comparative period — the corresponding period of the immediately preceding
+  // financial year (interim reporting mandates a side-by-side prior-year column,
+  // IAS 34). We shift the from/to bounds back one year and re-derive the ledger.
+  const shiftYear = (ds, n) => ds && ds.length >= 4 ? (String(Number(ds.slice(0, 4)) + n) + ds.slice(4)) : ds;
+  const priorFrom = shiftYear(dateFilter.from, -1);
+  const priorTo   = shiftYear(dateFilter.to, -1);
+  const hasComparative = !!(dateFilter.from || dateFilter.to);
+  const priorTxns   = useMemo(() => txns.filter(t => (!priorFrom || (t.date || "") >= priorFrom) && (!priorTo || (t.date || "") <= priorTo)), [txns, priorFrom, priorTo]);
+  const priorLedger = useMemo(() => buildLedger(priorTxns, accounts), [priorTxns, accounts]);
+  const priorTotalRev = revenues.reduce((s, a) => s + accountBalance(a, priorLedger), 0);
+  const priorTotalExp = expenses.reduce((s, a) => s + accountBalance(a, priorLedger), 0);
+  const curYearLabel   = (dateFilter.to || dateFilter.from || "").slice(0, 4) || "Current";
+  const priorYearLabel = /^\d{4}$/.test(curYearLabel) ? String(Number(curYearLabel) - 1) : "Prior";
+
   // Balance Sheet totals
   const assets      = accounts.filter(a => a.type === "Asset");
   const liabilities = accounts.filter(a => a.type === "Liability");
@@ -3404,6 +3418,12 @@ function ReportsPage({ accounts, txns, settings }) {
         accounts={accounts}
         filteredLedger={filteredLedger}
         toDateLedger={toDateLedger}
+        priorLedger={priorLedger}
+        hasComparative={hasComparative}
+        priorTotalRev={priorTotalRev}
+        priorTotalExp={priorTotalExp}
+        curYearLabel={curYearLabel}
+        priorYearLabel={priorYearLabel}
         filteredTxns={filteredTxns}
         totalRev={totalRev}
         totalExp={totalExp}
@@ -3473,6 +3493,12 @@ function ReportsPage({ accounts, txns, settings }) {
         accounts={accounts}
         filteredLedger={filteredLedger}
         toDateLedger={toDateLedger}
+        priorLedger={priorLedger}
+        hasComparative={hasComparative}
+        priorTotalRev={priorTotalRev}
+        priorTotalExp={priorTotalExp}
+        curYearLabel={curYearLabel}
+        priorYearLabel={priorYearLabel}
         filteredTxns={filteredTxns}
         totalRev={totalRev}
         totalExp={totalExp}

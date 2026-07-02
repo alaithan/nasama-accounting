@@ -157,7 +157,7 @@ const feComputeMonthlyEquivalent = (item) => {
 };
 
 // ── FUTURE EXPENSES PAGE ────────────────────────────
-function FutureExpensesPage({ accounts, ledger, plannedExpenses, setPlannedExpenses, journal, persistTxn, userRole, userEmail, dark }) {
+function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, setPlannedExpenses, journal, persistTxn, userRole, userEmail, dark }) {
   const [showModal, setShowModal] = useState(false);
   const [showPayModal, setShowPayModal] = useState(false);
   const [editItem, setEditItem] = useState(null);
@@ -171,6 +171,16 @@ function FutureExpensesPage({ accounts, ledger, plannedExpenses, setPlannedExpen
     document.addEventListener("add-planned-expense", h);
     return () => document.removeEventListener("add-planned-expense", h);
   }, []);
+
+  // Ensure the Accrued Expenses Payable account (2210) exists so accruals can
+  // post. Auto-provisioned once for books created before this feature existed.
+  useEffect(() => {
+    if (typeof setAccounts !== "function") return;
+    if ((accounts || []).some(a => a.code === "2210")) return;
+    setAccounts(prev => (prev || []).some(a => a.code === "2210")
+      ? prev
+      : [...(prev || []), { id: "a2210", code: "2210", name: "Accrued Expenses Payable", type: "Liability", isBank: false, isOutputVAT: false, isInputVAT: false }]);
+  }, [accounts, setAccounts]);
 
   // Auto-compute statuses
   const enriched = useMemo(() => {
@@ -280,6 +290,36 @@ function FutureExpensesPage({ accounts, ledger, plannedExpenses, setPlannedExpen
     logAudit("planned_expense_skip", { itemId: item.id, title: item.title }, userRole, userEmail);
   };
 
+  // Recognise an incurred-but-unpaid expense on an accrual basis:
+  // DR Expense (net) / CR Accrued Expenses Payable (net). It then appears in the
+  // P&L and as a liability on the Balance Sheet, before any cash is paid.
+  const handlePostAccrual = async (item) => {
+    if (item.accrualTxnId) { toast("This expense has already been accrued", "warning"); return; }
+    const payable = (accounts || []).find(a => a.code === "2210");
+    if (!payable) { toast("Preparing the Accrued Expenses account — please click Accrue again in a moment", "info"); return; }
+    const expenseCode = item.category && item.category !== "OTHER" ? item.category : "";
+    if (!expenseCode) { toast("Set a Chart-of-Accounts category on this expense before accruing", "warning"); return; }
+    if (!item.amountExpected || item.amountExpected <= 0) { toast("This expense has no amount to accrue", "warning"); return; }
+    const vatRate = (item.vatApplicable && item.amountIncludesVat) ? (item.vatRate || 5) : 0;
+    try {
+      const txn = journal.postAccrual({
+        date: item.nextDueDate || todayStr(),
+        memo: item.title || getCategoryLabel(item.category),
+        gross: fromCents(item.amountExpected),
+        vatRate,
+        expenseCode,
+        counterparty: item.payeeName || "",
+        plannedExpenseId: item.id,
+        commit: false,
+      });
+      const saved = await persistTxn(txn);
+      const now = new Date().toISOString();
+      setPlannedExpenses(prev => prev.map(e => e.id === item.id ? { ...e, accrualTxnId: saved.id, accruedAt: now, updatedBy: userEmail, updatedAt: now } : e));
+      toast("Accrual posted — expense recognised in the P&L and shown as a liability", "success");
+      logAudit("planned_expense_accrual", { itemId: item.id, txnId: saved.id, title: item.title }, userRole, userEmail);
+    } catch (err) { toast(err.message, "error"); }
+  };
+
   const handlePaymentComplete = (item, txnId) => {
     const now = new Date().toISOString();
     if (item.expenseType === "recurring") {
@@ -287,6 +327,7 @@ function FutureExpensesPage({ accounts, ledger, plannedExpenses, setPlannedExpen
       setPlannedExpenses(prev => prev.map(e => e.id === item.id ? {
         ...e, lastPaidDate: todayStr(), lastPaidTxnId: txnId,
         nextDueDate: nextDate, status: "Planned",
+        accrualTxnId: "", accruedAt: "",
         updatedBy: userEmail, updatedAt: now
       } : e));
       toast(`Payment recorded — next due: ${fmtDate(nextDate)}`, "success");
@@ -365,7 +406,7 @@ function FutureExpensesPage({ accounts, ledger, plannedExpenses, setPlannedExpen
 
     {/* Info banner */}
     <div style={{ ...C.card, padding: "12px 16px", marginBottom: 14, borderLeft: "4px solid #2563EB", background: "#EFF6FF", color: "#1D4ED8", fontSize: 13 }}>
-      📋 This module tracks future and recurring obligations as operational reminders. <strong>No journal entries are created</strong> until you click "Record Payment" — preserving cash-basis accounting.
+      📋 Tracks future and recurring obligations. Use <strong>🧾 Accrue</strong> to recognise an unpaid expense now (it appears in the P&amp;L and as a liability), or <strong>💰 Pay</strong> to record the cash payment. Un-accrued items stay purely operational with no accounting impact until paid.
     </div>
 
     {/* Summary Cards */}
@@ -409,6 +450,9 @@ function FutureExpensesPage({ accounts, ledger, plannedExpenses, setPlannedExpen
                 <span style={C.badge(FE_STATUS_BADGE[status] || "neutral")}>
                   {FE_STATUS_ICON[status] || ""} {status}
                 </span>
+                {item.accrualTxnId && status !== "Paid" && <div style={{ marginTop: 4 }}>
+                  <span style={C.badge("info")} title="Recognised as an expense and accrued liability; awaiting payment">🧾 Accrued</span>
+                </div>}
               </td>
               <td style={C.td}>
                 <div style={{ fontWeight: 600, color: NAVY }}>{item.title || "Untitled"}</div>
@@ -430,7 +474,10 @@ function FutureExpensesPage({ accounts, ledger, plannedExpenses, setPlannedExpen
               <td style={C.td}>{item.payeeName || "—"}</td>
               <td style={C.td}>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {hasPermission(userRole, 'expenses.create') && status !== "Paid" && status !== "Cancelled" && 
+                  {hasPermission(userRole, 'expenses.create') && status !== "Paid" && status !== "Cancelled" && !item.accrualTxnId &&
+                    <button style={C.btn("secondary", true)} title="Recognise this unpaid expense now (DR expense / CR accrued payable)" onClick={() => handlePostAccrual(item)}>🧾 Accrue</button>
+                  }
+                  {hasPermission(userRole, 'expenses.create') && status !== "Paid" && status !== "Cancelled" &&
                     <button style={C.btn("success", true)} onClick={() => { setPayItem(item); setShowPayModal(true); }}>💰 Pay</button>
                   }
                   {hasPermission(userRole, 'planning.edit') && status !== "Paid" &&
@@ -466,6 +513,7 @@ function FutureExpensesPage({ accounts, ledger, plannedExpenses, setPlannedExpen
     {/* Record Payment Modal */}
     {showPayModal && payItem && <RecordPaymentModal
       item={payItem}
+      isAccrued={!!payItem.accrualTxnId}
       accounts={accounts}
       ledger={ledger}
       journal={journal}
@@ -638,13 +686,20 @@ function FutureExpenseModal({ item, accounts, onSave, onClose }) {
 }
 
 // ── RECORD PAYMENT MODAL ────────────────────────────
-function RecordPaymentModal({ item, accounts, ledger, journal, persistTxn, userRole, userEmail, onComplete, onClose }) {
+function RecordPaymentModal({ item, isAccrued, accounts, ledger, journal, persistTxn, userRole, userEmail, onComplete, onClose }) {
   const [form, setForm] = useState(() => {
-    const grossAED = item.amountExpected ? fromCents(item.amountExpected) : "";
+    const rate = item.vatApplicable ? (item.vatRate || 5) : 0;
+    // amountExpected is stored NET when the user chose "VAT exclusive", so the
+    // cash gross must be grossed up. Inclusive / exempt amounts are already gross.
+    const grossC = item.amountExpected
+      ? (item.vatApplicable && !item.amountIncludesVat
+          ? Math.round(item.amountExpected * (1 + rate / 100))
+          : item.amountExpected)
+      : 0;
     return {
       date: todayStr(),
-      gross: grossAED,
-      vatRate: item.vatApplicable ? (item.vatRate || 5) : 0,
+      gross: grossC ? fromCents(grossC) : "",
+      vatRate: rate,
       expenseCode: item.category !== "OTHER" ? item.category : "",
       paidFromCode: item.preferredAccountCode || "1002",
       counterparty: item.payeeName || "",
@@ -662,22 +717,29 @@ function RecordPaymentModal({ item, accounts, ledger, journal, persistTxn, userR
   const amountC = toCents(form.gross);
   const isInsufficient = amountC > balance;
 
+  // For accrued items we SETTLE the liability (DR Accrued Payable / CR Bank),
+  // so the expense is not recognised twice. Otherwise it's a direct payment.
+  const buildTxn = () => isAccrued
+    ? journal.postAccrualSettlement({
+        date: form.date, memo: form.memo || item.title,
+        gross: parseFloat(form.gross), vatRate: form.vatRate,
+        paidFromCode: form.paidFromCode, counterparty: form.counterparty,
+        plannedExpenseId: item.id, commit: false
+      })
+    : journal.postPayment({
+        date: form.date, memo: form.memo || item.title,
+        gross: parseFloat(form.gross), vatRate: form.vatRate,
+        expenseCode: form.expenseCode, paidFromCode: form.paidFromCode,
+        counterparty: form.counterparty, tags: "planned-settlement", commit: false
+      });
+
   const handlePreview = () => {
-    if (!form.expenseCode) { toast("Select an expense account", "warning"); return; }
+    if (!isAccrued && !form.expenseCode) { toast("Select an expense account", "warning"); return; }
     const gross = parseFloat(form.gross);
     if (!gross || gross <= 0) { toast("Enter a valid amount", "warning"); return; }
     if (isInsufficient) { toast(`Insufficient funds in ${selectedAccount?.name || 'account'}`, "error"); return; }
     try {
-      const txn = journal.postPayment({
-        date: form.date, memo: form.memo || item.title,
-        gross, vatRate: form.vatRate,
-        expenseCode: form.expenseCode,
-        paidFromCode: form.paidFromCode,
-        counterparty: form.counterparty,
-        tags: "planned-settlement",
-        commit: false
-      });
-      setPreview(txn);
+      setPreview(buildTxn());
     } catch (err) { toast(err.message, "error"); }
   };
 
@@ -686,16 +748,7 @@ function RecordPaymentModal({ item, accounts, ledger, journal, persistTxn, userR
     if (isInsufficient) { toast("Cannot post: Insufficient funds", "error"); return; }
     setPosting(true);
     try {
-      const txn = journal.postPayment({
-        date: form.date, memo: form.memo || item.title,
-        gross: parseFloat(form.gross),
-        vatRate: form.vatRate,
-        expenseCode: form.expenseCode,
-        paidFromCode: form.paidFromCode,
-        counterparty: form.counterparty,
-        tags: "planned-settlement",
-        commit: false
-      });
+      const txn = buildTxn();
       const savedTxn = await persistTxn({ ...txn, planned_expense_id: item.id });
       onComplete(savedTxn.id);
     } catch (err) {
@@ -713,8 +766,13 @@ function RecordPaymentModal({ item, accounts, ledger, journal, persistTxn, userR
       <div style={C.mbdy}>
         {/* Context Banner */}
         <div style={{ padding: 14, background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 10, marginBottom: 16, fontSize: 13, color: "#065F46" }}>
-          <div style={{ fontWeight: 700, marginBottom: 4 }}>Converting planned expense to cash payment</div>
-          <div>This will create a <strong>real journal entry</strong> (DR Expense / CR Bank) using the existing accounting engine. The planned item will be marked as Paid.</div>
+          {isAccrued ? <>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Settling an accrued liability</div>
+            <div>This item was already recognised as an expense. This entry <strong>clears the payable</strong> (DR Accrued Expenses Payable / DR Input VAT / CR Bank) — the expense is <strong>not</strong> counted again.</div>
+          </> : <>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Converting planned expense to cash payment</div>
+            <div>This will create a <strong>real journal entry</strong> (DR Expense / CR Bank) using the existing accounting engine. The planned item will be marked as Paid.</div>
+          </>}
         </div>
 
         {/* Source reference */}
@@ -730,11 +788,13 @@ function RecordPaymentModal({ item, accounts, ledger, journal, persistTxn, userR
           <div><label style={C.label}>Gross Amount (AED)</label>
             <Inp type="number" step="0.01" value={form.gross} onChange={e => setForm(p => ({ ...p, gross: e.target.value }))} />
           </div>
-          <div><label style={C.label}>Expense Account</label>
-            <Sel value={form.expenseCode} onChange={e => setForm(p => ({ ...p, expenseCode: e.target.value }))}>
-              <option value="">— Select Account —</option>
-              {expenseAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
-            </Sel>
+          <div><label style={C.label}>{isAccrued ? "Clears Liability" : "Expense Account"}</label>
+            {isAccrued
+              ? <Inp value="2210 — Accrued Expenses Payable" disabled readOnly />
+              : <Sel value={form.expenseCode} onChange={e => setForm(p => ({ ...p, expenseCode: e.target.value }))}>
+                  <option value="">— Select Account —</option>
+                  {expenseAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
+                </Sel>}
           </div>
           <div><label style={C.label}>VAT Rate %</label>
             <Sel value={form.vatRate} onChange={e => setForm(p => ({ ...p, vatRate: parseFloat(e.target.value) }))}>

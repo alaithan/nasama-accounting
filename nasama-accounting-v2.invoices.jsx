@@ -425,7 +425,7 @@ function InvoicePreviewDoc({ invoice }) {
 // ═══════════════════════════════════════════════════════════════════
 const INV_PDF_EL = "inv-pdf-capture";
 
-function InvoicePreviewModal({ invoice, onClose }) {
+function InvoicePreviewModal({ invoice, onClose, onCreateReceipt, alreadyReceipted, receiptRef }) {
   const [exporting, setExporting] = React.useState(false);
 
   const handlePDF = async () => {
@@ -444,6 +444,9 @@ function InvoicePreviewModal({ invoice, onClose }) {
           {invoice.status === "draft" && <span style={{ marginLeft: 8, fontSize: 11, background: "#92400E22", color: "#D97706", border: "1px solid #D9770640", borderRadius: 4, padding: "2px 7px" }}>DRAFT</span>}
         </div>
         <div style={{ display: "flex", gap: 10 }}>
+          {onCreateReceipt && (alreadyReceipted
+            ? <button disabled title={`Already receipted${receiptRef ? " · " + receiptRef : ""}`} style={{ background: "#0F1A14", color: "#6EE7B7", border: "1px solid #065F46", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "not-allowed", opacity: 0.75 }}>✓ Receipted</button>
+            : <button title="Record commission collected against this invoice" style={{ background: "#059669", color: "#fff", border: "none", padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={onCreateReceipt}>+ Receipt</button>)}
           <button
             style={{ background: exporting ? "#7A6020" : "#C9A044", color: "#fff", border: "none", padding: "8px 20px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: exporting ? "not-allowed" : "pointer" }}
             onClick={handlePDF}
@@ -1024,7 +1027,15 @@ function InvoicePage({ customers, developers, deals, txns, settings, userEmail, 
         );
       })()}
 
-      {previewInv && <InvoicePreviewModal invoice={previewInv} onClose={() => setPreviewInv(null)} />}
+      {previewInv && <InvoicePreviewModal
+        invoice={previewInv}
+        onClose={() => setPreviewInv(null)}
+        onCreateReceipt={previewInv.status === "issued" && hasPermission(userRole, 'sales.create')
+          ? () => { const inv = previewInv; setPreviewInv(null); handleCreateReceipt(inv); }
+          : null}
+        alreadyReceipted={receiptByInvoiceId.has(previewInv.id)}
+        receiptRef={receiptByInvoiceId.get(previewInv.id)?.ref}
+      />}
     </div>
   );
 }

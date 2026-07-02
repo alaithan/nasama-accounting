@@ -410,6 +410,12 @@ function NotesReport(props) {
   var accounts       = props.accounts       || [];
   var filteredLedger = props.filteredLedger || {};
   var toDateLedger   = props.toDateLedger   || {};
+  var priorLedger    = props.priorLedger    || {};
+  var hasComparative = !!props.hasComparative;
+  var priorTotalRev  = props.priorTotalRev  || 0;
+  var priorTotalExp  = props.priorTotalExp  || 0;
+  var curYearLabel   = props.curYearLabel   || "Current";
+  var priorYearLabel = props.priorYearLabel || "Prior";
   var filteredTxns   = props.filteredTxns   || [];
   var totalRev       = props.totalRev       || 0;
   var totalExp       = props.totalExp       || 0;
@@ -433,12 +439,15 @@ function NotesReport(props) {
     ? (fmtDate(dateFilter.from) + " to " + fmtDate(dateFilter.to))
     : dateFilter.to ? ("As of " + fmtDate(dateFilter.to)) : "All periods";
 
-  // Revenue breakdown
-  var revenueAccts = accounts.filter(function(a) { return a.type === "Revenue" && accountBalance(a, filteredLedger) !== 0; })
+  // Revenue breakdown — include accounts active in EITHER period when a
+  // comparative is shown, so a line that appears only in the prior year is not dropped.
+  function activeIn(a, ledgers) { return ledgers.some(function(l) { return accountBalance(a, l) !== 0; }); }
+  var pnlLedgers = hasComparative ? [filteredLedger, priorLedger] : [filteredLedger];
+  var revenueAccts = accounts.filter(function(a) { return a.type === "Revenue" && activeIn(a, pnlLedgers); })
     .sort(function(a, b) { return accountBalance(b, filteredLedger) - accountBalance(a, filteredLedger); });
 
   // Expense breakdown
-  var expenseAccts = accounts.filter(function(a) { return a.type === "Expense" && accountBalance(a, filteredLedger) !== 0; })
+  var expenseAccts = accounts.filter(function(a) { return a.type === "Expense" && activeIn(a, pnlLedgers); })
     .sort(function(a, b) { return accountBalance(b, filteredLedger) - accountBalance(a, filteredLedger); });
 
   // Cash accounts
@@ -528,6 +537,106 @@ function NotesReport(props) {
     );
   }
 
+  // Currency formatter (cents → 1,234.56)
+  function fmtNum(c) {
+    return ((c || 0) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  // Side-by-side comparative table: current period vs the corresponding period
+  // of the preceding year, with a Change column (mandatory interim comparative).
+  function ComparativeTable(rows, totalCur, totalPrior, totalLabel, accentColor) {
+    if (rows.length === 0) {
+      return React.createElement("div", { style: { fontSize: 12, color: RPT.subtle, fontStyle: "italic", padding: "8px 0" } }, "No activity in the current or comparative period.");
+    }
+    function yearTh(label) {
+      return React.createElement("th", { style: thS({ textAlign: "right", paddingBottom: 7 }) },
+        React.createElement("div", { style: { fontSize: 12.5, fontWeight: 800, color: RPT.ink, letterSpacing: "0.02em" } }, label),
+        React.createElement("div", { style: { fontSize: 9, fontWeight: 600, color: RPT.subtle, letterSpacing: "0.12em", marginTop: 1 } }, "AED")
+      );
+    }
+    function numTd(val, opts) {
+      opts = opts || {};
+      return React.createElement("td", {
+        style: {
+          padding: "8px 16px", textAlign: "right", fontVariantNumeric: "tabular-nums",
+          fontSize: 13, fontWeight: opts.bold ? 700 : 600,
+          color: opts.color || (opts.bold ? RPT.ink : RPT.textHeavy),
+          borderBottom: opts.borderBottom || ("1px solid " + RPT.rule), whiteSpace: "nowrap",
+          borderTop: opts.borderTop || "none", background: opts.bg || "transparent",
+        }
+      }, fmtNum(val));
+    }
+    function changeTd(cur, prior, opts) {
+      opts = opts || {};
+      var chg = cur - prior;
+      var color = chg > 0 ? RPT.green : chg < 0 ? RPT.red : RPT.subtle;
+      var arrow = chg > 0 ? "▲ " : chg < 0 ? "▼ " : "";
+      var pctTxt = prior !== 0
+        ? ((chg >= 0 ? "+" : "−") + Math.abs(chg / prior * 100).toFixed(1) + "%")
+        : (cur !== 0 ? "new" : "—");
+      return React.createElement("td", {
+        style: {
+          padding: "8px 16px", textAlign: "right", fontVariantNumeric: "tabular-nums",
+          borderBottom: opts.borderBottom || ("1px solid " + RPT.rule), whiteSpace: "nowrap",
+          borderTop: opts.borderTop || "none", background: opts.bg || "transparent",
+        }
+      },
+        React.createElement("div", { style: { fontSize: 12.5, fontWeight: opts.bold ? 700 : 600, color: color } }, arrow + (chg >= 0 ? "" : "−") + fmtNum(Math.abs(chg))),
+        React.createElement("div", { style: { fontSize: 10, fontWeight: 500, color: RPT.subtle, marginTop: 1 } }, pctTxt)
+      );
+    }
+    return React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", tableLayout: "fixed", fontSize: 13 } },
+      React.createElement("colgroup", null,
+        React.createElement("col", { style: { width: 74 } }),
+        React.createElement("col", null),
+        React.createElement("col", { style: { width: 132 } }),
+        React.createElement("col", { style: { width: 132 } }),
+        React.createElement("col", { style: { width: 132 } })
+      ),
+      React.createElement("thead", null,
+        React.createElement("tr", null,
+          React.createElement("th", { style: thS({ width: 74 }) }, "Code"),
+          React.createElement("th", { style: thS() }, "Account"),
+          yearTh(curYearLabel),
+          yearTh(priorYearLabel),
+          React.createElement("th", { style: thS({ textAlign: "right", paddingBottom: 7 }) },
+            React.createElement("div", { style: { fontSize: 12.5, fontWeight: 800, color: RPT.ink } }, "Change"),
+            React.createElement("div", { style: { fontSize: 9, fontWeight: 600, color: RPT.subtle, letterSpacing: "0.12em", marginTop: 1 } }, "YoY")
+          )
+        )
+      ),
+      React.createElement("tbody", null,
+        rows.map(function(a) {
+          var cur = accountBalance(a, filteredLedger);
+          var prior = accountBalance(a, priorLedger);
+          return React.createElement("tr", { key: a.id },
+            React.createElement("td", { style: { padding: "8px 16px", fontSize: 11, color: RPT.subtle, fontFamily: "ui-monospace,monospace", borderBottom: "1px solid " + RPT.rule } }, a.code),
+            React.createElement("td", { style: { padding: "8px 16px", color: RPT.textHeavy, borderBottom: "1px solid " + RPT.rule } }, a.name),
+            numTd(cur),
+            numTd(prior, { color: RPT.muted, bold: false }),
+            changeTd(cur, prior)
+          );
+        })
+      ),
+      React.createElement("tfoot", null,
+        React.createElement("tr", null,
+          React.createElement("td", { colSpan: 2, style: { padding: "10px 16px", fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", color: RPT.ink, background: RPT.bgSection, borderTop: "1.5px solid " + RPT.ruleDk, borderBottom: "3px double " + RPT.ink } }, totalLabel),
+          numTd(totalCur,   { bold: true, color: accentColor, bg: RPT.bgSection, borderTop: "1.5px solid " + RPT.ruleDk, borderBottom: "3px double " + RPT.ink }),
+          numTd(totalPrior, { bold: true, color: RPT.muted,   bg: RPT.bgSection, borderTop: "1.5px solid " + RPT.ruleDk, borderBottom: "3px double " + RPT.ink }),
+          changeTd(totalCur, totalPrior, { bold: true, bg: RPT.bgSection, borderTop: "1.5px solid " + RPT.ruleDk, borderBottom: "3px double " + RPT.ink })
+        )
+      )
+    );
+  }
+
+  // Small caption shown above comparative tables
+  function CompCaption() {
+    return React.createElement("div", { style: { fontSize: 11, color: RPT.muted, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } },
+      React.createElement("span", { style: { display: "inline-block", padding: "2px 8px", background: RPT.bgSection, border: "1px solid " + RPT.rule, borderRadius: 20, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: RPT.navy } }, "Comparative"),
+      React.createElement("span", null, "Current period (" + curYearLabel + ") shown against the corresponding period of the preceding year (" + priorYearLabel + ").")
+    );
+  }
+
   return React.createElement("div", { style: { background: "#fff", fontFamily: "Inter, Arial, sans-serif" } },
 
     React.createElement(RptHeader, {
@@ -613,24 +722,32 @@ function NotesReport(props) {
     // Note 4 — Revenue
     NoteCard("4", "Revenue",
       React.createElement("div", null,
-        React.createElement("div", { style: { fontSize: 12, color: RPT.muted, marginBottom: 10 } }, "Revenue by account for the reporting period:"),
-        AcctBreakdownTable(revenueAccts, filteredLedger),
-        totalRev > 0 && React.createElement("div", { style: { marginTop: 12, padding: "10px 14px", background: RPT.greenBg, borderRadius: 6, fontSize: 13 } },
-          React.createElement("span", { style: { color: RPT.muted } }, "Total Revenue: "),
-          React.createElement("span", { style: { fontWeight: 700, color: RPT.green, fontVariantNumeric: "tabular-nums" } }, fmtAED(totalRev))
-        )
+        hasComparative
+          ? React.createElement("div", null, CompCaption(), ComparativeTable(revenueAccts, totalRev, priorTotalRev, "Total Revenue", RPT.green))
+          : React.createElement("div", null,
+              React.createElement("div", { style: { fontSize: 12, color: RPT.muted, marginBottom: 10 } }, "Revenue by account for the reporting period:"),
+              AcctBreakdownTable(revenueAccts, filteredLedger),
+              totalRev > 0 && React.createElement("div", { style: { marginTop: 12, padding: "10px 14px", background: RPT.greenBg, borderRadius: 6, fontSize: 13 } },
+                React.createElement("span", { style: { color: RPT.muted } }, "Total Revenue: "),
+                React.createElement("span", { style: { fontWeight: 700, color: RPT.green, fontVariantNumeric: "tabular-nums" } }, fmtAED(totalRev))
+              )
+            )
       )
     ),
 
     // Note 5 — Major Expenses
     NoteCard("5", "Expenses",
       React.createElement("div", null,
-        React.createElement("div", { style: { fontSize: 12, color: RPT.muted, marginBottom: 10 } }, "Expenses by account for the reporting period:"),
-        AcctBreakdownTable(expenseAccts, filteredLedger),
-        totalExp > 0 && React.createElement("div", { style: { marginTop: 12, padding: "10px 14px", background: RPT.amberBg, borderRadius: 6, fontSize: 13 } },
-          React.createElement("span", { style: { color: RPT.muted } }, "Total Expenses: "),
-          React.createElement("span", { style: { fontWeight: 700, color: RPT.amber, fontVariantNumeric: "tabular-nums" } }, fmtAED(totalExp))
-        )
+        hasComparative
+          ? React.createElement("div", null, CompCaption(), ComparativeTable(expenseAccts, totalExp, priorTotalExp, "Total Expenses", RPT.amber))
+          : React.createElement("div", null,
+              React.createElement("div", { style: { fontSize: 12, color: RPT.muted, marginBottom: 10 } }, "Expenses by account for the reporting period:"),
+              AcctBreakdownTable(expenseAccts, filteredLedger),
+              totalExp > 0 && React.createElement("div", { style: { marginTop: 12, padding: "10px 14px", background: RPT.amberBg, borderRadius: 6, fontSize: 13 } },
+                React.createElement("span", { style: { color: RPT.muted } }, "Total Expenses: "),
+                React.createElement("span", { style: { fontWeight: 700, color: RPT.amber, fontVariantNumeric: "tabular-nums" } }, fmtAED(totalExp))
+              )
+            )
       )
     ),
 
@@ -676,7 +793,9 @@ function NotesReport(props) {
         PolicyItem("These financial statements have not been audited. They represent management accounts prepared from the company's accounting records."),
         PolicyItem("The company operates under UAE law and is subject to UAE Federal Tax Authority regulations including VAT legislation."),
         PolicyItem("There are no contingent liabilities or material post-balance sheet events known to management at the time of preparation, unless specifically disclosed above."),
-        PolicyItem("Comparative figures for prior periods are available through the system's date filter and are not presented in these notes."),
+        PolicyItem(hasComparative
+          ? ("Comparative figures for the corresponding period of the preceding financial year (" + priorYearLabel + ") are presented alongside the current period (" + curYearLabel + ") in the Revenue and Expenses notes, consistent with interim reporting requirements.")
+          : "Comparative figures for prior periods are available by applying a date range in the reporting filter."),
         React.createElement("div", { style: { marginTop: 12, padding: "12px 16px", background: RPT.bgAlt, borderRadius: 8, border: "1px solid " + RPT.rule, fontSize: 12, color: RPT.muted, lineHeight: 1.6 } },
           React.createElement("span", { style: { fontWeight: 700, color: RPT.text } }, "Prepared by: "),
           "Nasama Properties Accounting System v2 · " + generated

@@ -685,6 +685,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       { id: "a2101", code: "2101", name: "Output VAT Payable", type: "Liability", isBank: false, isOutputVAT: true, isInputVAT: false },
       { id: "a2105", code: "2105", name: "VAT Rounding Adjustment", type: "Liability", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a2200", code: "2200", name: "Loan Payable", type: "Liability", isBank: false, isOutputVAT: false, isInputVAT: false },
+      { id: "a2210", code: "2210", name: "Accrued Expenses Payable", type: "Liability", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a3000", code: "3000", name: "Capital Injection", type: "Equity", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a3002", code: "3002", name: "Retained Earnings", type: "Equity", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a3100", code: "3100", name: "Owner Drawings", type: "Equity", isBank: false, isOutputVAT: false, isInputVAT: false },
@@ -1343,6 +1344,70 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         return txn;
       };
 
+      // ACCRUAL — Recognise an incurred-but-unpaid expense (accrual basis).
+      // DR Expense (net) / CR Accrued Expenses Payable (net). VAT is NOT taken
+      // here; input VAT is recognised on settlement (tax-invoice/payment date).
+      const postAccrual = ({ date, memo, gross, vatRate = 0, expenseCode, counterparty = "", plannedExpenseId = "", commit = true }) => {
+        if (!expenseCode) throw new Error("expenseCode is mandatory for an accrual");
+        const expenseA = byCode(expenseCode);
+        const payableA = byCode("2210") || accounts.find(a => /accrued/i.test(a.name || "") && a.type === "Liability");
+        if (!expenseA) throw new Error(`Expense account not found for code: ${expenseCode}`);
+        if (!payableA) throw new Error("Accrued Expenses Payable account (2210) not found");
+
+        const grossC = toCents(gross);
+        if (grossC <= 0) throw new Error("Accrual amount must be positive");
+        const { netC } = computeVATSplit(grossC, vatRate);
+
+        const lines = [
+          makeLine({ accountId: expenseA.id, debit: netC, memo }),
+          makeLine({ accountId: payableA.id, credit: netC, memo }),
+        ];
+        const ref = `AC-${Date.now().toString(36).toUpperCase()}`;
+        const txn = { id: uid(), date, description: `Accrual: ${memo}`, ref, counterparty, tags: "accrual", txnType: "AC", isVoid: false, lines, createdAt: new Date().toISOString(), planned_expense_id: plannedExpenseId };
+        validateBalanced(lines);
+        if (commit) {
+          saveTxn(txn);
+          if (typeof logAudit === "function") logAudit("postAccrual", { expenseCode, txId: txn.id, net: netC }, "system", "system").catch(() => {});
+        }
+        return txn;
+      };
+
+      // ACCRUAL SETTLEMENT — Pay off a previously accrued expense.
+      // DR Accrued Expenses Payable (net) / DR Input VAT / CR Bank (gross).
+      // The expense is NOT touched again (it was recognised at accrual time).
+      const postAccrualSettlement = ({ date, memo, gross, vatRate = 0, paidFromCode = "1002", counterparty = "", plannedExpenseId = "", commit = true }) => {
+        const payableA = byCode("2210") || accounts.find(a => /accrued/i.test(a.name || "") && a.type === "Liability");
+        const bankA = byCode(paidFromCode) || accounts.find(a => a.isBank) || byCode("1001");
+        const roundingA = byCode("2105") || byCode("5605");
+        if (!payableA) throw new Error("Accrued Expenses Payable account (2210) not found");
+        if (!bankA) throw new Error(`Bank account not found for code: ${paidFromCode}`);
+
+        const grossC = toCents(gross);
+        if (grossC <= 0) throw new Error("Payment amount must be positive");
+        const { netC, vatC, roundingAdjustment } = computeVATSplit(grossC, vatRate);
+
+        const lines = [makeLine({ accountId: payableA.id, debit: netC, memo })];
+        if (vatC > 0) {
+          if (!inputVAT) throw new Error("Missing Input VAT account");
+          lines.push(makeLine({ accountId: inputVAT.id, debit: vatC, memo: `VAT — ${memo}` }));
+        }
+        if (roundingAdjustment !== 0) {
+          if (!roundingA) throw new Error("Missing VAT Rounding Adjustment account");
+          if (roundingAdjustment > 0) lines.push(makeLine({ accountId: roundingA.id, debit: roundingAdjustment, memo: "VAT rounding adjustment" }));
+          else lines.push(makeLine({ accountId: roundingA.id, credit: -roundingAdjustment, memo: "VAT rounding adjustment" }));
+        }
+        lines.push(makeLine({ accountId: bankA.id, credit: grossC, memo }));
+
+        const ref = `PV-${Date.now().toString(36).toUpperCase()}`;
+        const txn = { id: uid(), date, description: `Accrual settled: ${memo}`, ref, counterparty, tags: "accrual-settlement", txnType: "PV", isVoid: false, lines, createdAt: new Date().toISOString(), planned_expense_id: plannedExpenseId };
+        validateBalanced(lines);
+        if (commit) {
+          saveTxn(txn);
+          if (typeof logAudit === "function") logAudit("postAccrualSettlement", { txId: txn.id, net: netC, vat: vatC }, "system", "system").catch(() => {});
+        }
+        return txn;
+      };
+
       // BROKER PAYMENT — Paid directly from bank (no AP step)
       const postBrokerPayment = ({ date, deal, brokerAmount, paidFromCode = "1002", memo = "", commit = true }) => {
         if (!deal || !deal.id) throw new Error("deal_id is required for broker payment tracking");
@@ -1481,7 +1546,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         return { passed: issues.length === 0, issues };
       };
 
-      return { post, postSaleReceipt, postPayment, postBrokerPayment, postBankTransfer, reverseTransaction, getVATReport, validateDealRevenueReceipt };
+      return { post, postSaleReceipt, postPayment, postAccrual, postAccrualSettlement, postBrokerPayment, postBankTransfer, reverseTransaction, getVATReport, validateDealRevenueReceipt };
     }
 
     // ── STYLE HELPERS ─────────────────────────────────
