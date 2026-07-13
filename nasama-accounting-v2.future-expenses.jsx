@@ -157,7 +157,7 @@ const feComputeMonthlyEquivalent = (item) => {
 };
 
 // ── FUTURE EXPENSES PAGE ────────────────────────────
-function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, setPlannedExpenses, journal, persistTxn, userRole, userEmail, dark }) {
+function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, setPlannedExpenses, txns, journal, persistTxn, userRole, userEmail, dark }) {
   const [showModal, setShowModal] = useState(false);
   const [showPayModal, setShowPayModal] = useState(false);
   const [editItem, setEditItem] = useState(null);
@@ -165,6 +165,16 @@ function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, se
   const [filter, setFilter] = useState("Active");
   const [searchText, setSearchText] = useState("");
   const isMobile = window.innerWidth <= 768;
+
+  // An item counts as "accrued" only while its accrual entry is still effective:
+  // the txn exists, is not voided, and has not been offset by a live reversal.
+  // This self-heals if the accrual is reversed anywhere (e.g. from Journal Entries).
+  const isAccrualLive = (item) => {
+    if (!item || !item.accrualTxnId) return false;
+    const acc = (txns || []).find(t => t.id === item.accrualTxnId);
+    if (!acc || acc.isVoid) return false;
+    return !(txns || []).some(r => r.reversesTxnId === item.accrualTxnId && !r.isVoid);
+  };
 
   useEffect(() => {
     const h = () => { setEditItem(null); setShowModal(true); };
@@ -294,7 +304,7 @@ function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, se
   // DR Expense (net) / CR Accrued Expenses Payable (net). It then appears in the
   // P&L and as a liability on the Balance Sheet, before any cash is paid.
   const handlePostAccrual = async (item) => {
-    if (item.accrualTxnId) { toast("This expense has already been accrued", "warning"); return; }
+    if (isAccrualLive(item)) { toast("This expense has already been accrued", "warning"); return; }
     const payable = (accounts || []).find(a => a.code === "2210");
     if (!payable) { toast("Preparing the Accrued Expenses account — please click Accrue again in a moment", "info"); return; }
     const expenseCode = item.category && item.category !== "OTHER" ? item.category : "";
@@ -445,12 +455,13 @@ function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, se
           </td></tr>}
           {filtered.map(item => {
             const status = item.computedStatus;
+            const accrued = isAccrualLive(item);
             return <tr key={item.id} style={{ background: status === "Overdue" ? "#FEF2F2" : "transparent" }}>
               <td style={C.td}>
                 <span style={C.badge(FE_STATUS_BADGE[status] || "neutral")}>
                   {FE_STATUS_ICON[status] || ""} {status}
                 </span>
-                {item.accrualTxnId && status !== "Paid" && <div style={{ marginTop: 4 }}>
+                {accrued && status !== "Paid" && <div style={{ marginTop: 4 }}>
                   <span style={C.badge("info")} title="Recognised as an expense and accrued liability; awaiting payment">🧾 Accrued</span>
                 </div>}
               </td>
@@ -474,7 +485,7 @@ function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, se
               <td style={C.td}>{item.payeeName || "—"}</td>
               <td style={C.td}>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {hasPermission(userRole, 'expenses.create') && status !== "Paid" && status !== "Cancelled" && !item.accrualTxnId &&
+                  {hasPermission(userRole, 'expenses.create') && status !== "Paid" && status !== "Cancelled" && !accrued &&
                     <button style={C.btn("secondary", true)} title="Recognise this unpaid expense now (DR expense / CR accrued payable)" onClick={() => handlePostAccrual(item)}>🧾 Accrue</button>
                   }
                   {hasPermission(userRole, 'expenses.create') && status !== "Paid" && status !== "Cancelled" &&
@@ -513,7 +524,7 @@ function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, se
     {/* Record Payment Modal */}
     {showPayModal && payItem && <RecordPaymentModal
       item={payItem}
-      isAccrued={!!payItem.accrualTxnId}
+      isAccrued={isAccrualLive(payItem)}
       accounts={accounts}
       ledger={ledger}
       journal={journal}

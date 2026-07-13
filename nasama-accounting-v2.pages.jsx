@@ -3078,14 +3078,21 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
   }, []);
 
   const filtered = useMemo(() => {
+    // Ids that have been offset by a live reversal entry (contra-entry model).
+    const reversedBy = new Set(txns.filter(t => t.reversesTxnId && !t.isVoid).map(t => t.reversesTxnId));
     const dateTxns = txns.filter(t => (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to));
-    const rows = (filter === "All" ? dateTxns : dateTxns.filter(t => t.txnType === filter)).map(t => ({
-      ...t,
-      totalDr: t.lines?.reduce((s, l) => s + (l.debit || 0), 0) || 0,
-      typeLabel: TXN_TYPES[t.txnType]?.label || t.txnType || "?",
-      statusLabel: t.isVoid ? "VOID" : "Posted",
-      actionLabel: t.isVoid ? "" : [hasPermission(userRole, 'canEditTxns') ? "Edit" : "", hasPermission(userRole, 'canVoidTxns') ? "Reverse / Delete" : ""].filter(Boolean).join(" / ")
-    }));
+    const rows = (filter === "All" ? dateTxns : dateTxns.filter(t => t.txnType === filter)).map(t => {
+      const isReversed = reversedBy.has(t.id);   // original offset by a reversal
+      const isReversal = !!t.reversesTxnId;      // this row is a reversal entry
+      const locked = t.isVoid || isReversed || isReversal;
+      return {
+        ...t,
+        totalDr: t.lines?.reduce((s, l) => s + (l.debit || 0), 0) || 0,
+        typeLabel: TXN_TYPES[t.txnType]?.label || t.txnType || "?",
+        statusLabel: t.isVoid ? "VOID" : isReversed ? "Reversed" : isReversal ? "Reversal" : "Posted",
+        actionLabel: locked ? "" : [hasPermission(userRole, 'canEditTxns') ? "Edit" : "", hasPermission(userRole, 'canVoidTxns') ? "Reverse / Delete" : ""].filter(Boolean).join(" / ")
+      };
+    });
     const getVal = (row) => {
       switch (sortKey) {
         case "date": return row.date || "";
@@ -3123,26 +3130,27 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
   };
 
   const handleReverse = async (txnId) => {
-    if (!confirm("Create a reversal entry? The original will be marked as VOID.")) return;
+    const target = txns.find(t => t.id === txnId);
+    if (target && target.reversesTxnId) { toast("This entry is itself a reversal — it can't be reversed", "warning"); return; }
+    if (txns.some(t => t.reversesTxnId === txnId && !t.isVoid)) { toast("This transaction has already been reversed", "warning"); return; }
+    if (!confirm("Create a reversal entry?\n\nA dated contra entry will be posted that offsets the original. Both stay visible and net to zero.")) return;
     try {
-      const reversalTxn  = journal.reverseTransaction(txnId, todayStr(), "Reversal", false);
-      const original     = txns.find(t => t.id === txnId);
-      const voidedOrig   = JSON.parse(JSON.stringify({ ...original, isVoid: true }));
+      // Contra-entry model: post ONLY the reversal. The original stays live so the
+      // two net to zero in the ledger (buildLedger excludes voided txns, so voiding
+      // the original AND posting a reversal would double-count).
+      const reversalTxn   = journal.reverseTransaction(txnId, todayStr(), "Reversal", false);
       const cleanReversal = JSON.parse(JSON.stringify(reversalTxn));
-      // Single atomic batch — either both write or neither does
       await window.fsBatchWrite([
-        { col: 'transactions', id: voidedOrig.id,    data: voidedOrig },
         { col: 'transactions', id: cleanReversal.id, data: cleanReversal },
       ]);
       setTxns(prev => {
-        const next = prev.map(t => t.id === voidedOrig.id ? voidedOrig : t);
-        const withRev = next.some(t => t.id === cleanReversal.id)
-          ? next.map(t => t.id === cleanReversal.id ? cleanReversal : t)
-          : [...next, cleanReversal];
+        const withRev = prev.some(t => t.id === cleanReversal.id)
+          ? prev.map(t => t.id === cleanReversal.id ? cleanReversal : t)
+          : [...prev, cleanReversal];
         ls_set('transactions', withRev);
         return withRev;
       });
-      toast("Transaction reversed and voided", "success");
+      toast("Reversal posted — the original is now offset to zero", "success");
     } catch (err) { toast(err.message, "error"); }
   };
   const handleDelete = async (txnId) => {
@@ -3211,7 +3219,11 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
             {filtered.length === 0 && <tr><td colSpan={8} style={{ ...C.td, textAlign: "center", padding: 40, color: "#9CA3AF" }}>No journal entries found.</td></tr>}
             {filtered.map(t => {
               const typeInfo = TXN_TYPES[t.txnType] || { label: t.txnType || "?" };
-              return <tr key={t.id} style={{ opacity: t.isVoid ? 0.5 : 1 }}>
+              const isReversalRow = t.statusLabel === "Reversal";
+              const canEditReverse = t.statusLabel === "Posted";        // Edit / Reverse only on live, un-reversed entries
+              const canDelete = t.statusLabel === "Posted" || isReversalRow; // deleting a reversal cleanly un-offsets the original
+              const statusBadge = t.statusLabel === "VOID" ? "danger" : t.statusLabel === "Reversed" ? "warning" : t.statusLabel === "Reversal" ? "neutral" : "success";
+              return <tr key={t.id} style={{ opacity: (t.isVoid || t.statusLabel === "Reversed") ? 0.5 : 1 }}>
                 <td style={{ ...C.td, ...journalCol.date }}>{fmtDate(t.date)}</td>
                 <td style={{ ...C.td, ...journalCol.ref }}>
                   <span title={t.ref || ""} style={{ ...C.badge("info"), display: "inline-block", maxWidth: "100%", whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.45 }}>
@@ -3222,12 +3234,12 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
                 <td style={{ ...C.td, ...journalCol.description }} title={t.description || ""}>{t.description || "—"}</td>
                 <td style={{ ...C.td, ...journalCol.party }} title={t.counterparty || ""}>{t.counterparty || "—"}</td>
                 <td style={{ ...C.td, ...journalCol.amount }}>{fmtAED(t.totalDr)}</td>
-                <td style={{ ...C.td, ...journalCol.status }}>{t.isVoid ? <span style={C.badge("danger")}>VOID</span> : <span style={C.badge("success")}>Posted</span>}</td>
+                <td style={{ ...C.td, ...journalCol.status }}><span style={C.badge(statusBadge)}>{t.statusLabel}</span></td>
                 <td style={{ ...C.td, ...journalCol.actions }}>
-                  {!t.isVoid && hasPermission(userRole, 'canEditTxns') && <button style={{ ...C.btn("secondary", true), marginRight: 4 }} onClick={() => setEditTxnId(t.id)}>Edit</button>}
-                  {!t.isVoid && hasPermission(userRole, 'canVoidTxns') && <>
-                    <button style={{ ...C.btn("danger", true), marginRight: 4, background: "#D97706" }} onClick={() => handleReverse(t.id)}>Reverse</button>
-                    <button style={C.btn("danger", true)} onClick={() => handleDelete(t.id)}>Delete</button>
+                  {canEditReverse && hasPermission(userRole, 'canEditTxns') && <button style={{ ...C.btn("secondary", true), marginRight: 4 }} onClick={() => setEditTxnId(t.id)}>Edit</button>}
+                  {hasPermission(userRole, 'canVoidTxns') && <>
+                    {canEditReverse && <button style={{ ...C.btn("danger", true), marginRight: 4, background: "#D97706" }} onClick={() => handleReverse(t.id)}>Reverse</button>}
+                    {canDelete && <button style={C.btn("danger", true)} onClick={() => handleDelete(t.id)}>Delete</button>}
                   </>}
                 </td>
               </tr>;
@@ -5923,6 +5935,39 @@ function App({ userRole, userAccess, userEmail, signOut }) {
 
     return () => { mounted = false; clearTimeout(safety); unsubs.forEach(u => { try { u(); } catch { } }); };
   }, []);
+
+  // One-time cleanup (reversal_fix_v1): the old Reverse action both posted a
+  // reversal entry AND voided the original. Because buildLedger excludes voided
+  // txns, that double-counted the reversal. The model is now contra-entry only.
+  // Here we un-void any original that has a live reversal, and backfill the
+  // reversesTxnId link on legacy reversal entries so status/derivation work.
+  const reversalFixRan = useRef(false);
+  useEffect(() => {
+    if (!fbLoaded || reversalFixRan.current) return;
+    if (localStorage.getItem('reversal_fix_v1')) { reversalFixRan.current = true; return; }
+    if (!Array.isArray(txns) || txns.length === 0) return;
+    reversalFixRan.current = true;
+    const byRef = new Map();
+    txns.forEach(t => { if (t.ref && !t.reversesTxnId) byRef.set(t.ref, t); });
+    const patched = new Map();
+    txns.forEach(r => {
+      const m = /^REV-(.+)$/.exec(r.ref || "");
+      if (!m) return;
+      const orig = byRef.get(m[1]);
+      if (!orig || orig.reversesTxnId) return; // original must not itself be a reversal
+      let newR = r, newO = orig;
+      if (!r.reversesTxnId) newR = { ...newR, reversesTxnId: orig.id };
+      if (orig.isVoid) newO = { ...newO, isVoid: false };
+      if (newR !== r) patched.set(r.id, newR);
+      if (newO !== orig) patched.set(orig.id, newO);
+    });
+    if (patched.size === 0) { localStorage.setItem('reversal_fix_v1', '1'); return; }
+    const batch = [...patched.values()].map(t => ({ col: 'transactions', id: t.id, data: JSON.parse(JSON.stringify(t)) }));
+    window.fsBatchWrite(batch).then(() => {
+      setTxns(prev => { const next = prev.map(t => patched.get(t.id) || t); ls_set('transactions', next); return next; });
+      localStorage.setItem('reversal_fix_v1', '1');
+    }).catch(err => { console.error('reversal_fix_v1', err); reversalFixRan.current = false; });
+  }, [fbLoaded, txns]);
 
   // User presence tracking
   useEffect(() => {

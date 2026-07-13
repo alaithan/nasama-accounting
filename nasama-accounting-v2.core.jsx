@@ -1455,7 +1455,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
           id: uid(), accountId: l.accountId, debit: l.credit || 0, credit: l.debit || 0,
           memo: `Reversal: ${original.ref || txnId}`, deal_id: l.deal_id, broker_id: l.broker_id, developer_id: l.developer_id
         }));
-        const txn = { id: uid(), date: reverseDate, description: `${reason}: ${original.description}`, ref: `REV-${original.ref || txnId}`, counterparty: original.counterparty || "", tags: `${original.tags || ""} reversal`.trim(), txnType: "JV", isVoid: false, lines, createdAt: new Date().toISOString() };
+        const txn = { id: uid(), date: reverseDate, description: `${reason}: ${original.description}`, ref: `REV-${original.ref || txnId}`, counterparty: original.counterparty || "", tags: `${original.tags || ""} reversal`.trim(), txnType: "JV", isVoid: false, lines, createdAt: new Date().toISOString(), reversesTxnId: original.id };
         validateBalanced(lines);
         if (commit) saveTxn(txn);
         return txn;
