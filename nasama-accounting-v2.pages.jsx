@@ -3860,9 +3860,25 @@ function VATPage({ accounts, txns, ledger, settings }) {
 // ╔══════════════════════════════════════════════════╗
 //  PERFORMANCE PAGE
 // ╚══════════════════════════════════════════════════╝
-function PerformancePage({ deals, txns, accounts, budgets, setPage }) {
+function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) {
   const STAGE_COLOR = { "Lead": "#94A3B8", "EOI": "#60A5FA", "Booking Form Signed": "#818CF8", "First Payment Paid": "#A78BFA", "MOU Signed": "#F59E0B", "SPA Signed": "#F97316", "Handover": "#FB923C", "Commission Earned": "#34D399", "Commission Collected": "#059669", "Cancelled": "#EF4444", "Booked": "#818CF8" };
   const TYPE_COLOR = { "Off-Plan": "#2563EB", "Secondary": "#D97706", "Rental": "#059669" };
+
+  // ── Period filter ────────────────────────────────
+  // Historical closed deals span several years; let the decision-maker scope every
+  // KPI/leaderboard below to a single sale year (by deal created_at) so an old
+  // backlog doesn't skew the current picture. Everything downstream reads `deals`.
+  const dealYear = d => String(d && d.created_at || "").slice(0, 4);
+  const availableYears = useMemo(() => {
+    const ys = new Set();
+    (allDeals || []).forEach(d => { const y = dealYear(d); if (/^\d{4}$/.test(y)) ys.add(y); });
+    return [...ys].sort();
+  }, [allDeals]);
+  const [perfYear, setPerfYear] = usePersistedState("perf_year", "all");
+  const deals = useMemo(
+    () => perfYear === "all" ? (allDeals || []) : (allDeals || []).filter(d => dealYear(d) === perfYear),
+    [allDeals, perfYear]
+  );
 
   // ── Core KPIs ────────────────────────────────────
   const totalDeals = deals.length;
@@ -3900,14 +3916,20 @@ function PerformancePage({ deals, txns, accounts, budgets, setPage }) {
       const ty = d.type || "Other";
       byMonth[k][ty] = (byMonth[k][ty] || 0) + 1;
     });
-    const now = new Date();
     const out = [];
-    for (let i = 11; i >= 0; i--) {
-      const dt = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const push = dt => {
       const k = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
       const t = byMonth[k] || {};
       const offplan = t["Off-Plan"] || 0, secondary = t["Secondary"] || 0, rental = t["Rental"] || 0;
       out.push({ label: dt.toLocaleDateString("en-GB", { month: "short", year: "2-digit" }), offplan, secondary, rental, count: offplan + secondary + rental });
+    };
+    if (perfYear !== "all" && /^\d{4}$/.test(perfYear)) {
+      // A specific sale year is selected: show Jan–Dec of that year.
+      for (let m = 0; m < 12; m++) push(new Date(Number(perfYear), m, 1));
+    } else {
+      // All Time: rolling last 12 months.
+      const now = new Date();
+      for (let i = 11; i >= 0; i--) push(new Date(now.getFullYear(), now.getMonth() - i, 1));
     }
     return out;
   })();
@@ -4052,6 +4074,24 @@ function PerformancePage({ deals, txns, accounts, budgets, setPage }) {
     <div>
       <PageHeader title="Performance" sub="Deal pipeline, broker output, and commission analytics" />
 
+      {/* ── Period filter (by deal sale year) ── */}
+      {availableYears.length > 1 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 20, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, color: "#98A2B3", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.09em", marginRight: 2 }}>Period</span>
+          {["all", ...availableYears].map(y => {
+            const active = perfYear === y;
+            return <button key={y} onClick={() => setPerfYear(y)} style={{
+              padding: "6px 16px", borderRadius: 999, fontSize: 13, fontWeight: 600, cursor: "pointer",
+              border: `1px solid ${active ? NAVY : "#E5E7EB"}`, background: active ? NAVY : "#fff",
+              color: active ? "#fff" : "#475569", transition: "all .12s",
+            }}>{y === "all" ? "All Time" : y}</button>;
+          })}
+          <span style={{ fontSize: 12, color: "#98A2B3", marginLeft: 6 }}>
+            {deals.length} deal{deals.length === 1 ? "" : "s"}{perfYear !== "all" ? ` in ${perfYear}` : ""}
+          </span>
+        </div>
+      )}
+
       {/* ── Hero Banner ── */}
       <div style={{ ...C.card, marginBottom: 24, padding: 28, background: "linear-gradient(140deg, #0C0F1E 0%, #1a2a6c 50%, #1a4734 100%)", color: "#fff", border: "none", position: "relative", overflow: "hidden", boxShadow: "0 20px 48px rgba(8,12,26,.3)" }}>
         <div style={{ position: "absolute", top: -60, right: -20, width: 220, height: 220, borderRadius: "50%", background: "rgba(201,160,68,.07)" }} />
@@ -4084,7 +4124,7 @@ function PerformancePage({ deals, txns, accounts, budgets, setPage }) {
 
       {/* ── KPI Tiles ── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14, marginBottom: 22 }}>
-        {kpiTile("Total Deals", totalDeals, "All time across all stages", "#2563EB")}
+        {kpiTile("Total Deals", totalDeals, perfYear === "all" ? "All time across all stages" : `${perfYear} · all stages`, "#2563EB")}
         {kpiTile("Total Transaction Value", fmtAED(totalTV), "Sum of all property values", "#7C3AED")}
         {kpiTile("Expected Commission", fmtAED(totalEC), "Gross commission expected", GOLD)}
         {kpiTile("Commission Collected", fmtAED(collectedEC), `${collected.length} deals fully closed`, "#059669")}
@@ -4139,7 +4179,7 @@ function PerformancePage({ deals, txns, accounts, budgets, setPage }) {
       </div>
 
       {/* ── Deals per Month ── */}
-      {sectionCard("Deals per Month", `Deals created per month — all stages included · ${dealsPerMonthTotal} in the last 12 months`,
+      {sectionCard("Deals per Month", `Deals created per month — all stages included · ${dealsPerMonthTotal} ${perfYear === "all" ? "in the last 12 months" : `in ${perfYear}`}`,
         <div>
           <div style={{ display: "flex", gap: 16, padding: "0 6px 10px", fontSize: 10.5, color: "#6B7280", flexWrap: "wrap" }}>
             {["Off-Plan", "Secondary", "Rental"].map(t => <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: TYPE_COLOR[t] }} />{t}</span>)}
