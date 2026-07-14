@@ -1306,7 +1306,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
       // PAYMENT VOUCHER — Expense paid immediately (no AP step)
       // DR Expense (net) / DR Input VAT / CR Bank (gross)
-      const postPayment = ({ date, memo, gross, vatRate = 0, expenseCode, paidFromCode = "1002", counterparty = "", commit = true }) => {
+      const postPayment = ({ date, memo, gross, vatRate = 0, expenseCode, paidFromCode = "1002", counterparty = "", broker_id = "", commit = true }) => {
         if (!expenseCode) throw new Error("expenseCode is mandatory for a payment voucher");
 
         const expenseA = byCode(expenseCode);
@@ -1319,7 +1319,8 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         if (grossC <= 0) throw new Error("Gross amount must be positive");
         const { netC, vatC, roundingAdjustment } = computeVATSplit(grossC, vatRate);
 
-        const lines = [makeLine({ accountId: expenseA.id, debit: netC, memo })];
+        const brokerId = broker_id || undefined; // link the expense to a broker record when chosen
+        const lines = [makeLine({ accountId: expenseA.id, debit: netC, memo, broker_id: brokerId })];
         if (vatC > 0) {
           if (!inputVAT) throw new Error("Missing Input VAT account");
           lines.push(makeLine({ accountId: inputVAT.id, debit: vatC, memo: `VAT — ${memo}` }));
@@ -1335,7 +1336,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         lines.push(makeLine({ accountId: bankA.id, credit: grossC, memo }));
 
         const ref = `PV-${Date.now().toString(36).toUpperCase()}`;
-        const txn = { id: uid(), date, description: `Payment: ${memo}`, ref, counterparty, tags: "payment", txnType: "PV", isVoid: false, lines, createdAt: new Date().toISOString() };
+        const txn = { id: uid(), date, description: `Payment: ${memo}`, ref, counterparty, tags: "payment", txnType: "PV", isVoid: false, lines, createdAt: new Date().toISOString(), ...(brokerId ? { broker_id: brokerId } : {}) };
         validateBalanced(lines);
         if (commit) {
           saveTxn(txn);

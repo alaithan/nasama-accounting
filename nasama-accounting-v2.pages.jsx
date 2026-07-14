@@ -2254,10 +2254,10 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
 // ╔══════════════════════════════════════════════════╗
 //  PAYMENTS PAGE (replaces Expenses & Bills — cash-settled)
 // ╚══════════════════════════════════════════════════╝
-function PaymentsPage({ accounts, txns, saveTxn, persistTxn, journal, vendors, userRole }) {
+function PaymentsPage({ accounts, txns, saveTxn, persistTxn, journal, vendors, brokers, userRole }) {
   const [show, setShow] = useState(false);
   const [preview, setPreview] = useState(null);
-  const [form, setForm] = useState({ date: todayStr(), memo: "", gross: "", vatRate: 0, expenseCode: "", paidFromCode: "1002", counterparty: "" });
+  const [form, setForm] = useState({ date: todayStr(), memo: "", gross: "", vatRate: 0, expenseCode: "", paidFromCode: "1002", counterparty: "", broker_id: "" });
 
   useEffect(() => {
     const h = () => setShow(true);
@@ -2285,7 +2285,7 @@ function PaymentsPage({ accounts, txns, saveTxn, persistTxn, journal, vendors, u
       await persistTxn(txn);
       toast("Payment posted!", "success");
       setShow(false); setPreview(null);
-      setForm({ date: todayStr(), memo: "", gross: "", vatRate: 0, expenseCode: "", paidFromCode: "1002", counterparty: "" });
+      setForm({ date: todayStr(), memo: "", gross: "", vatRate: 0, expenseCode: "", paidFromCode: "1002", counterparty: "", broker_id: "" });
     } catch (err) { toast(err.message, "error"); }
   };
 
@@ -2327,9 +2327,13 @@ function PaymentsPage({ accounts, txns, saveTxn, persistTxn, journal, vendors, u
               {bankAccounts.length    > 0 && <optgroup label="Bank Accounts">{bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
               {cashAccountsPmt.length > 0 && <optgroup label="Cash Accounts">{cashAccountsPmt.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
             </Sel></div>
-            <div><label style={C.label}>Vendor / Payee</label><Sel value={form.counterparty} onChange={e => setForm(p => ({ ...p, counterparty: e.target.value }))}>
+            <div><label style={C.label}>Vendor / Payee</label><Sel value={form.counterparty} onChange={e => setForm(p => ({ ...p, counterparty: e.target.value, broker_id: "" }))}>
               <option value="">— Optional —</option>
               {vendors.map(v => <option key={v.id} value={v.name}>{v.name}</option>)}
+            </Sel></div>
+            <div><label style={C.label}>Broker</label><Sel value={form.broker_id} onChange={e => { const br = (brokers || []).find(b => b.id === e.target.value); setForm(p => ({ ...p, broker_id: e.target.value, counterparty: br ? br.name : (p.broker_id ? "" : p.counterparty) })); }}>
+              <option value="">— Optional —</option>
+              {(brokers || []).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
             </Sel></div>
           </div>
         </div>
