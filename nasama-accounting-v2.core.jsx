@@ -373,7 +373,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       const existingKeys = new Set((existingDeals || []).map(dealImportKey));
       return (candidateDeals || []).filter(d => !existingKeys.has(dealImportKey(d)));
     };
-    const DEAL_RESEED_ENABLED = true;
+    const DEAL_RESEED_ENABLED = false;
     const TARGET_DEAL_COUNTS = { "Off-Plan": 17, "Secondary": 8, "Rental": 8 };
     const isLegacySeedDealId = id => /^d\d+$/i.test((id || "").toString());
     const countDealsByType = deals => ({
