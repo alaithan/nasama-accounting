@@ -978,7 +978,10 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
     if (!pipelineSeedDeals.length) { toast("No pipeline seed data loaded", "warning"); return; }
     if (!missingPipelineDeals.length) { toast("All pasted pipeline deals are already in the database", "success"); return; }
     setDealMutationLabel("Deal reseed");
-    setDeals(prev => [...prev, ...findMissingPipelineDeals(prev, pipelineSeedDeals)]);
+    // Resolve broker/customer/developer links against the current master lists as we
+    // append, so imported deals show matched parties (and blank unmatched ones) without
+    // tripping the "mismatched linked fields" warning. Original names are kept in notes.
+    setDeals(prev => [...prev, ...findMissingPipelineDeals(prev, pipelineSeedDeals).map(normalizeLinkedDealRefs)]);
     toast(`Seeded ${missingPipelineDeals.length} missing deals to Firestore`, "success");
     logAudit("deal_reseed", { inserted: missingPipelineDeals.length }, userRole, userEmail);
   };
