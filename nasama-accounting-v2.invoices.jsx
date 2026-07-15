@@ -152,8 +152,8 @@ function invBlankDoc(settings) {
     invoiceNumberRaw: 0,
     invoiceDate:      todayStr(),
     supplyDate:       todayStr(),
-    dueDate:          invAddDays(todayStr(), 15),
-    paymentTerms:     "Payment due within 15 days of the invoice date.",
+    dueDate:          invAddDays(todayStr(), 30),
+    paymentTerms:     "Payment due within 30 days of the invoice date.",
     status:           "draft",
     billFrom: {
       companyName: settings?.company    || "NASAMA PROPERTIES LLC",
@@ -270,8 +270,8 @@ function InvoicePreviewDoc({ invoice }) {
   const T  = invTotals(lineItems);
   // Derived, with fallbacks so invoices created before these fields still render.
   const supplyDate   = invoice.supplyDate || invoiceDate;
-  const dueDate      = invoice.dueDate || invAddDays(invoiceDate, 15);
-  const paymentTerms = invoice.paymentTerms || "Payment due within 15 days of the invoice date.";
+  const dueDate      = invoice.dueDate || invAddDays(invoiceDate, 30);
+  const paymentTerms = invoice.paymentTerms || "Payment due within 30 days of the invoice date.";
 
   const logoSrc = typeof NASAMA_WORDMARK_SRC !== "undefined" ? NASAMA_WORDMARK_SRC : null;
 
@@ -666,7 +666,7 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
         <div style={{ ...g3, marginTop: 16 }}>
           <div><label style={lbl}>Date of Supply</label><input type="date" style={inp} value={inv.supplyDate || ""} onChange={e => setPath("supplyDate", e.target.value)} /></div>
           <div><label style={lbl}>Due Date</label><input type="date" style={inp} value={inv.dueDate || ""} onChange={e => setPath("dueDate", e.target.value)} /></div>
-          <div><label style={lbl}>Payment Terms</label><input style={inp} value={inv.paymentTerms || ""} onChange={e => setPath("paymentTerms", e.target.value)} placeholder="e.g. Payment due within 15 days" /></div>
+          <div><label style={lbl}>Payment Terms</label><input style={inp} value={inv.paymentTerms || ""} onChange={e => setPath("paymentTerms", e.target.value)} placeholder="e.g. Payment due within 30 days" /></div>
         </div>
       </div>
 
