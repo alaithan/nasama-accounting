@@ -866,6 +866,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
   const [edit, setEdit] = useState(null);
   // Filter + sort persist across navigation; default sort = newest deals first.
   const [filter, setFilter] = usePersistedState("deals_filter", "All");
+  const [dealYear, setDealYear] = usePersistedState("deals_year", String(new Date().getFullYear()));
   const [sortKey, setSortKey] = usePersistedState("deals_sortKey", "date");
   const [sortDir, setSortDir] = usePersistedState("deals_sortDir", "desc");
   const [cardDeal, setCardDeal] = useState(null);
@@ -1055,7 +1056,16 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
     else { setSortKey(key); setSortDir("asc"); }
   };
 
-  const filtered = filter === "All" ? normalizedDeals : normalizedDeals.filter(d => d.type === filter || d.stage === filter);
+  // Period (sale year) filter — layered before the type/stage filter. Defaults to
+  // the current year so the historical backlog doesn't dominate the pipeline view.
+  const dealYearOf = d => String(d && d.created_at || "").slice(0, 4);
+  const availableDealYears = useMemo(() => {
+    const ys = new Set();
+    (normalizedDeals || []).forEach(d => { const y = dealYearOf(d); if (/^\d{4}$/.test(y)) ys.add(y); });
+    return [...ys].sort();
+  }, [normalizedDeals]);
+  const yearFiltered = dealYear === "all" ? normalizedDeals : normalizedDeals.filter(d => dealYearOf(d) === dealYear);
+  const filtered = filter === "All" ? yearFiltered : yearFiltered.filter(d => d.type === filter || d.stage === filter);
   const sortedDeals = useMemo(() => {
     const getSortValue = (deal, key) => {
       switch (key) {
@@ -1097,6 +1107,21 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
       {hasPermission(userRole, 'sales.edit') && DEAL_RESEED_ENABLED && !!pipelineSeedDeals.length && <button style={C.btn("secondary")} onClick={seedMissingPipelineDeals}>Seed Missing Deals ({missingPipelineDeals.length})</button>}
       {hasPermission(userRole, 'sales.create') && <button style={C.btn()} onClick={() => { setEdit(null); setShow(true); }}>+ New Deal</button>}
     </PageHeader>
+
+    {availableDealYears.length > 1 && (
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: "#98A2B3", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.09em", marginRight: 2 }}>Period</span>
+        {["all", ...availableDealYears].map(y => {
+          const active = dealYear === y;
+          return <button key={y} onClick={() => setDealYear(y)} style={{
+            padding: "6px 16px", borderRadius: 999, fontSize: 13, fontWeight: 600, cursor: "pointer",
+            border: `1px solid ${active ? NAVY : "#E5E7EB"}`, background: active ? NAVY : "#fff",
+            color: active ? "#fff" : "#475569", transition: "all .12s",
+          }}>{y === "all" ? "All Time" : y}</button>;
+        })}
+        <span style={{ fontSize: 12, color: "#98A2B3", marginLeft: 6 }}>{yearFiltered.length} deal{yearFiltered.length === 1 ? "" : "s"}{dealYear !== "all" ? ` in ${dealYear}` : ""}</span>
+      </div>
+    )}
 
     <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
       {["All", ...DEAL_TYPES].map(t => {
