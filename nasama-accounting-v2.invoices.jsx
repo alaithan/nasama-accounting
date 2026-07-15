@@ -1251,7 +1251,7 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
                 // as settled / locked and shouldn't be edited.
                 const isPaid = (receiptsByInvoiceId.get(inv.id) || []).length > 0;
                 return (
-                <tr key={inv.id} title={isPaid ? "Paid — receipt recorded. Best not to edit." : undefined} style={{ borderTop: "1px solid #F2F4F7", background: isPaid ? "#F3F4F6" : undefined, color: isPaid ? "#6B7280" : undefined }}>
+                <tr key={inv.id} title={isPaid ? "Paid — receipt recorded. Best not to edit." : undefined} style={{ borderTop: "1px solid #F2F4F7", background: isPaid ? "#FEE2E2" : undefined, color: isPaid ? "#991B1B" : undefined }}>
                   <td style={C.td}><strong style={{ color: "#C9A044", fontFamily: "monospace", fontSize: 13 }}>{inv.invoiceNumber}</strong></td>
                   <td style={C.td}>{invFmtDate(inv.invoiceDate)}</td>
                   <td style={C.td}>{inv.invoicedTo?.companyName || "—"}</td>
