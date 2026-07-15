@@ -859,7 +859,7 @@ function LinkReceiptModal({ invoice, txns, deals, accounts, linked, onLink, onUn
 
   return (
     <div style={C.modal} onClick={onClose}>
-      <div style={C.mbox(860)} onClick={e => e.stopPropagation()}>
+      <div style={{ ...C.mbox(1140), maxHeight: "92vh" }} onClick={e => e.stopPropagation()}>
         <div style={C.mhdr}>
           <span style={{ fontWeight: 700, fontSize: 16 }}>Receipts for Invoice #{invoice.invoiceNumber}</span>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
@@ -884,11 +884,11 @@ function LinkReceiptModal({ invoice, txns, deals, accounts, linked, onLink, onUn
             <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>Linked receipts</div>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
               <colgroup>
-                <col style={{ width: 74 }} />
-                <col style={{ width: 96 }} />
+                <col style={{ width: 108 }} />
+                <col style={{ width: 160 }} />
                 <col />
-                <col style={{ width: 104 }} />
-                <col style={{ width: 76 }} />
+                <col style={{ width: 120 }} />
+                <col style={{ width: 84 }} />
               </colgroup>
               <tbody>
                 {(linked || []).map(t => (
@@ -914,12 +914,12 @@ function LinkReceiptModal({ invoice, txns, deals, accounts, linked, onLink, onUn
             ? <div style={{ padding: 24, textAlign: "center", color: "#9CA3AF", fontSize: 13 }}>No unlinked bank collections available. {onCreateNew && "Use “+ New receipt” below to record a new collection."}</div>
             : <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
                 <colgroup>
-                  <col style={{ width: 74 }} />
-                  <col style={{ width: 96 }} />
+                  <col style={{ width: 108 }} />
+                  <col style={{ width: 160 }} />
                   <col />
-                  <col style={{ width: 104 }} />
-                  <col style={{ width: 92 }} />
-                  <col style={{ width: 62 }} />
+                  <col style={{ width: 120 }} />
+                  <col style={{ width: 84 }} />
+                  <col style={{ width: 72 }} />
                 </colgroup>
                 <thead><tr>
                   {["Date", "Receipt", "Deal / Property", "Received", "Match", ""].map((h, i) => <th key={i} style={{ ...C.th, textAlign: i === 3 ? "right" : "left" }}>{h}</th>)}
