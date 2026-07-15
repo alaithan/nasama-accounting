@@ -1161,6 +1161,9 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
   }, [normalizedDeals]);
   const yearFiltered = dealYear === "all" ? normalizedDeals : normalizedDeals.filter(d => dealYearOf(d) === dealYear);
   const filtered = filter === "All" ? yearFiltered : yearFiltered.filter(d => d.type === filter || d.stage === filter);
+  // Label + filename reflect both the period and the active type/stage filter, since
+  // the CEO report exports exactly the currently-filtered set.
+  const reportPeriodLabel = `${dealYear === "all" ? "All periods" : dealYear}${filter !== "All" ? " · " + filter : ""}`;
   const sortedDeals = useMemo(() => {
     const getSortValue = (deal, key) => {
       switch (key) {
@@ -1191,13 +1194,14 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
   </th>;
 
   const handleExportPdf = async () => {
-    if (!yearFiltered.length) { toast("No deals in the selected period to export.", "warning"); return; }
+    if (!filtered.length) { toast("No deals match the current filters to export.", "warning"); return; }
     setPdfBusy(true);
     try {
       const pdf = await captureElementToPdf(DEALS_REPORT_ID);
       if (pdf) {
-        pdf.save(`Nasama_Deals_Report_${dealYear === "all" ? "AllTime" : dealYear}.pdf`);
-        logAudit("deals_report_export", { period: dealYear, count: yearFiltered.length }, userRole, userEmail);
+        const suffix = `${dealYear === "all" ? "AllTime" : dealYear}${filter !== "All" ? "_" + filter.replace(/\s+/g, "") : ""}`;
+        pdf.save(`Nasama_Deals_Report_${suffix}.pdf`);
+        logAudit("deals_report_export", { period: dealYear, filter, count: filtered.length }, userRole, userEmail);
       }
     } finally { setPdfBusy(false); }
   };
@@ -1242,7 +1246,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
     {showReport && <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 1200, display: "flex", flexDirection: "column", backdropFilter: "blur(4px)" }} onClick={() => setShowReport(false)}>
       <div style={{ flexShrink: 0, background: "#07090F", borderBottom: "1px solid rgba(255,255,255,.08)", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 24px" }} onClick={e => e.stopPropagation()}>
         <div style={{ color: "#EDE6D4", fontWeight: 700, fontSize: 15 }}>Deals Report
-          <span style={{ marginLeft: 8, fontSize: 12, color: "#C9A044" }}>{dealYear === "all" ? "All periods" : dealYear} · {yearFiltered.length} deals · confidential</span>
+          <span style={{ marginLeft: 8, fontSize: 12, color: "#C9A044" }}>{reportPeriodLabel} · {filtered.length} deals · confidential</span>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
           <button style={{ background: pdfBusy ? "#7A6020" : "#C9A044", color: "#fff", border: "none", padding: "8px 20px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: pdfBusy ? "not-allowed" : "pointer" }} onClick={handleExportPdf} disabled={pdfBusy}>{pdfBusy ? "Generating PDF…" : "⬇ Download PDF"}</button>
@@ -1252,7 +1256,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
       <div style={{ flex: 1, overflow: "auto", padding: "28px 24px", background: "#0D1022" }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "inline-block", boxShadow: "0 16px 56px rgba(0,0,0,.7)", background: "#fff" }}>
           <div id={DEALS_REPORT_ID}>
-            <DealsReportDoc deals={yearFiltered} periodLabel={dealYear === "all" ? "All periods" : dealYear} settings={settings} />
+            <DealsReportDoc deals={filtered} periodLabel={reportPeriodLabel} settings={settings} />
           </div>
         </div>
       </div>
