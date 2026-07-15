@@ -857,6 +857,18 @@ function LinkReceiptModal({ invoice, txns, deals, accounts, linked, onLink, onUn
 
   const money = n => <span style={{ fontVariantNumeric: "tabular-nums" }}>AED {invFmt(n)}</span>;
 
+  // Free-text filter across the candidate columns (date, receipt ref, deal/property, amount).
+  const [receiptQuery, setReceiptQuery] = React.useState("");
+  const shownCandidates = React.useMemo(() => {
+    const needle = receiptQuery.trim().toLowerCase();
+    if (!needle) return candidates;
+    return candidates.filter(({ t, g }) => {
+      const hay = [t.ref, dealName(t.deal_id), t.counterparty, t.date ? fmtDate(t.date) : "", t.date || "", invFmt(g), String(g)]
+        .filter(Boolean).join(" ").toLowerCase();
+      return hay.includes(needle);
+    });
+  }, [candidates, receiptQuery]);
+
   return (
     <div style={C.modal} onClick={onClose}>
       <div style={{ ...C.mbox(1140), maxHeight: "92vh" }} onClick={e => e.stopPropagation()}>
@@ -912,7 +924,13 @@ function LinkReceiptModal({ invoice, txns, deals, accounts, linked, onLink, onUn
           </div>
           {candidates.length === 0
             ? <div style={{ padding: 24, textAlign: "center", color: "#9CA3AF", fontSize: 13 }}>No unlinked bank collections available. {onCreateNew && "Use “+ New receipt” below to record a new collection."}</div>
-            : <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
+            : <>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                <input value={receiptQuery} onChange={e => setReceiptQuery(e.target.value)} placeholder="Filter by date, receipt, deal / property or amount…" style={{ flex: 1, border: "1.5px solid #D0D5DD", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+                {receiptQuery && <button onClick={() => setReceiptQuery("")} style={{ ...C.btn("secondary"), padding: "6px 12px", fontSize: 12 }}>Clear</button>}
+                <span style={{ fontSize: 12, color: "#9CA3AF", whiteSpace: "nowrap" }}>{shownCandidates.length} of {candidates.length}</span>
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
                 <colgroup>
                   <col style={{ width: 108 }} />
                   <col style={{ width: 160 }} />
@@ -925,7 +943,8 @@ function LinkReceiptModal({ invoice, txns, deals, accounts, linked, onLink, onUn
                   {["Date", "Receipt", "Deal / Property", "Received", "Match", ""].map((h, i) => <th key={i} style={{ ...C.th, textAlign: i === 3 ? "right" : "left" }}>{h}</th>)}
                 </tr></thead>
                 <tbody>
-                  {candidates.map(({ t, g, dealMatch, amtMatch }) => (
+                  {shownCandidates.length === 0 && <tr><td colSpan={6} style={{ ...C.td, textAlign: "center", padding: 24, color: "#9CA3AF" }}>No receipts match this filter.</td></tr>}
+                  {shownCandidates.map(({ t, g, dealMatch, amtMatch }) => (
                     <tr key={t.id}>
                       <td style={{ ...C.td, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.date ? fmtDate(t.date) : "—"}</td>
                       <td style={{ ...C.td, fontFamily: "monospace", color: "#6B7280", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={t.ref || ""}>{t.ref || "—"}</td>
@@ -942,7 +961,8 @@ function LinkReceiptModal({ invoice, txns, deals, accounts, linked, onLink, onUn
                     </tr>
                   ))}
                 </tbody>
-              </table>}
+              </table>
+            </>}
         </div>
         <div style={C.mftr}>
           {onCreateNew && <button style={{ ...C.btn("secondary"), color: "#047857", borderColor: "#A7F3D0", background: "#ECFDF5" }} onClick={onCreateNew}>+ New receipt</button>}
