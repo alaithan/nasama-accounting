@@ -918,15 +918,22 @@ function DealsReportDoc({ deals, periodLabel, settings }) {
         </table>
       )}
 
-      <div style={{ fontSize: 13, fontWeight: 800, color: navy, margin: "0 0 8px" }}>Deal Detail ({rows.length})</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "0 0 8px" }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: navy }}>Deal Detail ({rows.length})</div>
+        <div style={{ fontSize: 10.5, color: mut, display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ display: "inline-block", width: 22, height: 12, background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 2 }} /> Commission not yet collected
+        </div>
+      </div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr>
           <th style={th}>Date</th><th style={th}>Property / Unit</th><th style={th}>Type</th><th style={th}>Stage</th>
           <th style={th}>Developer</th><th style={th}>Broker</th><th style={thR}>Deal Value (AED)</th><th style={thR}>Comm %</th><th style={thR}>Exp. Commission (AED)</th>
         </tr></thead>
         <tbody>
-          {rows.map((d, i) => (
-            <tr key={d.id || i} style={{ background: i % 2 ? soft : "#fff" }}>
+          {rows.map((d, i) => {
+            const pending = d.stage !== "Commission Collected"; // highlight not-yet-collected deals
+            return (
+            <tr key={d.id || i} style={{ background: pending ? "#FEF3C7" : (i % 2 ? soft : "#fff") }}>
               <td style={{ ...td, whiteSpace: "nowrap" }}>{d.created_at ? fmtDate(d.created_at) : "—"}</td>
               <td style={td}>{d.property_name || "—"}{d.unit_no ? <span style={{ color: mut }}> · {d.unit_no}</span> : ""}</td>
               <td style={td}>{d.type || "—"}</td>
@@ -937,7 +944,7 @@ function DealsReportDoc({ deals, periodLabel, settings }) {
               <td style={tdR}>{d.commission_pct ? d.commission_pct + "%" : "—"}</td>
               <td style={tdR}>{money(d.expected_commission_net)}</td>
             </tr>
-          ))}
+            ); })}
           <tr>
             <td style={{ ...td, fontWeight: 800, background: "#F1E8D6" }} colSpan={6}>TOTAL</td>
             <td style={{ ...tdR, fontWeight: 800, background: "#F1E8D6" }}>{money(totalTV)}</td>
