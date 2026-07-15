@@ -966,6 +966,8 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
   const [saving,     setSaving]     = React.useState(false);
   const [sortKey,    setSortKey]    = React.useState("date");
   const [sortDir,    setSortDir]    = React.useState("desc");
+  const [statusFilter, setStatusFilter] = usePersistedState("inv_status_filter", "all");
+  const invStatusKey = inv => inv.status === "issued" ? "issued" : inv.status === "void" ? "void" : "draft";
 
   // Real-time Firestore listener
   React.useEffect(() => {
@@ -1185,6 +1187,23 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
         {hasPermission(userRole, 'sales.create') && <button style={C.btn()} onClick={handleNew}>+ New Invoice</button>}
       </div>
 
+      {!loading && invoices.length > 0 && (() => {
+        const counts = { all: invoices.length, issued: 0, draft: 0, void: 0 };
+        invoices.forEach(inv => counts[invStatusKey(inv)]++);
+        const opts = [["all", "All"], ["issued", "Issued"], ["draft", "Draft"]];
+        if (counts.void > 0) opts.push(["void", "Void"]);
+        return <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
+          {opts.map(([k, label]) => {
+            const active = statusFilter === k;
+            return <button key={k} onClick={() => setStatusFilter(k)} style={{
+              padding: "6px 15px", borderRadius: 999, fontSize: 13, fontWeight: 600, cursor: "pointer",
+              border: `1px solid ${active ? "#C9A044" : "#E5E7EB"}`, background: active ? "#C9A044" : "#fff",
+              color: active ? "#fff" : "#475569", transition: "all .12s",
+            }}>{label} <span style={{ opacity: 0.72, fontWeight: 700 }}>({counts[k]})</span></button>;
+          })}
+        </div>;
+      })()}
+
       {loading ? (
         <div style={{ textAlign: "center", padding: 64, color: "#9CA3AF" }}>Loading invoices…</div>
       ) : invoices.length === 0 ? (
@@ -1201,7 +1220,8 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
         };
         const arrow = (key) => sortKey === key ? (sortDir === "asc" ? " ▲" : " ▼") : " ↕";
         const sortBtnStyle = (key) => ({ background: "none", border: "none", padding: 0, margin: 0, font: "inherit", color: sortKey === key ? "#C9A044" : "inherit", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.07em" });
-        const sorted = [...invoices].sort((a, b) => {
+        const filtered = statusFilter === "all" ? invoices : invoices.filter(inv => invStatusKey(inv) === statusFilter);
+        const sorted = [...filtered].sort((a, b) => {
           let av, bv;
           if (sortKey === "number") {
             av = a.invoiceNumberRaw ?? 0;
@@ -1225,6 +1245,7 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
               </tr>
             </thead>
             <tbody>
+              {sorted.length === 0 && <tr><td colSpan={9} style={{ ...C.td, textAlign: "center", padding: 32, color: "#9CA3AF" }}>No {statusFilter} invoices.</td></tr>}
               {sorted.map(inv => (
                 <tr key={inv.id} style={{ borderTop: "1px solid #F2F4F7" }}>
                   <td style={C.td}><strong style={{ color: "#C9A044", fontFamily: "monospace", fontSize: 13 }}>{inv.invoiceNumber}</strong></td>
