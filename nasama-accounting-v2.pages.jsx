@@ -861,12 +861,107 @@ function ManualPage() {
 // ╔══════════════════════════════════════════════════╗
 //  DEALS PAGE
 // ╚══════════════════════════════════════════════════╝
+// Confidential deals report for management (the CEO). Deliberately excludes client
+// names and any contact details — it summarises pipeline value and commission only.
+const DEALS_REPORT_ID = "deals-ceo-report";
+function DealsReportDoc({ deals, periodLabel, settings }) {
+  const rows = [...(deals || [])].sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+  const money = c => (Number(c || 0) / 100).toLocaleString("en-AE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const totalTV = rows.reduce((s, d) => s + (d.transaction_value || 0), 0);
+  const totalEC = rows.reduce((s, d) => s + (d.expected_commission_net || 0), 0);
+  const collected = rows.filter(d => d.stage === "Commission Collected");
+  const collectedEC = collected.reduce((s, d) => s + (d.expected_commission_net || 0), 0);
+  const pendingEC = Math.max(0, totalEC - collectedEC);
+  const byType = ["Off-Plan", "Secondary", "Rental"].map(t => {
+    const g = rows.filter(d => d.type === t);
+    return { t, n: g.length, tv: g.reduce((s, d) => s + (d.transaction_value || 0), 0), ec: g.reduce((s, d) => s + (d.expected_commission_net || 0), 0) };
+  }).filter(x => x.n > 0);
+  const gen = new Date().toLocaleString("en-GB", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const navy = "#0C0F1E", gold = "#C9A044", ink = "#1F2430", mut = "#6B7280", line = "#E5E7EB", soft = "#F8FAFC";
+  const th = { textAlign: "left", padding: "8px 10px", fontSize: 11, fontWeight: 700, color: "#fff", background: navy, textTransform: "uppercase", letterSpacing: "0.03em", whiteSpace: "nowrap" };
+  const thR = { ...th, textAlign: "right" };
+  const td = { padding: "7px 10px", fontSize: 11.5, color: ink, borderBottom: "1px solid " + line, verticalAlign: "top" };
+  const tdR = { ...td, textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" };
+  const tile = (label, val, sub, accent) => (
+    <div style={{ flex: 1, border: "1px solid " + line, borderTop: "3px solid " + accent, borderRadius: 8, padding: "12px 14px", background: soft }}>
+      <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: mut, fontWeight: 700 }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 800, color: navy, marginTop: 4 }}>{val}</div>
+      {sub && <div style={{ fontSize: 10.5, color: mut, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+  return (
+    <div style={{ width: 1100, background: "#fff", padding: 44, boxSizing: "border-box", fontFamily: "'Segoe UI','Helvetica Neue',Arial,sans-serif", color: ink }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", borderBottom: "2px solid " + navy, paddingBottom: 16 }}>
+        <div>
+          {typeof Logo === "function" ? <Logo size={220} /> : <div style={{ fontWeight: 800, fontSize: 22, color: gold }}>NASAMA PROPERTIES</div>}
+          <div style={{ fontSize: 12, color: mut, marginTop: 6 }}>{(settings && settings.company) || "Nasama Properties Company LLC"}{settings && settings.trn ? ` · TRN ${settings.trn}` : ""}</div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 26, fontWeight: 800, color: navy, letterSpacing: "0.02em" }}>DEALS REPORT</div>
+          <div style={{ display: "inline-block", marginTop: 6, fontSize: 11, fontWeight: 700, color: "#B42318", background: "#FEE4E2", border: "1px solid #FECDCA", borderRadius: 4, padding: "2px 8px" }}>CONFIDENTIAL — FOR MANAGEMENT</div>
+          <div style={{ fontSize: 12, color: ink, marginTop: 8 }}>Period: <b>{periodLabel}</b></div>
+          <div style={{ fontSize: 11, color: mut }}>Generated: {gen}</div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, margin: "22px 0" }}>
+        {tile("Total Deals", rows.length, `${collected.length} collected · ${rows.length - collected.length} open`, "#2563EB")}
+        {tile("Transaction Value", "AED " + money(totalTV), "Sum of property values", "#7C3AED")}
+        {tile("Expected Commission", "AED " + money(totalEC), "Net of VAT", gold)}
+        {tile("Collected Commission", "AED " + money(collectedEC), "AED " + money(pendingEC) + " pending", "#059669")}
+      </div>
+
+      {byType.length > 0 && (
+        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 22 }}>
+          <thead><tr><th style={th}>Deal Type</th><th style={thR}>Deals</th><th style={thR}>Transaction Value (AED)</th><th style={thR}>Expected Commission (AED)</th></tr></thead>
+          <tbody>{byType.map(x => <tr key={x.t}><td style={td}>{x.t}</td><td style={tdR}>{x.n}</td><td style={tdR}>{money(x.tv)}</td><td style={tdR}>{money(x.ec)}</td></tr>)}</tbody>
+        </table>
+      )}
+
+      <div style={{ fontSize: 13, fontWeight: 800, color: navy, margin: "0 0 8px" }}>Deal Detail ({rows.length})</div>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead><tr>
+          <th style={th}>Date</th><th style={th}>Property / Unit</th><th style={th}>Type</th><th style={th}>Stage</th>
+          <th style={th}>Developer</th><th style={th}>Broker</th><th style={thR}>Deal Value (AED)</th><th style={thR}>Comm %</th><th style={thR}>Exp. Commission (AED)</th>
+        </tr></thead>
+        <tbody>
+          {rows.map((d, i) => (
+            <tr key={d.id || i} style={{ background: i % 2 ? soft : "#fff" }}>
+              <td style={{ ...td, whiteSpace: "nowrap" }}>{d.created_at ? fmtDate(d.created_at) : "—"}</td>
+              <td style={td}>{d.property_name || "—"}{d.unit_no ? <span style={{ color: mut }}> · {d.unit_no}</span> : ""}</td>
+              <td style={td}>{d.type || "—"}</td>
+              <td style={td}>{d.stage || "—"}</td>
+              <td style={td}>{d.developer || "—"}</td>
+              <td style={td}>{d.broker_name || "—"}</td>
+              <td style={tdR}>{d.transaction_value ? money(d.transaction_value) : "—"}</td>
+              <td style={tdR}>{d.commission_pct ? d.commission_pct + "%" : "—"}</td>
+              <td style={tdR}>{money(d.expected_commission_net)}</td>
+            </tr>
+          ))}
+          <tr>
+            <td style={{ ...td, fontWeight: 800, background: "#F1E8D6" }} colSpan={6}>TOTAL</td>
+            <td style={{ ...tdR, fontWeight: 800, background: "#F1E8D6" }}>{money(totalTV)}</td>
+            <td style={{ ...tdR, background: "#F1E8D6" }} />
+            <td style={{ ...tdR, fontWeight: 800, background: "#F1E8D6", color: "#8C6518" }}>{money(totalEC)}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div style={{ marginTop: 20, paddingTop: 10, borderTop: "1px solid " + line, fontSize: 10.5, color: mut, lineHeight: 1.5 }}>
+        Confidential — prepared for management review. Client identities and contact details are intentionally omitted.
+        Figures are commission expectations (net of VAT) derived from the deals pipeline as of the generated date.
+      </div>
+    </div>
+  );
+}
 function DealsPage({ deals, setDeals, customers, brokers, developers, txns, accounts, journal, persistTxn, userRole, userEmail, writeMeta, setInvoiceDeal, setPage, dealStageChanges, settings, cardDealId, setCardDealId }) {
   const [show, setShow] = useState(false);
   const [edit, setEdit] = useState(null);
   // Filter + sort persist across navigation; default sort = newest deals first.
   const [filter, setFilter] = usePersistedState("deals_filter", "All");
   const [dealYear, setDealYear] = usePersistedState("deals_year", String(new Date().getFullYear()));
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [showReport, setShowReport] = useState(false);
   const [sortKey, setSortKey] = usePersistedState("deals_sortKey", "date");
   const [sortDir, setSortDir] = usePersistedState("deals_sortDir", "desc");
   const [cardDeal, setCardDeal] = useState(null);
@@ -1095,6 +1190,18 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
     </button>
   </th>;
 
+  const handleExportPdf = async () => {
+    if (!yearFiltered.length) { toast("No deals in the selected period to export.", "warning"); return; }
+    setPdfBusy(true);
+    try {
+      const pdf = await captureElementToPdf(DEALS_REPORT_ID);
+      if (pdf) {
+        pdf.save(`Nasama_Deals_Report_${dealYear === "all" ? "AllTime" : dealYear}.pdf`);
+        logAudit("deals_report_export", { period: dealYear, count: yearFiltered.length }, userRole, userEmail);
+      }
+    } finally { setPdfBusy(false); }
+  };
+
   return <div>
     <PageHeader title="Deals / Pipeline" sub={`${deals.length} deals total${duplicateDealCount ? ` • ${duplicateDealCount} suspected duplicates` : ""}`}>
       <Sel value={filter} onChange={e => setFilter(e.target.value)}>
@@ -1105,6 +1212,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
       {hasPermission(userRole, 'sales.edit') && corruptedLinkCount > 0 && <button style={C.btn("secondary")} onClick={handleRepairLinkedRecords}>Repair Linked Names ({corruptedLinkCount})</button>}
       {hasPermission(userRole, 'sales.edit') && duplicateDealCount > 0 && <button style={C.btn(targetCountsMatch ? "danger" : "secondary")} onClick={handleDeduplicate}>{targetCountsMatch ? `Deduplicate to ${formatDealCounts(TARGET_DEAL_COUNTS)}` : `Review Duplicates (${duplicateDealCount})`}</button>}
       {hasPermission(userRole, 'sales.edit') && DEAL_RESEED_ENABLED && !!pipelineSeedDeals.length && <button style={C.btn("secondary")} onClick={seedMissingPipelineDeals}>Seed Missing Deals ({missingPipelineDeals.length})</button>}
+      <button style={C.btn("secondary")} onClick={() => setShowReport(true)} title="Open a CEO-ready PDF report of the deals in the selected period. Client names and contacts are omitted.">📄 Export PDF</button>
       {hasPermission(userRole, 'sales.create') && <button style={C.btn()} onClick={() => { setEdit(null); setShow(true); }}>+ New Deal</button>}
     </PageHeader>
 
@@ -1129,6 +1237,26 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
         return <button key={t} onClick={() => setFilter(t)} style={{ ...C.btn(active ? "primary" : "secondary", true), fontSize: 13, padding: "7px 16px" }}>{t === "All" ? "All Deals" : t}</button>;
       })}
     </div>
+
+    {/* Confidential deals report — preview + PDF download (no client names/contacts) */}
+    {showReport && <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 1200, display: "flex", flexDirection: "column", backdropFilter: "blur(4px)" }} onClick={() => setShowReport(false)}>
+      <div style={{ flexShrink: 0, background: "#07090F", borderBottom: "1px solid rgba(255,255,255,.08)", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 24px" }} onClick={e => e.stopPropagation()}>
+        <div style={{ color: "#EDE6D4", fontWeight: 700, fontSize: 15 }}>Deals Report
+          <span style={{ marginLeft: 8, fontSize: 12, color: "#C9A044" }}>{dealYear === "all" ? "All periods" : dealYear} · {yearFiltered.length} deals · confidential</span>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button style={{ background: pdfBusy ? "#7A6020" : "#C9A044", color: "#fff", border: "none", padding: "8px 20px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: pdfBusy ? "not-allowed" : "pointer" }} onClick={handleExportPdf} disabled={pdfBusy}>{pdfBusy ? "Generating PDF…" : "⬇ Download PDF"}</button>
+          <button style={C.btn("secondary")} onClick={() => setShowReport(false)}>Close</button>
+        </div>
+      </div>
+      <div style={{ flex: 1, overflow: "auto", padding: "28px 24px", background: "#0D1022" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "inline-block", boxShadow: "0 16px 56px rgba(0,0,0,.7)", background: "#fff" }}>
+          <div id={DEALS_REPORT_ID}>
+            <DealsReportDoc deals={yearFiltered} periodLabel={dealYear === "all" ? "All periods" : dealYear} settings={settings} />
+          </div>
+        </div>
+      </div>
+    </div>}
 
     <div style={{ ...C.card, padding: "12px 16px", marginBottom: 14, borderLeft: "4px solid #2563EB", background: "#EFF6FF", color: "#1D4ED8", fontSize: 13 }}>
       Deal reseeding from pasted data is disabled. Firestore is now the only source of truth for deal create, edit, delete, and repair actions.
