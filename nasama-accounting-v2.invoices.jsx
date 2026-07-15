@@ -25,6 +25,47 @@ function invFmtDate(iso) {
 
 function invPad(n) { return String(n || 0).padStart(3, "0"); }
 
+// Add days to an ISO date (yyyy-mm-dd) → ISO date. Blank in → blank out.
+function invAddDays(iso, days) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Whole number → English words (up to billions). e.g. 8085 → "Eight Thousand Eighty-Five".
+function invIntToWords(num) {
+  num = Math.floor(Math.abs(Number(num) || 0));
+  if (num === 0) return "Zero";
+  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+  const below1000 = n => {
+    let s = "";
+    if (n >= 100) { s += ones[Math.floor(n / 100)] + " Hundred"; n %= 100; if (n) s += " "; }
+    if (n >= 20) { s += tens[Math.floor(n / 10)]; n %= 10; if (n) s += "-" + ones[n]; }
+    else if (n > 0) { s += ones[n]; }
+    return s;
+  };
+  const scales = [["Billion", 1e9], ["Million", 1e6], ["Thousand", 1e3]];
+  let s = "";
+  for (const [name, val] of scales) {
+    if (num >= val) { s += below1000(Math.floor(num / val)) + " " + name + " "; num %= val; }
+  }
+  if (num > 0) s += below1000(num);
+  return s.trim();
+}
+
+// AED amount → legal words. e.g. 8085.00 → "UAE Dirham Eight Thousand Eighty-Five Only".
+function invAmountInWords(amount) {
+  const totalFils = Math.round((Number(amount) || 0) * 100);
+  const dirhams = Math.floor(totalFils / 100);
+  const fils = totalFils % 100;
+  let s = "UAE Dirham " + invIntToWords(dirhams);
+  if (fils > 0) s += " and " + invIntToWords(fils) + " Fils";
+  return s + " Only";
+}
+
 function invNum(v) {
   var n = parseFloat(String(v === null || v === undefined ? "" : v).replace(/,/g, ""));
   return isFinite(n) && !isNaN(n) ? n : 0;
@@ -110,6 +151,9 @@ function invBlankDoc(settings) {
     invoiceNumber:    "",
     invoiceNumberRaw: 0,
     invoiceDate:      todayStr(),
+    supplyDate:       todayStr(),
+    dueDate:          invAddDays(todayStr(), 15),
+    paymentTerms:     "Payment due within 15 days of the invoice date.",
     status:           "draft",
     billFrom: {
       companyName: settings?.company    || "NASAMA PROPERTIES LLC",
@@ -224,6 +268,10 @@ async function invExportPDF(elementId, invoiceNumber) {
 function InvoicePreviewDoc({ invoice }) {
   const { billFrom = {}, invoicedTo = {}, lineItems = [], bankDetails = {}, invoiceNumber, invoiceDate } = invoice;
   const T  = invTotals(lineItems);
+  // Derived, with fallbacks so invoices created before these fields still render.
+  const supplyDate   = invoice.supplyDate || invoiceDate;
+  const dueDate      = invoice.dueDate || invAddDays(invoiceDate, 15);
+  const paymentTerms = invoice.paymentTerms || "Payment due within 15 days of the invoice date.";
 
   const logoSrc = typeof NASAMA_WORDMARK_SRC !== "undefined" ? NASAMA_WORDMARK_SRC : null;
 
@@ -291,6 +339,8 @@ function InvoicePreviewDoc({ invoice }) {
     stampTxt: { color: CHAR, fontSize: 10, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" },
     stampLine: { width: 132, height: 1, background: LINE },
     foot: { marginTop: 22, paddingTop: 10, borderTop: "1px solid " + LINE, display: "flex", justifyContent: "space-between", gap: 18, color: MUT, fontSize: 9.6, lineHeight: 1.35 },
+    termsBar: { marginTop: 18, border: "1px solid " + LINE, borderLeft: "4px solid " + G, background: SOFT2, padding: "11px 16px", fontSize: 10.6, color: INK, lineHeight: 1.6 },
+    termsLbl: { color: CHAR, fontWeight: 800, letterSpacing: "0.02em" },
   };
 
   const pFields = [["Company Name", "companyName"], ["Address", "address"], ["Email", "email"], ["Contact No.", "contactNo"], ["TRN", "trn"]];
@@ -318,6 +368,8 @@ function InvoicePreviewDoc({ invoice }) {
             <div style={P.title}>TAX INVOICE</div>
             <div style={P.metaBox}>
               <span style={P.mLbl}>Invoice Date</span><span style={P.mVal}>{invFmtDate(invoiceDate)}</span>
+              <span style={P.mLbl}>Date of Supply</span><span style={P.mVal}>{invFmtDate(supplyDate)}</span>
+              <span style={P.mLbl}>Due Date</span><span style={P.mVal}>{invFmtDate(dueDate)}</span>
               <span style={{ ...P.mLbl, borderBottom: "none" }}>Invoice No.</span><span style={{ ...P.mVal, borderBottom: "none" }}>{invoiceNumber || "--"}</span>
             </div>
           </div>
@@ -335,7 +387,7 @@ function InvoicePreviewDoc({ invoice }) {
           <div style={P.partyCard}>
             <div style={P.secTitle}><span style={P.secTick} />INVOICED TO</div>
             {iFields.map(([l, k]) => (
-              <div key={k} style={P.pRow}><span style={P.pLbl}>{l}</span><span style={P.pVal}>{invoicedTo[k] || "--"}</span></div>
+              <div key={k} style={P.pRow}><span style={P.pLbl}>{l}</span><span style={P.pVal}>{invoicedTo[k] || (k === "trn" ? "Not VAT registered" : "--")}</span></div>
             ))}
           </div>
         </div>
@@ -347,11 +399,11 @@ function InvoicePreviewDoc({ invoice }) {
               <tr>
                 <th style={{ ...P.th, textAlign: "left", width: "16%" }}>Project | Unit</th>
                 <th style={{ ...P.th, textAlign: "left", width: "24%" }}>Specification</th>
-                <th style={{ ...P.th, width: "13%", textAlign: "right" }}>Deal Value</th>
+                <th style={{ ...P.th, width: "13%", textAlign: "right" }}>Deal Value (AED)</th>
                 <th style={{ ...P.th, width: "10%", textAlign: "right" }}>Commission %</th>
-                <th style={{ ...P.th, width: "13%", textAlign: "right" }}>Commission Amount</th>
-                <th style={{ ...P.th, width: "10%", textAlign: "right" }}>Vat 5%</th>
-                <th style={{ ...P.th, width: "14%", textAlign: "right", borderRight: "none" }}>Total Amount Incl. Vat</th>
+                <th style={{ ...P.th, width: "13%", textAlign: "right" }}>Commission Amt (AED)</th>
+                <th style={{ ...P.th, width: "10%", textAlign: "right" }}>VAT 5% (AED)</th>
+                <th style={{ ...P.th, width: "14%", textAlign: "right", borderRight: "none" }}>Total Incl. VAT (AED)</th>
               </tr>
             </thead>
             <tbody>
@@ -392,12 +444,16 @@ function InvoicePreviewDoc({ invoice }) {
               ))}
             </div>
             <div style={P.stampRow}>
-              <div style={P.stamp}>
-                <img
-                  src={typeof NASAMA_STAMP_SRC !== "undefined" ? NASAMA_STAMP_SRC : "./nasama-stamp.png"}
-                  alt="Company Stamp"
-                  style={{ width: 188, height: 188, objectFit: "contain", display: "block" }}
-                />
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                <div style={P.stamp}>
+                  <img
+                    src={typeof NASAMA_STAMP_SRC !== "undefined" ? NASAMA_STAMP_SRC : "./nasama-stamp.png"}
+                    alt="Company Stamp"
+                    style={{ width: 188, height: 188, objectFit: "contain", display: "block" }}
+                  />
+                </div>
+                <div style={P.stampLine} />
+                <div style={{ ...P.stampTxt, marginTop: 6 }}>Authorized Signatory</div>
               </div>
             </div>
           </div>
@@ -408,6 +464,14 @@ function InvoicePreviewDoc({ invoice }) {
               <div style={P.sRow}><span style={P.sLbl}>Vat (5%)</span><span style={P.sVal}>{invFmt(T.vat)}</span></div>
               <div style={P.sFinal}><span style={P.sFLbl}>Total Amount Incl. Vat</span><span style={P.sFVal}>{invFmt(T.incl)}</span></div>
             </div>
+          </div>
+        </div>
+
+        <div style={P.termsBar}>
+          <div><span style={P.termsLbl}>Amount in Words:</span> {invAmountInWords(T.incl)}</div>
+          <div style={{ marginTop: 5 }}>
+            <span style={P.termsLbl}>Payment Terms:</span> {paymentTerms}
+            &nbsp;&nbsp;<span style={P.termsLbl}>Due Date:</span> {invFmtDate(dueDate)}
           </div>
         </div>
 
@@ -598,6 +662,11 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
               <option value="issued">Issued</option>
             </select>
           </div>
+        </div>
+        <div style={{ ...g3, marginTop: 16 }}>
+          <div><label style={lbl}>Date of Supply</label><input type="date" style={inp} value={inv.supplyDate || ""} onChange={e => setPath("supplyDate", e.target.value)} /></div>
+          <div><label style={lbl}>Due Date</label><input type="date" style={inp} value={inv.dueDate || ""} onChange={e => setPath("dueDate", e.target.value)} /></div>
+          <div><label style={lbl}>Payment Terms</label><input style={inp} value={inv.paymentTerms || ""} onChange={e => setPath("paymentTerms", e.target.value)} placeholder="e.g. Payment due within 15 days" /></div>
         </div>
       </div>
 
