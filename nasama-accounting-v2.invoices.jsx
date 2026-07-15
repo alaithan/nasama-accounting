@@ -1246,8 +1246,12 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
             </thead>
             <tbody>
               {sorted.length === 0 && <tr><td colSpan={9} style={{ ...C.td, textAlign: "center", padding: 32, color: "#9CA3AF" }}>No {statusFilter} invoices.</td></tr>}
-              {sorted.map(inv => (
-                <tr key={inv.id} style={{ borderTop: "1px solid #F2F4F7" }}>
+              {sorted.map(inv => {
+                // Paid = has one or more linked Sale Receipts. Grey the row so it reads
+                // as settled / locked and shouldn't be edited.
+                const isPaid = (receiptsByInvoiceId.get(inv.id) || []).length > 0;
+                return (
+                <tr key={inv.id} title={isPaid ? "Paid — receipt recorded. Best not to edit." : undefined} style={{ borderTop: "1px solid #F2F4F7", background: isPaid ? "#F3F4F6" : undefined, color: isPaid ? "#6B7280" : undefined }}>
                   <td style={C.td}><strong style={{ color: "#C9A044", fontFamily: "monospace", fontSize: 13 }}>{inv.invoiceNumber}</strong></td>
                   <td style={C.td}>{invFmtDate(inv.invoiceDate)}</td>
                   <td style={C.td}>{inv.invoicedTo?.companyName || "—"}</td>
@@ -1280,7 +1284,7 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
                     </div>
                   </td>
                 </tr>
-              ))}
+                ); })}
             </tbody>
           </table>
         </div>
