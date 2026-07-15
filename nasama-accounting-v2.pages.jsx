@@ -906,7 +906,7 @@ function DealsReportDoc({ deals, periodLabel, settings }) {
     <div style={{ width: 1100, background: "#fff", padding: 44, boxSizing: "border-box", fontFamily: "'Segoe UI','Helvetica Neue',Arial,sans-serif", color: ink }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", borderBottom: "2px solid " + navy, paddingBottom: 16 }}>
         <div>
-          {typeof Logo === "function" ? <Logo size={220} /> : <div style={{ fontWeight: 800, fontSize: 22, color: gold }}>NASAMA PROPERTIES</div>}
+          <img src={typeof NASAMA_WORDMARK_SRC !== "undefined" ? NASAMA_WORDMARK_SRC : "./nasama-wordmark.png"} alt="Nasama Properties" crossOrigin="anonymous" style={{ width: 260, maxHeight: 88, objectFit: "contain", objectPosition: "left", display: "block" }} />
           <div style={{ fontSize: 12, color: mut, marginTop: 6 }}>{(settings && settings.company) || "Nasama Properties Company LLC"}{settings && settings.trn ? ` · TRN ${settings.trn}` : ""}</div>
         </div>
         <div style={{ textAlign: "right" }}>

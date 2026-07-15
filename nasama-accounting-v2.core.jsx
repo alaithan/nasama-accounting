@@ -8,7 +8,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
     // ── BRAND ─────────────────────────────────────────
     const GOLD = "#C9A044", GOLD_D = "#A8853A", NAVY = "#0C0F1E", NAVY2 = "#161B35";
-    const NASAMA_WORDMARK_SRC = "./nasama-wordmark.png";
+    const NASAMA_WORDMARK_SRC = "./nasama-wordmark.png?v=2"; // ?v bump busts cached old (checkerboard) logo
     const NASAMA_ICON_SRC = "./nasama-icon.png";
     const NASAMA_STAMP_SRC = "./nasama-stamp.png";
     const DEFAULT_REPORTING_START_DATE = "2025-01-01";
