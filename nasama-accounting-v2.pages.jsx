@@ -867,19 +867,12 @@ const DEALS_REPORT_ID = "deals-ceo-report";
 function DealsReportDoc({ deals, periodLabel, settings }) {
   const rows = [...(deals || [])].sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
   const money = c => (Number(c || 0) / 100).toLocaleString("en-AE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  // Total commission for a deal. For a Secondary deal this is the buyer + seller
-  // sides (net of any discount); when the stored net already captured both, it is
-  // used as-is, and only the buyer-only case is topped up with the seller side.
-  const rowCommission = d => {
-    const net = d.expected_commission_net || 0;
-    if (d.type !== "Secondary") return net;
-    const tv = d.transaction_value || 0;
-    const buyer = (parseFloat(d.commission_pct) && tv) ? Math.round(tv * parseFloat(d.commission_pct) / 100) : 0;
-    const seller = d.seller_commission || ((parseFloat(d.seller_commission_pct) && tv) ? Math.round(tv * parseFloat(d.seller_commission_pct) / 100) : 0);
-    const disc = d.discount || 0;
-    if (seller > 0 && Math.abs(net - buyer) <= 1) return buyer + seller - disc; // net was buyer-only → add seller
-    return net;
-  };
+  // Company's net expected commission for a deal. `expected_commission_net` is the
+  // single canonical figure everywhere: the deal editor stores buyer+seller−discount
+  // for Secondary deals and value×pct for the rest, and imports store the collected
+  // net directly. Confirmed by the read-only commission diagnostic (0 deals differed
+  // across all 109 live deals) — so we read the field directly, no re-derivation.
+  const rowCommission = d => d.expected_commission_net || 0;
   const totalTV = rows.reduce((s, d) => s + (d.transaction_value || 0), 0);
   const totalEC = rows.reduce((s, d) => s + rowCommission(d), 0);
   const collected = rows.filter(d => d.stage === "Commission Collected");
