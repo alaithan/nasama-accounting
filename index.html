@@ -10,18 +10,21 @@
   <title>Nasama Properties - Accounting System v2</title>
   <link rel="icon" type="image/png" href="./nasama-icon.png" />
   <link rel="stylesheet" href="./nasama-accounting-v2.css" />
-  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <!-- Self-hosted vendor libraries (see vendor/ and SELF-HOST-VENDOR-PROMPT.md).
+       Byte-identical to the previously-used CDN files; served locally so no third-party
+       CDN can ever change what this app runs. Keep versions/load order as-is. -->
+  <script src="./vendor/react-18.3.1.production.min.js"></script>
+  <script src="./vendor/react-dom-18.3.1.production.min.js"></script>
   <!-- Pinned to Babel 7 (classic JSX runtime). Babel 8 defaults to the automatic runtime,
        which injects `import` statements and breaks these plain text/babel scripts. Do not unpin. -->
-  <script src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-firestore-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-auth-compat.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="./vendor/babel-standalone-7.29.7.min.js"></script>
+  <script src="./vendor/firebase-app-compat-10.11.0.js"></script>
+  <script src="./vendor/firebase-firestore-compat-10.11.0.js"></script>
+  <script src="./vendor/firebase-auth-compat-10.11.0.js"></script>
+  <script src="./vendor/html2canvas-1.4.1.min.js"></script>
+  <script src="./vendor/jspdf-2.5.1.umd.min.js"></script>
+  <script src="./vendor/xlsx-0.18.5.full.min.js"></script>
+  <script src="./vendor/pdf-3.11.174.min.js"></script>
   <script charset="UTF-8" src="./nasama-accounting-v2.firebase.js"></script>
 </head>
 

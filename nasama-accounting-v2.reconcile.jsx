@@ -9,7 +9,7 @@
 //  Excel via global XLSX (loaded in HTML); PDF via global pdfjsLib (loaded in HTML).
 // ╚═══════════════════════════════════════════════════════════════════╝
 
-const RECON_PDF_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const RECON_PDF_WORKER = "./vendor/pdf.worker-3.11.174.min.js";
 
 // ── Column detection ───────────────────────────────────────────────
 // Map a statement's header names onto the roles we need. Best-effort; the
