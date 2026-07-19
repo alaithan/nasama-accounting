@@ -204,7 +204,7 @@ function invTs() {
 
 // ═══════════════════════════════════════════════════════════════════
 //  D. PDF EXPORT  — html2canvas captures the live DOM node;
-//     jsPDF splits it into A4 pages if the invoice is tall.
+//     jsPDF fits it onto a SINGLE A4 page (scales down if tall).
 //
 //  WHY html2canvas + jsPDF (not pdf-lib):
 //  ∙ html2canvas renders the full styled HTML (tables, logo, borders)
@@ -237,20 +237,20 @@ async function invExportPDF(elementId, invoiceNumber) {
     const pdf           = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     const pageW         = pdf.internal.pageSize.getWidth();  // 210 mm
     const pageH         = pdf.internal.pageSize.getHeight(); // 297 mm
-    const imgHeightMM   = (canvas.height / canvas.width) * pageW;
+    const fullHeightMM  = (canvas.height / canvas.width) * pageW;
 
-    // Add first page then append additional pages if content overflows
-    pdf.addImage(img, "PNG", 0, 0, pageW, imgHeightMM);
-    // Only add extra pages when content genuinely overflows (>2 mm tolerance
-    // prevents a near-empty trailing page from tiny render rounding)
-    if (imgHeightMM > pageH + 2) {
-      let yUsed = pageH;
-      while (yUsed < imgHeightMM - 2) {
-        pdf.addPage();
-        pdf.addImage(img, "PNG", 0, -yUsed, pageW, imgHeightMM);
-        yUsed += pageH;
-      }
+    // Always output a SINGLE page. If the invoice is taller than one A4 page,
+    // scale the whole image down uniformly so it fits within the page height
+    // (never split across pages). Center horizontally when scaled.
+    let drawW = pageW;
+    let drawH = fullHeightMM;
+    if (fullHeightMM > pageH) {
+      const scale = pageH / fullHeightMM;
+      drawW = pageW * scale;
+      drawH = pageH;
     }
+    const offsetX = (pageW - drawW) / 2;
+    pdf.addImage(img, "PNG", offsetX, 0, drawW, drawH);
 
     pdf.save(`Nasama_Invoice_${invoiceNumber || "draft"}.pdf`);
     return true;

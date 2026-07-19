@@ -1,2 +1,5 @@
 # Babel standalone, downloaded only for local JSX parse-validation
 _babel_tmp.js
+
+# Firebase CLI local cache (hosting deploy state)
+.firebase/
