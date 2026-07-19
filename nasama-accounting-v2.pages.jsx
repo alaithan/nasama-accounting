@@ -3,6 +3,58 @@
        ══════════════════════════════════════════════════ */
 
 // ╔══════════════════════════════════════════════════╗
+//  EXCEL EXPORT (shared) — a small "Excel" sign sits at the
+//  top-right of each Dashboard / Performance info box and dumps
+//  that box's underlying data to a styled .xlsx via global XLSX.
+//  Money values are stored as cents (fils); use xAED() to emit
+//  them as proper AED decimals in the sheet.
+// ╚══════════════════════════════════════════════════╝
+function xlsxSafeName(s) { return String(s || "sheet").replace(/[\\/:?*\[\]]/g, "").trim() || "sheet"; }
+function xAED(cents) { return Math.round(cents || 0) / 100; }
+
+function xlsxExport(sheetName, filename, aoa, moneyCols) {
+  if (typeof XLSX === "undefined") { toast("Excel library not loaded — check your connection", "error"); return; }
+  if (!Array.isArray(aoa) || aoa.length <= 1) { toast("Nothing to export in this box yet", "warning"); return; }
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  // Column widths sized to the longest cell in each column (capped).
+  ws["!cols"] = (aoa[0] || []).map((_, c) => {
+    let w = 10;
+    aoa.forEach(row => { const len = row[c] == null ? 0 : String(row[c]).length; if (len + 2 > w) w = len + 2; });
+    return { wch: Math.min(w, 48) };
+  });
+  // AED number format on the money columns (data rows only).
+  (moneyCols || []).forEach(c => {
+    for (let r = 1; r < aoa.length; r++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })];
+      if (cell && typeof cell.v === "number") cell.z = "#,##0.00";
+    }
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, xlsxSafeName(sheetName).slice(0, 31));
+  XLSX.writeFile(wb, filename);
+  toast(`Exported ${aoa.length - 1} row${aoa.length - 1 === 1 ? "" : "s"} to Excel`, "success");
+}
+
+// The small green "sign" placed atop each info box.
+function XlsxSignBtn({ onExport, title }) {
+  return (
+    <button
+      type="button"
+      title={title || "Export to Excel"}
+      onClick={(e) => { e.stopPropagation(); onExport(); }}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5, height: 26, padding: "0 9px", borderRadius: 7, border: "1px solid #BBE5CE", background: "#EAF7F0", color: "#17734A", cursor: "pointer", fontSize: 11, fontWeight: 700, lineHeight: 1, flexShrink: 0, whiteSpace: "nowrap" }}
+    >
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <polyline points="7 10 12 15 17 10" />
+        <line x1="12" y1="15" x2="12" y2="3" />
+      </svg>
+      Excel
+    </button>
+  );
+}
+
+// ╔══════════════════════════════════════════════════╗
 //  DATE FILTER UTILITIES (shared across pages)
 // ╚══════════════════════════════════════════════════╝
 function computeDateRange(preset) {
@@ -267,12 +319,15 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
       maxRatio: Math.max(2, ...coverageSeries.map(s => s.ratio))
     };
   }, [plannedExpenses, includePending, kpis.cash, kpis.pendingPipelineCommission, kpis.cashFlowSeries]);
-  const sectionTitle = (title, sub, actionLabel, actionPage) => <div style={{ padding: "16px 20px 13px", borderBottom: "1px solid #EAECF0", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+  const sectionTitle = (title, sub, actionLabel, actionPage, onExport) => <div style={{ padding: "16px 20px 13px", borderBottom: "1px solid #EAECF0", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
     <div>
       <div style={{ fontWeight: 700, fontSize: 13.5, color: dark ? "#F1F3F9" : NAVY, letterSpacing: "-0.01em" }}>{title}</div>
       {sub && <div style={{ fontSize: 12, color: "#98A2B3", marginTop: 3 }}>{sub}</div>}
     </div>
-    {actionLabel && <button style={C.btn("ghost", true)} onClick={() => setPage(actionPage)}>{actionLabel}</button>}
+    {(actionLabel || onExport) && <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+      {onExport && <XlsxSignBtn onExport={onExport} title={`Export "${title}" to Excel`} />}
+      {actionLabel && <button style={C.btn("ghost", true)} onClick={() => setPage(actionPage)}>{actionLabel}</button>}
+    </div>}
   </div>;
   const categoryDivider = (title, sub, color) => <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "8px 0 14px", padding: "0 2px" }}>
     <div style={{ width: 4, height: 22, borderRadius: 2, background: color, flexShrink: 0 }} />
@@ -522,7 +577,11 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
 
     <div style={{ display: "grid", gridTemplateColumns: isTablet ? "1fr" : "1.1fr 1.1fr 0.9fr", gap: 16, marginBottom: 16 }}>
       <div style={C.card}>
-        {sectionTitle("Cash Flow Trend", "6 months · inflow vs outflow · net highlighted")}
+        {sectionTitle("Cash Flow Trend", "6 months · inflow vs outflow · net highlighted", undefined, undefined,
+          () => xlsxExport("Cash Flow Trend", `nasama-cash-flow-${todayStr()}.xlsx`,
+            [["Month", "Cash In (AED)", "Cash Out (AED)", "Net (AED)"],
+              ...kpis.cashFlowSeries.map(item => [item.label, xAED(item.inflow), xAED(item.outflow), xAED(item.net)])],
+            [1, 2, 3]))}
         <div style={{ padding: "10px 18px 18px" }}>
           {kpis.cashFlowSeries.map((item, i) => <div key={item.key} style={{ marginBottom: i < kpis.cashFlowSeries.length - 1 ? 18 : 0 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
@@ -547,7 +606,11 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
       </div>
 
       <div style={C.card}>
-        {sectionTitle("Revenue vs Expense", "6 months · profit highlighted in green, loss in red")}
+        {sectionTitle("Revenue vs Expense", "6 months · profit highlighted in green, loss in red", undefined, undefined,
+          () => xlsxExport("Revenue vs Expense", `nasama-revenue-vs-expense-${todayStr()}.xlsx`,
+            [["Month", "Revenue (AED)", "Expenses (AED)", "Net (AED)"],
+              ...kpis.monthlyPerformance.map(item => [item.label, xAED(item.revenue), xAED(item.expense), xAED(item.net)])],
+            [1, 2, 3]))}
         <div style={{ padding: "10px 18px 18px" }}>
           {kpis.monthlyPerformance.map((item, i) => <div key={item.key} style={{ marginBottom: i < kpis.monthlyPerformance.length - 1 ? 18 : 0 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
@@ -572,7 +635,11 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
       </div>
 
       <div style={C.card}>
-        {sectionTitle("Income — This Year vs Last Year", "6 months · net commission income vs the same month a year earlier")}
+        {sectionTitle("Income — This Year vs Last Year", "6 months · net commission income vs the same month a year earlier", undefined, undefined,
+          () => xlsxExport("Income YoY", `nasama-income-yoy-${todayStr()}.xlsx`,
+            [["Month", "This Year (AED)", "Last Year (AED)", "YoY %"],
+              ...incomeYoY.map(s => [s.label, xAED(s.current), xAED(s.previous), s.previous > 0 ? Math.round(((s.current - s.previous) / s.previous) * 100) : ""])],
+            [1, 2]))}
         <div style={{ padding: "10px 18px 18px" }}>
           {incomeYoY.map((s, i) => {
             const delta = s.previous > 0 ? Math.round(((s.current - s.previous) / s.previous) * 100) : null;
@@ -600,7 +667,12 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
       </div>
 
       <div style={C.card}>
-        {sectionTitle("Liquidity - Cash by Account", "Live balances from bank and cash ledger", "Go to Banking", "banking")}
+        {sectionTitle("Liquidity - Cash by Account", "Live balances from bank and cash ledger", "Go to Banking", "banking",
+          () => xlsxExport("Cash by Account", `nasama-cash-by-account-${todayStr()}.xlsx`,
+            [["Account", "Balance (AED)"],
+              ...cashAccounts.map(a => [a.name, xAED(accountBalance(a, ledger))]),
+              ["Total Cash", xAED(kpis.cash)]],
+            [1]))}
         <div style={{ padding: "8px 18px" }}>
           {cashAccounts.map((a, i) => {
             const bal = accountBalance(a, ledger);
@@ -619,7 +691,11 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
 
     <div style={{ display: "grid", gridTemplateColumns: isTablet ? "1fr" : "1fr 1fr 1.1fr", gap: 16, marginBottom: 16 }}>
       <div style={C.card}>
-        {sectionTitle("Pipeline Quality - By Type", "Expected commission still in the business pipeline", "Open Deals", "deals")}
+        {sectionTitle("Pipeline Quality - By Type", "Expected commission still in the business pipeline", "Open Deals", "deals",
+          () => xlsxExport("Pipeline by Type", `nasama-pipeline-by-type-${todayStr()}.xlsx`,
+            [["Type", "Deals", "Expected Commission (AED)"],
+              ...kpis.pipelineByType.map(row => [row.type, row.count, xAED(row.expected)])],
+            [2]))}
         <div style={{ padding: 18 }}>
           {kpis.pipelineByType.map((row, i) => <div key={row.type} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", paddingBottom: 10, marginBottom: 10, borderBottom: i < kpis.pipelineByType.length - 1 ? "1px solid #F3F4F6" : "none" }}>
             <div>
@@ -632,7 +708,11 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
       </div>
 
       <div style={C.card}>
-        {sectionTitle("Pipeline Quality - By Stage", "Where expected commission is currently sitting")}
+        {sectionTitle("Pipeline Quality - By Stage", "Where expected commission is currently sitting", undefined, undefined,
+          () => xlsxExport("Pipeline by Stage", `nasama-pipeline-by-stage-${todayStr()}.xlsx`,
+            [["Stage", "Deals", "Expected Commission (AED)"],
+              ...kpis.pipelineStageValue.map(row => [row.stage, row.count, xAED(row.expected)])],
+            [2]))}
         <div style={{ padding: 18 }}>
           {kpis.pipelineStageValue.map((row, i) => <div key={row.stage} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", paddingBottom: 10, marginBottom: 10, borderBottom: i < kpis.pipelineStageValue.length - 1 ? "1px solid #F3F4F6" : "none" }}>
             <div>
@@ -645,7 +725,11 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
       </div>
 
       <div style={C.card}>
-        {sectionTitle("Control / Profitability - Top Expense Categories", `Spend concentration — ${periodLabel}`, "Open Payments", "payments")}
+        {sectionTitle("Control / Profitability - Top Expense Categories", `Spend concentration — ${periodLabel}`, "Open Payments", "payments",
+          () => xlsxExport("Top Expense Categories", `nasama-top-expenses-${todayStr()}.xlsx`,
+            [["Category", "Amount (AED)"],
+              ...filteredKpis.topExpenseCategories.map(row => [row.name, xAED(row.amount)])],
+            [1]))}
         <div style={{ padding: 18 }}>
           {filteredKpis.topExpenseCategories.length === 0 && <div style={{ color: "#9CA3AF", fontSize: 13, textAlign: "center", padding: "18px 0" }}>No expense activity for this period.</div>}
           {filteredKpis.topExpenseCategories.map((row, i) => {
@@ -664,7 +748,23 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
 
     {/* ── Commission Collection Aging ── */}
     {pendingDeals.length > 0 && <div style={{ ...C.card, marginBottom: 16 }}>
-      {sectionTitle("Commission Collection Aging", "Open deals by time in pipeline — sorted oldest first", "Open Deals", "deals")}
+      {sectionTitle("Commission Collection Aging", "Open deals by time in pipeline — sorted oldest first", "Open Deals", "deals",
+        () => xlsxExport("Commission Aging", `nasama-commission-aging-${todayStr()}.xlsx`,
+          [["Property", "Unit", "Client", "Stage", "Broker", "Commission (AED)", "Age (days)", "Bucket", "Invoice"],
+            ...pendingDeals
+              .map(d => {
+                const days = d.created_at ? Math.floor((todayMs - new Date(d.created_at + "T12:00:00").getTime()) / 86400000) : null;
+                const bucket = days === null ? null : days <= 30 ? AGING_BUCKETS[0] : days <= 60 ? AGING_BUCKETS[1] : days <= 90 ? AGING_BUCKETS[2] : AGING_BUCKETS[3];
+                return { ...d, days, bucket };
+              })
+              .sort((a, b) => (b.days || 0) - (a.days || 0))
+              .map(d => {
+                const inv = dealInvoiceStatus.get(d.id);
+                return [d.property_name || "", d.unit_no || "", d.client_name || "", d.stage || "", d.broker_name || "",
+                  xAED(d.expected_commission_net || 0), d.days == null ? "" : d.days, d.bucket ? d.bucket.label : "",
+                  inv === "issued" ? "Issued" : inv === "draft" ? "Draft" : "None"];
+              })],
+          [5]))}
       <div style={{ padding: "12px 18px 4px" }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, marginBottom: 20 }}>
           {agingData.map(bucket => <div key={bucket.label} style={{ padding: "14px 16px", borderRadius: 10, background: bucket.bg, border: `1px solid ${bucket.color}33` }}>
@@ -731,6 +831,16 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
           <div style={{ fontSize: 12, color: "#98A2B3", marginTop: 3 }}>{recentTxns.length} latest entries for {periodLabel}</div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <XlsxSignBtn
+            title="Export recent transactions to Excel"
+            onExport={() => xlsxExport("Recent Transactions", `nasama-recent-transactions-${todayStr()}.xlsx`,
+              [["Date", "Ref", "Type", "Description", "Counterparty", "Amount (AED)"],
+                ...recentTxns.map(t => {
+                  const typeInfo = TXN_TYPES[t.txnType] || { label: t.txnType || "JV" };
+                  const total = (t.lines || []).reduce((sum, line) => sum + (line.debit || 0), 0);
+                  return [fmtDate(t.date), t.ref || "", typeInfo.label, t.description || "Manual journal entry", t.counterparty || "Internal", xAED(total)];
+                })],
+              [5])} />
           <button style={C.btn("ghost", true)} onClick={e => { e.stopPropagation(); setPage("journal"); }}>Open Journal</button>
           <span style={{ fontSize: 18, color: "#98A2B3", userSelect: "none", lineHeight: 1 }}>{showRecentTxns ? "▲" : "▼"}</span>
         </div>
@@ -4227,14 +4337,17 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
     </div>
   );
 
-  const sectionCard = (title, sub, children, action) => (
+  const sectionCard = (title, sub, children, action, onExport) => (
     <div style={{ background: "#fff", border: "1px solid #EAECF0", borderRadius: 14, boxShadow: "0 1px 3px rgba(16,24,40,.06)", overflow: "hidden" }}>
-      <div style={{ padding: "16px 20px 14px", borderBottom: "1px solid #EAECF0", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+      <div style={{ padding: "16px 20px 14px", borderBottom: "1px solid #EAECF0", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
         <div>
           <div style={{ fontWeight: 700, fontSize: 13.5, color: NAVY }}>{title}</div>
           {sub && <div style={{ fontSize: 12, color: "#98A2B3", marginTop: 3 }}>{sub}</div>}
         </div>
-        {action}
+        {(action || onExport) && <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          {onExport && <XlsxSignBtn onExport={onExport} title={`Export "${title}" to Excel`} />}
+          {action}
+        </div>}
       </div>
       <div style={{ padding: 20 }}>{children}</div>
     </div>
@@ -4323,7 +4436,11 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
               </div>
             ))}
           </div>,
-          <button style={C.btn("ghost", true)} onClick={() => setPage("deals")}>View Deals →</button>
+          <button style={C.btn("ghost", true)} onClick={() => setPage("deals")}>View Deals →</button>,
+          () => xlsxExport("Pipeline Funnel", `nasama-pipeline-funnel-${todayStr()}.xlsx`,
+            [["Stage", "Count", "Commission (AED)"],
+              ...byStage.map(row => [row.stage, row.count, xAED(row.commission)])],
+            [2])
         )}
 
         {sectionCard("Deal Type Breakdown", "Splits by Off-Plan, Secondary, Rental",
@@ -4344,7 +4461,12 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
               </div>
             ))}
             {byType.length === 0 && <div style={{ color: "#9CA3AF", fontSize: 13, textAlign: "center", padding: "20px 0" }}>No deals yet.</div>}
-          </div>
+          </div>,
+          null,
+          () => xlsxExport("Deal Type Breakdown", `nasama-deal-types-${todayStr()}.xlsx`,
+            [["Type", "Deals", "Value (AED)", "Commission (AED)"],
+              ...byType.map(row => [row.type, row.count, xAED(row.value), xAED(row.commission)])],
+            [2, 3])
         )}
       </div>
 
@@ -4372,7 +4494,10 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
             {dealsPerMonth.map((m, i) => <div key={i} style={{ flex: 1, textAlign: "center", fontSize: 10, fontWeight: 600, color: "#6B7280", whiteSpace: "nowrap" }}>{m.label}</div>)}
           </div>
         </div>,
-        <button style={C.btn("ghost", true)} onClick={() => setPage("deals")}>View Deals →</button>
+        <button style={C.btn("ghost", true)} onClick={() => setPage("deals")}>View Deals →</button>,
+        () => xlsxExport("Deals per Month", `nasama-deals-per-month-${todayStr()}.xlsx`,
+          [["Month", "Off-Plan", "Secondary", "Rental", "Total"],
+            ...dealsPerMonth.map(m => [m.label, m.offplan, m.secondary, m.rental, m.count])])
       )}
 
       {/* ── Broker Performance Bar Chart ── */}
@@ -4410,7 +4535,12 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
             </div>
             );
           })}
-        </div>
+        </div>,
+        null,
+        () => xlsxExport("Broker Gen vs Retained", `nasama-broker-generated-retained-${todayStr()}.xlsx`,
+          [["Broker", "Deals", "Collected", "Commission Generated (AED)", "Company Retained (AED)", "Value Sold (AED)"],
+            ...brokerPerf.map(b => [b.name, b.deals, b.collected, xAED(b.commission), xAED(brokerRetainedByName.get(b.name) || 0), xAED(b.value)])],
+          [3, 4, 5])
       )}
 
       <div style={{ marginBottom: 16 }} />
@@ -4447,7 +4577,14 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
               {topPnlDeals.length === 0 && <tr><td colSpan={8} style={{ ...C.td, textAlign: "center", padding: 30, color: "#9CA3AF" }}>No deals with commission data yet.</td></tr>}
             </tbody>
           </table>
-        </div>
+        </div>,
+        null,
+        () => xlsxExport("Deal Profitability", `nasama-deal-profitability-${todayStr()}.xlsx`,
+          [["Property", "Unit", "Stage", "Broker", "Expected Comm. (AED)", "Cash Collected (AED)", "Broker Paid (AED)", "Net Retained (AED)", "Margin %"],
+            ...topPnlDeals.map(d => [d.property_name || "", d.unit_no || "", d.stage || "", d.broker_name || "",
+              xAED(d.expected_commission_net || 0), xAED(d.cashIn || 0), xAED(d.brokerPaid || 0), xAED(d.net || 0),
+              d.cashIn > 0 ? Math.round((d.net / d.cashIn) * 100) : ""])],
+          [4, 5, 6, 7])
       )}
 
       <div style={{ marginBottom: 16 }} />
@@ -4479,7 +4616,12 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
                 {enhDevPerf.length === 0 && <tr><td colSpan={7} style={{ ...C.td, textAlign: "center", padding: 20, color: "#9CA3AF" }}>No developer data.</td></tr>}
               </tbody>
             </table>
-          </div>
+          </div>,
+          null,
+          () => xlsxExport("Developer Performance", `nasama-developer-performance-${todayStr()}.xlsx`,
+            [["#", "Developer", "Deals", "Conv. %", "Avg Comm. %", "Total Comm. (AED)", "Uncollected (AED)"],
+              ...enhDevPerf.map((d, i) => [i + 1, d.name, d.deals, d.convRate, d.avgCommPct > 0 ? Number(d.avgCommPct.toFixed(1)) : "", xAED(d.commission), xAED(d.uncollected)])],
+            [5, 6])
         )}
 
         {sectionCard("Top Deals by Commission", "Highest expected commission deals",
@@ -4499,7 +4641,12 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
               </div>
             ))}
             {topDeals.length === 0 && <div style={{ color: "#9CA3AF", fontSize: 13, textAlign: "center", padding: "20px 0" }}>No deals yet.</div>}
-          </div>
+          </div>,
+          null,
+          () => xlsxExport("Top Deals", `nasama-top-deals-${todayStr()}.xlsx`,
+            [["#", "Property", "Broker", "Client", "Stage", "Type", "Expected Commission (AED)"],
+              ...topDeals.map((d, i) => [i + 1, d.property_name || "", d.broker_name || "", d.client_name || "", d.stage || "", d.type || "", xAED(d.expected_commission_net || 0)])],
+            [6])
         )}
       </div>
 
@@ -4555,7 +4702,13 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
               </table>
           }
         </div>,
-        <button style={C.btn("ghost", true)} onClick={() => setPage("budget")}>Open Budget →</button>
+        <button style={C.btn("ghost", true)} onClick={() => setPage("budget")}>Open Budget →</button>,
+        () => xlsxExport("Expense Control", `nasama-expense-control-${todayStr()}.xlsx`,
+          [["Account Code", "Account", "This Month (AED)", "Last Month (AED)", "vs Last %", "3M Avg (AED)", ...(qBudget ? ["Monthly Budget (AED)", "vs Budget %"] : [])],
+            ...expenseControl.map(r => [r.acc.code, r.acc.name, xAED(r.thisM), xAED(r.prevM),
+              r.vsLast !== null ? Math.round(r.vsLast) : "", xAED(r.avg3M),
+              ...(qBudget ? [xAED(r.budget), r.vsBudget !== null ? Math.round(r.vsBudget) : ""] : [])])],
+          qBudget ? [2, 3, 5, 6] : [2, 3, 5])
       )}
 
       <div style={{ marginBottom: 16 }} />
@@ -4604,7 +4757,13 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
               </tfoot>
             )}
           </table>
-        </div>
+        </div>,
+        null,
+        () => xlsxExport("Broker Performance", `nasama-broker-performance-${todayStr()}.xlsx`,
+          [["Broker", "Deals", "Collected", "Conv. %", "Avg Comm. %", "Expected Comm. (AED)", "Broker Paid (AED)", "Net Contribution (AED)"],
+            ...enhBrokerPerf.map(b => [b.name, b.deals, b.collected, b.deals > 0 ? Math.round((b.collected / b.deals) * 100) : "",
+              b.avgCommPct > 0 ? Number(b.avgCommPct.toFixed(1)) : "", xAED(b.commission), xAED(b.brokerPaid), xAED(b.netContribution)])],
+          [5, 6, 7])
       )}
     </div>
   );
