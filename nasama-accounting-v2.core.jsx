@@ -696,6 +696,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       { id: "a5010", code: "5010", name: "Employee Salaries", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a5020", code: "5020", name: "Manager Salary", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a5030", code: "5030", name: "Broker Incentive", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
+      { id: "a5040", code: "5040", name: "Sales Manager Override", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a5100", code: "5100", name: "Office Rent", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a5110", code: "5110", name: "DEWA — Electricity & Water", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a5120", code: "5120", name: "Empower — Cooling", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false },
@@ -1221,7 +1222,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       const outputVAT = accounts.find(a => a.isOutputVAT);
       const inputVAT = accounts.find(a => a.isInputVAT);
 
-      const makeLine = ({ accountId, debit = 0, credit = 0, memo = "", deal_id, broker_id, developer_id }) => ({
+      const makeLine = ({ accountId, debit = 0, credit = 0, memo = "", deal_id, broker_id, developer_id, manager_id }) => ({
         id: uid(),
         accountId,
         debit,
@@ -1229,7 +1230,8 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         memo,
         ...(deal_id !== undefined ? { deal_id } : {}),
         ...(broker_id !== undefined ? { broker_id } : {}),
-        ...(developer_id !== undefined ? { developer_id } : {})
+        ...(developer_id !== undefined ? { developer_id } : {}),
+        ...(manager_id !== undefined ? { manager_id } : {})
       });
 
       const computeVATSplit = (grossC, vatRate = 0) => {
@@ -1410,20 +1412,44 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       };
 
       // BROKER PAYMENT — Paid directly from bank (no AP step)
-      const postBrokerPayment = ({ date, deal, brokerAmount, paidFromCode = "1002", memo = "", commit = true }) => {
+      // Posts ONE bank transfer. Pass a broker amount (DR 5500), a manager
+      // override amount (DR 5040), or both; the bank is credited for the total.
+      // The broker and manager legs are recorded as separate transactions by the
+      // UI (two real bank transfers), so each can carry its own memo/reference —
+      // hence refSuffix, which keeps the ref unique across the pair.
+      const postBrokerPayment = ({ date, deal, brokerAmount = 0, managerAmount = 0, manager_id, manager_name, paidFromCode = "1002", memo = "", refSuffix = "", commit = true }) => {
         if (!deal || !deal.id) throw new Error("deal_id is required for broker payment tracking");
-        const expenseA = byCode("5500") || byCode("5000");
         const bankA = byCode(paidFromCode) || accounts.find(a => a.isBank);
-        if (!expenseA || !bankA) throw new Error("Missing broker expense or bank account");
+        if (!bankA) throw new Error("Missing bank account");
 
-        const amtC = toCents(brokerAmount);
-        if (amtC <= 0) throw new Error("Broker amount must be positive");
-        const lines = [
-          makeLine({ accountId: expenseA.id, debit: amtC, memo: memo || "Broker commission", deal_id: deal?.id, broker_id: deal?.broker_id, developer_id: deal?.developer }),
-          makeLine({ accountId: bankA.id, credit: amtC, memo: memo || "Broker commission", deal_id: deal?.id, broker_id: deal?.broker_id, developer_id: deal?.developer }),
-        ];
-        const ref = `BP-${Date.now().toString(36).toUpperCase()}`;
-        const txn = { id: uid(), date, description: `Broker Payment: ${deal?.broker_name || memo}`, ref, counterparty: deal?.broker_name || "", tags: "broker-payment", txnType: "BP", isVoid: false, lines, createdAt: new Date().toISOString(), deal_id: deal?.id };
+        const amtC = toCents(brokerAmount || 0);
+        const mgrC = toCents(managerAmount || 0);
+        if (amtC < 0 || mgrC < 0) throw new Error("Amounts cannot be negative");
+        if (amtC + mgrC <= 0) throw new Error("Enter a positive amount");
+
+        const expenseA = amtC > 0 ? (byCode("5500") || byCode("5000")) : null;
+        if (amtC > 0 && !expenseA) throw new Error("Missing broker expense account (5500)");
+        const mgrA = mgrC > 0 ? (byCode("5040") || byCode("5030")) : null;
+        if (mgrC > 0 && !mgrA) throw new Error("Missing Sales Manager Override account (5040)");
+
+        const bankMemo = memo || (amtC > 0 ? "Broker commission" : "Sales manager override");
+        const lines = [];
+        if (amtC > 0) lines.push(
+          makeLine({ accountId: expenseA.id, debit: amtC, memo: memo || "Broker commission", deal_id: deal?.id, broker_id: deal?.broker_id, developer_id: deal?.developer })
+        );
+        if (mgrC > 0) lines.push(
+          makeLine({ accountId: mgrA.id, debit: mgrC, memo: memo || `Sales manager override${manager_name ? " — " + manager_name : ""}`, deal_id: deal?.id, manager_id, developer_id: deal?.developer })
+        );
+        lines.push(
+          makeLine({ accountId: bankA.id, credit: amtC + mgrC, memo: bankMemo, deal_id: deal?.id, broker_id: amtC > 0 ? deal?.broker_id : undefined, manager_id: amtC > 0 ? undefined : manager_id, developer_id: deal?.developer })
+        );
+        const ref = `BP-${Date.now().toString(36).toUpperCase()}${refSuffix ? "-" + refSuffix : ""}`;
+        const desc = amtC > 0 && mgrC > 0
+          ? `Broker Payment: ${deal?.broker_name || memo} (+ mgr ${manager_name || ""})`.trim()
+          : amtC > 0
+            ? `Broker Payment: ${deal?.broker_name || memo}`
+            : `Manager Override: ${manager_name || ""}${deal?.broker_name ? " — " + deal.broker_name : ""}`.trim();
+        const txn = { id: uid(), date, description: desc, ref, counterparty: (amtC > 0 ? deal?.broker_name : manager_name) || "", tags: "broker-payment", txnType: "BP", isVoid: false, lines, createdAt: new Date().toISOString(), deal_id: deal?.id };
         validateBalanced(lines);
         if (commit) saveTxn(txn);
         return txn;

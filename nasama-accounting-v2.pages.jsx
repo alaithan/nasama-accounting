@@ -1097,8 +1097,10 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
   const [dealMutationLabel, setDealMutationLabel] = useState("");
   const [dealInvoices, setDealInvoices] = useState([]);
   const [bpDeal, setBpDeal] = useState(null);
-  const [bpForm, setBpForm] = useState({ date: todayStr(), amount: "", splitPct: "", paidFromCode: "1002", memo: "" });
+  const [bpForm, setBpForm] = useState({ date: todayStr(), amount: "", splitPct: "", managerId: "", managerPct: "", managerAmount: "", paidFromCode: "1002", memo: "", managerMemo: "" });
   const [bpSaving, setBpSaving] = useState(false);
+  const [bpConfirm, setBpConfirm] = useState(false);
+  const closeBp = () => { setBpDeal(null); setBpConfirm(false); };
   const brokerPaidDealIds = useMemo(() => {
     const fromTxns = (txns || []).filter(t => t.txnType === "BP" && !t.isVoid && t.deal_id).map(t => t.deal_id);
     const fromDeals = (deals || []).filter(d => (d.broker_paid_amount || 0) > 0).map(d => d.id);
@@ -1451,7 +1453,21 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
                   if (brokerPaidDealIds.has(d.id)) return (
                     <span title="Broker payment already recorded for this deal" style={{ fontSize: 11, color: "#7C3AED", padding: "4px 8px", borderRadius: 4, border: "1px solid #DDD6FE", background: "#F5F3FF", whiteSpace: "nowrap", cursor: "default" }}>✓ Broker Paid</span>
                   );
-                  return <button style={{ ...C.btn("secondary", true), borderColor: "#7C3AED", color: "#7C3AED" }} onClick={e => { e.stopPropagation(); setBpDeal(d); setBpForm({ date: todayStr(), amount: "", splitPct: "", paidFromCode: "1002", memo: `Broker commission — ${d.property_name || d.id}` }); }}>Pay Broker</button>;
+                  return <button style={{ ...C.btn("secondary", true), borderColor: "#7C3AED", color: "#7C3AED" }} onClick={e => {
+                    e.stopPropagation();
+                    const totalC = d.expected_commission_net || 0;
+                    const brokerRec = (brokers || []).find(b => b.id === d.broker_id);
+                    const mgrId = brokerRec ? (brokerRec.manager_id || "") : "";
+                    setBpConfirm(false);
+                    setBpDeal(d);
+                    setBpForm({
+                      date: todayStr(),
+                      splitPct: "50", amount: String(fromCents(Math.round(totalC * 0.5))),
+                      managerId: mgrId,
+                      managerPct: mgrId ? "5" : "", managerAmount: mgrId ? String(fromCents(Math.round(totalC * 0.05))) : "",
+                      paidFromCode: "1002", memo: `Broker commission — ${d.property_name || d.id}`, managerMemo: `Manager override — ${d.property_name || d.id}`
+                    });
+                  }}>Pay Broker</button>;
                 })()}
                 {hasPermission(userRole, 'sales.edit') && <button style={C.btn("secondary", true)} onClick={e => { e.stopPropagation(); setEdit(d); setShow(true); }}>Edit</button>}
                 {hasPermission(userRole, 'sales.edit') && <button style={C.btn("danger", true)} onClick={e => { e.stopPropagation(); handleDelete(d); }}>Delete</button>}
@@ -1479,8 +1495,14 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
       const allLiquid = [...bankAccts, ...cashAccts];
       const totalComm = bpDeal.expected_commission_net ? fromCents(bpDeal.expected_commission_net) : 0;
       const brokerAmt = parseFloat(bpForm.amount) || 0;
-      const companyRetains = totalComm > 0 ? Math.max(0, totalComm - brokerAmt) : 0;
+      const managerAmt = parseFloat(bpForm.managerAmount) || 0;
+      const companyRetains = totalComm > 0 ? Math.max(0, totalComm - brokerAmt - managerAmt) : 0;
       const splitPctNum = parseFloat(bpForm.splitPct);
+      const managerPctNum = parseFloat(bpForm.managerPct);
+      const managerBroker = (brokers || []).find(b => b.id === bpForm.managerId);
+      const managerName = managerBroker ? managerBroker.name : "";
+      const managerOptions = (brokers || []).filter(b => b.id !== bpDeal.broker_id);
+      const companyPctLabel = totalComm > 0 ? Math.round((100 - (splitPctNum || 0) - (managerPctNum || 0)) * 100) / 100 : NaN;
       const handleSplitPctChange = (val) => {
         const pct = parseFloat(val);
         if (!isNaN(pct) && totalComm > 0) {
@@ -1499,15 +1521,47 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
           setBpForm(p => ({ ...p, amount: val, splitPct: "" }));
         }
       };
-      const handlePayBroker = async () => {
+      const handleManagerPctChange = (val) => {
+        const pct = parseFloat(val);
+        if (!isNaN(pct) && totalComm > 0) {
+          const calculated = Math.round(totalComm * pct / 100 * 100) / 100;
+          setBpForm(p => ({ ...p, managerPct: val, managerAmount: String(calculated) }));
+        } else {
+          setBpForm(p => ({ ...p, managerPct: val }));
+        }
+      };
+      const handleManagerAmountChange = (val) => {
+        const amt = parseFloat(val);
+        if (!isNaN(amt) && totalComm > 0) {
+          const impliedPct = Math.round(amt / totalComm * 10000) / 100;
+          setBpForm(p => ({ ...p, managerAmount: val, managerPct: String(impliedPct) }));
+        } else {
+          setBpForm(p => ({ ...p, managerAmount: val, managerPct: "" }));
+        }
+      };
+      // Validate, then move to the review-and-confirm step (nothing posts yet).
+      const handleReview = () => {
         if (!brokerAmt || brokerAmt <= 0) { toast("Enter a valid amount", "error"); return; }
         if (!bpForm.date) { toast("Select a date", "error"); return; }
+        if (managerAmt > 0 && !bpForm.managerId) { toast("Select a manager for the top-up, or clear the manager amount", "error"); return; }
+        if (brokerAmt + managerAmt > totalComm + 0.005 && totalComm > 0) { toast("Broker + manager exceeds the total commission", "error"); return; }
+        setBpConfirm(true);
+      };
+      // Post the two bank transfers as SEPARATE transactions (broker, then
+      // manager), each with its own memo/reference. Both post together.
+      const handleConfirmPost = async () => {
         setBpSaving(true);
         try {
-          const txn = journal.postBrokerPayment({ date: bpForm.date, deal: bpDeal, brokerAmount: brokerAmt, paidFromCode: bpForm.paidFromCode, memo: bpForm.memo, commit: false });
-          await persistTxn(txn);
-          toast(`Broker payment of ${fmtAED(toCents(brokerAmt))} recorded`, "success");
-          setBpDeal(null);
+          const brokerTxn = journal.postBrokerPayment({ date: bpForm.date, deal: bpDeal, brokerAmount: brokerAmt, paidFromCode: bpForm.paidFromCode, memo: bpForm.memo, refSuffix: "B", commit: false });
+          await persistTxn(brokerTxn);
+          if (managerAmt > 0) {
+            const mgrTxn = journal.postBrokerPayment({ date: bpForm.date, deal: bpDeal, managerAmount: managerAmt, manager_id: bpForm.managerId, manager_name: managerName, paidFromCode: bpForm.paidFromCode, memo: bpForm.managerMemo, refSuffix: "M", commit: false });
+            await persistTxn(mgrTxn);
+            const updated = { ...bpDeal, manager_id: bpForm.managerId, manager_name: managerName, manager_paid_amount: toCents(managerAmt), manager_paid_date: bpForm.date };
+            setDeals(prev => prev.map(d => d.id === bpDeal.id ? updated : d));
+          }
+          toast(managerAmt > 0 ? `Posted 2 transfers — broker ${fmtAED(toCents(brokerAmt))}, manager ${fmtAED(toCents(managerAmt))}` : `Broker payment of ${fmtAED(toCents(brokerAmt))} recorded`, "success");
+          closeBp();
         } catch (err) {
           toast("Save failed: " + err.message, "error");
         } finally {
@@ -1516,23 +1570,25 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
       };
       const handleRecordNoBankPayment = async () => {
         if (!brokerAmt || brokerAmt <= 0) { toast("Enter a valid amount", "error"); return; }
+        if (managerAmt > 0 && !bpForm.managerId) { toast("Select a manager for the top-up, or clear the manager amount", "error"); return; }
         setBpSaving(true);
         try {
-          const updated = { ...bpDeal, broker_paid_amount: toCents(brokerAmt), broker_paid_date: bpForm.date };
+          const updated = { ...bpDeal, broker_paid_amount: toCents(brokerAmt), broker_paid_date: bpForm.date,
+            ...(managerAmt > 0 ? { manager_id: bpForm.managerId, manager_name: managerName, manager_paid_amount: toCents(managerAmt), manager_paid_date: bpForm.date } : {}) };
           setDeals(prev => prev.map(d => d.id === bpDeal.id ? updated : d));
-          toast(`Broker payment of ${fmtAED(toCents(brokerAmt))} recorded (no bank transaction)`, "success");
-          setBpDeal(null);
+          toast(managerAmt > 0 ? `Broker ${fmtAED(toCents(brokerAmt))} + manager ${fmtAED(toCents(managerAmt))} recorded (no bank transaction)` : `Broker payment of ${fmtAED(toCents(brokerAmt))} recorded (no bank transaction)`, "success");
+          closeBp();
         } catch (err) {
           toast("Save failed: " + err.message, "error");
         } finally {
           setBpSaving(false);
         }
       };
-      return <div style={C.modal} onClick={() => setBpDeal(null)}>
-        <div style={C.mbox(480)} onClick={e => e.stopPropagation()}>
+      return <div style={C.modal} onClick={closeBp}>
+        <div style={C.mbox(520)} onClick={e => e.stopPropagation()}>
           <div style={C.mhdr}>
-            <span style={{ fontWeight: 700, fontSize: 16 }}>Pay Broker</span>
-            <button onClick={() => setBpDeal(null)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
+            <span style={{ fontWeight: 700, fontSize: 16 }}>{bpConfirm ? `Confirm ${managerAmt > 0 ? "2 transfers" : "transfer"}` : `Pay Broker${managerAmt > 0 ? " + Manager" : ""}`}</span>
+            <button onClick={closeBp} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
           </div>
           <div style={C.mbdy}>
             <div style={{ marginBottom: 12, padding: "10px 14px", background: "#F5F3FF", borderRadius: 6, borderLeft: "3px solid #7C3AED", fontSize: 13 }}>
@@ -1540,23 +1596,27 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
               <div style={{ color: "#6B7280", marginTop: 2 }}>Broker: {bpDeal.broker_name} &nbsp;|&nbsp; Total commission: {fmtAED(bpDeal.expected_commission_net || 0)}</div>
             </div>
 
-            {/* Split summary bar */}
+            {/* Split summary bar — Broker | Manager | Company */}
             {brokerAmt > 0 && totalComm > 0 && <div style={{ marginBottom: 14, borderRadius: 8, overflow: "hidden", border: "1px solid #E9D5FF" }}>
               <div style={{ display: "flex", height: 28 }}>
                 <div style={{ flex: brokerAmt, background: "#7C3AED", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap", padding: "0 6px" }}>
                   Broker {!isNaN(splitPctNum) ? `${splitPctNum}%` : ""}
                 </div>
+                {managerAmt > 0 && <div style={{ flex: managerAmt, background: "#D97706", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap", padding: "0 6px" }}>
+                  Manager {!isNaN(managerPctNum) ? `${managerPctNum}%` : ""}
+                </div>}
                 <div style={{ flex: Math.max(0, companyRetains), background: "#059669", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", minWidth: 0, overflow: "hidden", whiteSpace: "nowrap", padding: "0 6px" }}>
-                  Company {!isNaN(splitPctNum) ? `${Math.round((100 - splitPctNum) * 100) / 100}%` : ""}
+                  Company {!isNaN(companyPctLabel) ? `${companyPctLabel}%` : ""}
                 </div>
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", background: "#FAFAFA", fontSize: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", background: "#FAFAFA", fontSize: 12, gap: 8, flexWrap: "wrap" }}>
                 <span style={{ color: "#7C3AED", fontWeight: 600 }}>Broker: {fmtAED(toCents(brokerAmt))}</span>
+                {managerAmt > 0 && <span style={{ color: "#B45309", fontWeight: 600 }}>Manager: {fmtAED(toCents(managerAmt))}</span>}
                 <span style={{ color: "#059669", fontWeight: 600 }}>Company retains: {fmtAED(toCents(companyRetains))}</span>
               </div>
             </div>}
 
-            <div style={C.fg}>
+            {!bpConfirm && <div style={C.fg}>
               <div><label style={C.label}>Date</label><Inp type="date" value={bpForm.date} onChange={e => setBpForm(p => ({ ...p, date: e.target.value }))} /></div>
               <div><label style={C.label}>Broker Split %</label>
                 <div style={{ position: "relative" }}>
@@ -1565,6 +1625,20 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
                 </div>
               </div>
               <div><label style={C.label}>Broker Amount (AED)</label><Inp type="number" step="0.01" value={bpForm.amount} onChange={e => handleAmountChange(e.target.value)} placeholder="Auto-calculated from %" /></div>
+              <div style={{ gridColumn: "1 / -1", borderTop: "1px dashed #E9D5FF", paddingTop: 12, marginTop: 2 }}>
+                <label style={{ ...C.label, color: "#B45309" }}>Sales Manager Top-up <span style={{ fontWeight: 400, color: "#9CA3AF" }}>(optional — booked to 5040)</span></label>
+                <Sel value={bpForm.managerId} onChange={e => setBpForm(p => ({ ...p, managerId: e.target.value, managerPct: p.managerPct || "5", managerAmount: p.managerAmount || (totalComm > 0 ? String(fromCents(Math.round(bpDeal.expected_commission_net * 0.05))) : "") }))}>
+                  <option value="">— No manager top-up —</option>
+                  {managerOptions.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </Sel>
+              </div>
+              {bpForm.managerId && <div><label style={C.label}>Manager Split %</label>
+                <div style={{ position: "relative" }}>
+                  <Inp type="number" step="0.01" min="0" max="100" value={bpForm.managerPct} onChange={e => handleManagerPctChange(e.target.value)} placeholder="e.g. 5" style={{ paddingRight: 32 }} />
+                  <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", color: "#9CA3AF", fontSize: 13, pointerEvents: "none" }}>%</span>
+                </div>
+              </div>}
+              {bpForm.managerId && <div><label style={C.label}>Manager Amount (AED)</label><Inp type="number" step="0.01" value={bpForm.managerAmount} onChange={e => handleManagerAmountChange(e.target.value)} placeholder="Auto-calculated from %" /></div>}
               <div><label style={C.label}>Paid From Account</label>
                 <Sel value={bpForm.paidFromCode} onChange={e => setBpForm(p => ({ ...p, paidFromCode: e.target.value }))}>
                   {bankAccts.length > 0 && <optgroup label="Bank Accounts">{bankAccts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
@@ -1572,13 +1646,43 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
                   {allLiquid.length === 0 && <option value="1002">Default Bank</option>}
                 </Sel>
               </div>
-              <div style={{ gridColumn: "1 / -1" }}><label style={C.label}>Memo</label><Inp value={bpForm.memo} onChange={e => setBpForm(p => ({ ...p, memo: e.target.value }))} /></div>
-            </div>
+              <div style={{ gridColumn: "1 / -1" }}><label style={C.label}>Broker memo / reference</label><Inp value={bpForm.memo} onChange={e => setBpForm(p => ({ ...p, memo: e.target.value }))} /></div>
+              {bpForm.managerId && managerAmt > 0 && <div style={{ gridColumn: "1 / -1" }}><label style={C.label}>Manager memo / reference</label><Inp value={bpForm.managerMemo} onChange={e => setBpForm(p => ({ ...p, managerMemo: e.target.value }))} /></div>}
+            </div>}
+
+            {/* Review & confirm — one row per bank transfer that will post */}
+            {bpConfirm && (() => {
+              const paidFrom = (accounts || []).find(a => a.code === bpForm.paidFromCode);
+              const paidFromName = paidFrom ? paidFrom.name : bpForm.paidFromCode;
+              const Row = ({ color, tag, payee, amt, acct, memoTxt, from }) => <div style={{ border: `1px solid ${color}33`, borderLeft: `3px solid ${color}`, borderRadius: 8, padding: "10px 14px", marginBottom: 10, background: "#FCFCFD" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                  <span style={{ fontWeight: 700, fontSize: 13, color }}>{tag}</span>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>{fmtAED(amt)}</span>
+                </div>
+                <div style={{ fontSize: 12, color: "#6B7280", marginTop: 4 }}>{payee}</div>
+                <div style={{ fontSize: 11.5, color: "#9CA3AF", marginTop: 3 }}>DR {acct} &nbsp;·&nbsp; CR {from}</div>
+                {memoTxt && <div style={{ fontSize: 11.5, color: "#9CA3AF", marginTop: 2 }}>Memo: {memoTxt}</div>}
+              </div>;
+              return <div>
+                <div style={{ fontSize: 12.5, color: "#6B7280", marginBottom: 12 }}>{managerAmt > 0 ? "The following two bank transfers will post on " : "The following bank transfer will post on "}<strong>{bpForm.date}</strong> from <strong>{paidFromName}</strong>:</div>
+                <Row color="#7C3AED" tag="Transfer 1 — Broker" payee={bpDeal.broker_name} amt={toCents(brokerAmt)} acct="5500 Commission Payment to Brokers" memoTxt={bpForm.memo} from={paidFromName} />
+                {managerAmt > 0 && <Row color="#D97706" tag="Transfer 2 — Manager" payee={managerName} amt={toCents(managerAmt)} acct="5040 Sales Manager Override" memoTxt={bpForm.managerMemo} from={paidFromName} />}
+                <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 12px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 8, fontSize: 12.5, marginTop: 4 }}>
+                  <span style={{ fontWeight: 600, color: "#059669" }}>Company retains</span>
+                  <span style={{ fontWeight: 700, color: "#059669" }}>{fmtAED(toCents(companyRetains))}</span>
+                </div>
+              </div>;
+            })()}
           </div>
           <div style={C.mftr}>
-            <button style={C.btn("secondary")} onClick={() => setBpDeal(null)} disabled={bpSaving}>Cancel</button>
-            <button style={{ ...C.btn("secondary"), borderColor: "#7C3AED", color: "#7C3AED" }} onClick={handleRecordNoBankPayment} disabled={bpSaving} title="Records the broker amount on the deal — no bank transaction created">{bpSaving ? "Saving…" : "Record (No Bank)"}</button>
-            <button style={{ ...C.btn(), background: "#7C3AED", borderColor: "#7C3AED" }} onClick={handlePayBroker} disabled={bpSaving}>{bpSaving ? "Saving…" : "Record + Bank"}</button>
+            {!bpConfirm ? <>
+              <button style={C.btn("secondary")} onClick={closeBp} disabled={bpSaving}>Cancel</button>
+              <button style={{ ...C.btn("secondary"), borderColor: "#7C3AED", color: "#7C3AED" }} onClick={handleRecordNoBankPayment} disabled={bpSaving} title="Records the amounts on the deal — no bank transaction created">{bpSaving ? "Saving…" : "Record (No Bank)"}</button>
+              <button style={{ ...C.btn(), background: "#7C3AED", borderColor: "#7C3AED" }} onClick={handleReview} disabled={bpSaving}>Record + Bank →</button>
+            </> : <>
+              <button style={C.btn("secondary")} onClick={() => setBpConfirm(false)} disabled={bpSaving}>← Back</button>
+              <button style={{ ...C.btn(), background: "#059669", borderColor: "#059669" }} onClick={handleConfirmPost} disabled={bpSaving}>{bpSaving ? "Posting…" : managerAmt > 0 ? "Confirm & Post Both" : "Confirm & Post"}</button>
+            </>}
           </div>
         </div>
       </div>;
@@ -2667,7 +2771,14 @@ function CRUDPage({ title, icon, items, setItems, fields, eventName, userRole, c
         <tbody>
           {filtered.length === 0 && <tr><td colSpan={fields.filter(f => f.showInTable !== false).length + 1} style={{ ...C.td, textAlign: "center", padding: 40, color: "#9CA3AF" }}>No records found.</td></tr>}
           {filtered.map(item => <tr key={item.id}>
-            {fields.filter(f => f.showInTable !== false).map(f => <td key={f.key} style={C.td}>{String(item[f.key] || "—")}</td>)}
+            {fields.filter(f => f.showInTable !== false).map(f => {
+              let disp = item[f.key];
+              if (f.type === "select") {
+                const opts = typeof f.options === "function" ? f.options(items, item) : (f.options || []);
+                disp = (opts.find(o => o.value === item[f.key]) || {}).label;
+              }
+              return <td key={f.key} style={C.td}>{String(disp || "—")}</td>;
+            })}
             <td style={C.td}>{hasPermission(userRole, editPerm) && <button style={C.btn("secondary", true)} onClick={() => { setEdit(item); setShow(true); }}>Edit</button>}</td>
           </tr>)}
         </tbody>
@@ -2679,7 +2790,17 @@ function CRUDPage({ title, icon, items, setItems, fields, eventName, userRole, c
         <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>{edit?.id ? "Edit" : "New"} {title.replace(/s$/, "")}</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
         <div style={C.mbdy}>
           <div style={C.fg}>
-            {fields.map(f => <div key={f.key}><label style={C.label}>{f.label}</label><Inp value={(edit || {})[f.key] || ""} onChange={e => setEdit(p => ({ ...(p || {}), [f.key]: e.target.value }))} placeholder={f.placeholder || ""} /></div>)}
+            {fields.map(f => {
+              const opts = f.type === "select" ? (typeof f.options === "function" ? f.options(items, edit) : (f.options || [])) : null;
+              return <div key={f.key}><label style={C.label}>{f.label}</label>
+                {f.type === "select"
+                  ? <Sel value={(edit || {})[f.key] || ""} onChange={e => setEdit(p => ({ ...(p || {}), [f.key]: e.target.value }))}>
+                      <option value="">{f.placeholder || "— None —"}</option>
+                      {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </Sel>
+                  : <Inp value={(edit || {})[f.key] || ""} onChange={e => setEdit(p => ({ ...(p || {}), [f.key]: e.target.value }))} placeholder={f.placeholder || ""} />}
+              </div>;
+            })}
           </div>
         </div>
         <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn()} onClick={() => save(edit || {})}>💾 Save</button></div>
@@ -2699,7 +2820,9 @@ function CustomersPage(p) {
 function BrokersPage(p) {
   return <CRUDPage title="Brokers" icon="👔" items={p.brokers} setItems={p.setBrokers} eventName="add-broker" userRole={p.userRole} createPerm="sales.create" editPerm="sales.edit" fields={[
     { key: "name", label: "Name" }, { key: "nationality", label: "Nationality" },
-    { key: "phone", label: "Phone" }, { key: "rera_no", label: "RERA No." }, { key: "rera_exp", label: "RERA Expiry" }
+    { key: "phone", label: "Phone" }, { key: "rera_no", label: "RERA No." }, { key: "rera_exp", label: "RERA Expiry" },
+    { key: "manager_id", label: "Reports To (Sales Manager)", type: "select", placeholder: "— None —",
+      options: (items, editItem) => items.filter(b => b.id !== (editItem || {}).id).map(b => ({ value: b.id, label: b.name })) }
   ]} />;
 }
 
@@ -6344,6 +6467,23 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       localStorage.setItem('reversal_fix_v1', '1');
     }).catch(err => { console.error('reversal_fix_v1', err); reversalFixRan.current = false; });
   }, [fbLoaded, txns]);
+
+  // One-time (mgr_override_acct_v1): ensure the Sales Manager Override expense
+  // account (5040) exists for pre-existing books, so broker payments can post
+  // the manager top-up leg. Idempotent; skips if the code is already present.
+  const mgrAcctRan = useRef(false);
+  useEffect(() => {
+    if (!fbLoaded || mgrAcctRan.current) return;
+    if (localStorage.getItem('mgr_override_acct_v1')) { mgrAcctRan.current = true; return; }
+    if (!Array.isArray(accounts) || accounts.length === 0) return;
+    mgrAcctRan.current = true;
+    if (accounts.some(a => a.code === "5040")) { localStorage.setItem('mgr_override_acct_v1', '1'); return; }
+    const acct = { id: "a5040", code: "5040", name: "Sales Manager Override", type: "Expense", isBank: false, isOutputVAT: false, isInputVAT: false };
+    window.fsBatchWrite([{ col: 'accounts', id: acct.id, data: JSON.parse(JSON.stringify(acct)) }]).then(() => {
+      setAccounts(prev => { const next = prev.some(a => a.code === "5040") ? prev : [...prev, acct]; ls_set('accounts', next); return next; });
+      localStorage.setItem('mgr_override_acct_v1', '1');
+    }).catch(err => { console.error('mgr_override_acct_v1', err); mgrAcctRan.current = false; });
+  }, [fbLoaded, accounts]);
 
   // User presence tracking
   useEffect(() => {
