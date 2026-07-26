@@ -2192,6 +2192,10 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     const NAV = [
       { s: "OVERVIEW" }, { id: "dashboard", label: "Dashboard", icon: "🏠" }, { id: "banana2", label: "Performance", icon: "📊" },
       { s: "SALES" }, { id: "deals", label: "Deals / Pipeline", icon: "🤝" }, { id: "auditDeals", label: "Auditing Deals", icon: "📋" }, { id: "receipts", label: "Sale Receipts", icon: "💰" }, { id: "invoices", label: "Invoices", icon: "🧾" }, { id: "customers", label: "Customers", icon: "👥" }, { id: "brokers", label: "Brokers", icon: "👔" }, { id: "developers", label: "Developers", icon: "🏗️" },
+      // PEOPLE — admin only. `employees` is deliberately absent from PAGE_ACCESS_BRIDGE and
+      // from the legacy role map above, so canAccessPage() returns true for admin on its first
+      // line and falls through to false for every other role. Do not register it in either map.
+      { s: "PEOPLE" }, { id: "employees", label: "Employees", icon: "🧑‍💼" },
       { s: "EXPENSES" }, { id: "payments", label: "Payments", icon: "💳" }, { id: "vendors", label: "Vendors", icon: "🏭" }, { id: "futureExpenses", label: "Future Expenses", icon: "📅" },
       { s: "ACCOUNTING" }, { id: "banking", label: "Banking", icon: "🏦" }, { id: "journal", label: "Journal Entries", icon: "📒" }, { id: "coa", label: "Chart of Accounts", icon: "🗂" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "vat", label: "VAT / Taxes", icon: "🧾" }, { id: "budget", label: "Budget", icon: "🎯" },
       { s: "SYSTEM" }, { id: "users", label: "User Management", icon: "👥" }, { id: "settings", label: "Settings", icon: "⚙️" }, { id: "manual", label: "User Manual", icon: "📖" },

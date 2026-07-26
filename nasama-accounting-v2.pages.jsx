@@ -6149,6 +6149,7 @@ function SidebarIcon({ id, active }) {
     invoices:       <svg {...p}><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="9" x2="12" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>,
     customers:      <svg {...p}><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>,
     brokers:        <svg {...p}><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>,
+    employees:      <svg {...p}><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>,
     developers:     <svg {...p}><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
     payments:       <svg {...p}><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>,
     vendors:        <svg {...p}><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>,
@@ -6343,6 +6344,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
   const [customers, setCustomers] = useState(() => ls_get("customers", SEED_CUSTOMERS));
   const [vendors, setVendors] = useState(() => ls_get("vendors", SEED_VENDORS));
   const [brokers, setBrokers] = useState(() => ls_get("brokers", SEED_BROKERS));
+  const [employees, setEmployees] = useState(() => ls_get("employees", []));
   const [plannedExpenses, setPlannedExpenses] = useState(() => ls_get("planned_expenses", []));
   const [budgets, setBudgets] = useState(() => ls_get("budgets", []));
   const [dealStageChanges, setDealStageChanges] = useState([]);
@@ -6381,7 +6383,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     const unsubs = [];
     const safety = setTimeout(() => { if (mounted) setFbLoaded(true); }, 10000);
 
-    let loaded = 0; const total = 10; // 9 collection listeners + 1 settings listener
+    let loaded = 0; const total = 11; // 10 collection listeners + 1 settings listener
     const done = () => { loaded++; if (loaded >= total && mounted) setFbLoaded(true); };
 
     const listen = (col, setter, cacheKey) => {
@@ -6407,6 +6409,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     unsubs.push(listen('customers', setCustomers, 'customers'));
     unsubs.push(listen('vendors', setVendors, 'vendors'));
     unsubs.push(listen('brokers', setBrokers, 'brokers'));
+    unsubs.push(listen('employees', setEmployees, 'employees'));
     unsubs.push(listen('developers', setDevelopers, 'developers'));
     unsubs.push(listen('planned_expenses', setPlannedExpenses, 'planned_expenses'));
     unsubs.push(listen('budgets', setBudgets, 'budgets'));
@@ -6559,6 +6562,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
   const setCustomersFS = fsUpdate('customers', setCustomers, 'customers');
   const setVendorsFS = fsUpdate('vendors', setVendors, 'vendors');
   const setBrokersFS = fsUpdate('brokers', setBrokers, 'brokers');
+  const setEmployeesFS = fsUpdate('employees', setEmployees, 'employees');
   const setDevelopersFS = fsUpdate('developers', setDevelopers, 'developers');
   const setPlannedExpensesFS = fsUpdate('planned_expenses', setPlannedExpenses, 'planned_expenses');
   const setBudgetsFS = fsUpdate('budgets', setBudgets, 'budgets');
@@ -6621,7 +6625,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     <style>{`@keyframes npLoad{0%{width:0%}60%{width:90%}100%{width:100%}}`}</style>
   </div>;
 
-  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, budgets, setBudgets: setBudgetsFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta, dealStageChanges, setInvoiceDeal, cardDealId, setCardDealId, receiptDraft, clearReceiptDraft: () => setReceiptDraft(null) };
+  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, employees, setEmployees: setEmployeesFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, budgets, setBudgets: setBudgetsFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta, dealStageChanges, setInvoiceDeal, cardDealId, setCardDealId, receiptDraft, clearReceiptDraft: () => setReceiptDraft(null) };
 
   const renderPage = () => {
     if (!canAccessPage(accessSubject, page)) {
@@ -6639,6 +6643,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       case "payments": return <PaymentsPage {...shared} />;
       case "customers": return <CustomersPage {...shared} />;
       case "brokers": return <BrokersPage {...shared} />;
+      case "employees": return <EmployeesPage {...shared} />;
       case "developers": return <DevelopersPage {...shared} />;
       case "vendors": return <VendorsPage {...shared} />;
       case "banking": return <BankingPageV2 {...shared} />;
