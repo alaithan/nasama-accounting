@@ -96,16 +96,58 @@ function invCommissionAmount(line) {
   return 0;
 }
 
-function invLineCalc(line) {
-  var c = invCommissionAmount(line);
-  return { commissionAmount: c, vat: parseFloat((c * INV_VAT_RATE).toFixed(2)), total: parseFloat((c * (1 + INV_VAT_RATE)).toFixed(2)) };
+// Split a line's stated amount into net / VAT / total, honouring the deal's VAT
+// mode. ON TOP: the stated amount is the fee and 5% is added. INCLUSIVE: the
+// stated amount is the ALL-IN figure, so VAT is the REMAINDER after backing out
+// the net — that way net + VAT lands on the agreed total to the fils instead of
+// a cent either side (115,238.10 + 5,761.90 = exactly 121,000.00).
+function invSplitVat(stated, vatInclusive) {
+  const amt = parseFloat((invNum(stated)).toFixed(2));
+  if (!vatInclusive) {
+    const vat = parseFloat((amt * INV_VAT_RATE).toFixed(2));
+    return { net: amt, vat: vat, total: parseFloat((amt + vat).toFixed(2)) };
+  }
+  const net = parseFloat((amt / (1 + INV_VAT_RATE)).toFixed(2));
+  return { net: net, vat: parseFloat((amt - net).toFixed(2)), total: amt };
 }
 
+// The NET commission a line bills, in cents — deals store net targets, so this
+// is what compares like-for-like against them.
+function invLineCents(line) {
+  return Math.round(invSplitVat(invCommissionAmount(line), line && line.vatInclusive).net * 100);
+}
+
+// The commission % that bills exactly `cents` on a deal worth `tvCents`.
+// Prefers the deal's own rate when that already lands on the target. Otherwise
+// derives one, widening precision until dealValue × pct rounds to the exact
+// fils: a flat 2-dp rate silently under-bills (4.761905% → 4.76% loses AED 46
+// on a 2.42M deal, and far more on a 200M one).
+function invPctForAmount(tvCents, cents, naturalPct, vatInclusive) {
+  if (!(tvCents > 0) || !(cents > 0)) return naturalPct || "";
+  const billed = pct => invLineCents({ dealValue: tvCents / 100, commissionPct: pct, vatInclusive: vatInclusive });
+  const nat = parseFloat(naturalPct);
+  if (isFinite(nat) && nat > 0 && billed(nat) === cents) return naturalPct;
+  const exact = (cents / tvCents) * 100 * (vatInclusive ? (1 + INV_VAT_RATE) : 1);
+  for (let dp = 2; dp <= 8; dp++) {
+    const cand = parseFloat(exact.toFixed(dp));
+    if (billed(cand) === cents) return cand;
+  }
+  return parseFloat(exact.toFixed(8));
+}
+
+function invLineCalc(line) {
+  var s = invSplitVat(invCommissionAmount(line), line && line.vatInclusive);
+  return { commissionAmount: s.net, vat: s.vat, total: s.total };
+}
+
+// VAT is summed per line, not taken as 5% of the grand total — each line is its
+// own supply, and under VAT-inclusive terms only the per-line remainder makes the
+// total land on the agreed all-in figure.
 function invTotals(items) {
-  var excl = 0;
-  (items || []).forEach(function(li) { excl += invCommissionAmount(li); });
+  var excl = 0, vat = 0;
+  (items || []).forEach(function(li) { var s = invLineCalc(li); excl += s.commissionAmount; vat += s.vat; });
   excl = parseFloat(excl.toFixed(2));
-  var vat  = parseFloat((excl * INV_VAT_RATE).toFixed(2));
+  vat  = parseFloat(vat.toFixed(2));
   return { excl: excl, vat: vat, incl: parseFloat((excl + vat).toFixed(2)) };
 }
 
@@ -463,6 +505,13 @@ function InvoicePreviewDoc({ invoice }) {
               <div style={P.sRow}><span style={P.sLbl}>Total Amount Excl. Vat</span><span style={P.sVal}>{invFmt(T.excl)}</span></div>
               <div style={P.sRow}><span style={P.sLbl}>Vat (5%)</span><span style={P.sVal}>{invFmt(T.vat)}</span></div>
               <div style={P.sFinal}><span style={P.sFLbl}>Total Amount Incl. Vat</span><span style={P.sFVal}>{invFmt(T.incl)}</span></div>
+              {/* Under VAT-inclusive terms the % column applies to the all-in total,
+                  not to the net — say so, or the document reads as inconsistent. */}
+              {(lineItems || []).some(li => li.vatInclusive) && (
+                <div style={{ ...P.sRow, fontSize: 8, color: "#6B7280", fontStyle: "italic" }}>
+                  <span>Commission is inclusive of 5% VAT.</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -536,7 +585,7 @@ function InvoicePreviewModal({ invoice, onClose, onCreateReceipt, alreadyReceipt
 // ═══════════════════════════════════════════════════════════════════
 //  G. InvoiceEditor — create / edit form
 // ═══════════════════════════════════════════════════════════════════
-function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave, onPreview, onCancel, saving }) {
+function InvoiceEditor({ invoice, customers, developers, deals, invoices, settings, onSave, onPreview, onCancel, onFixDeal, saving }) {
   const [inv, setInv] = React.useState(() => JSON.parse(JSON.stringify(invoice)));
   const T = invTotals(inv.lineItems || []);
   const buildInvoice = () => invWithDerivedTotals(inv);
@@ -600,11 +649,103 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
     const projectUnit = [d.property_name, d.unit_no ? `Unit ${d.unit_no}` : ""].filter(Boolean).join(" — ");
     setInv(prev => {
       const copy = JSON.parse(JSON.stringify(prev));
-      const line = { ...copy.lineItems[idx], projectUnit, specification: `${sideLabel}${pct}% of Agency Commission Claim`, dealValue: d.transaction_value ? invFromCents(d.transaction_value) : "", commissionPct: pct, dealId, commissionId: cid };
+      const line = { ...copy.lineItems[idx], projectUnit, specification: `${sideLabel}${pct}% of Agency Commission Claim`, dealValue: d.transaction_value ? invFromCents(d.transaction_value) : "", commissionPct: pct, dealId, commissionId: cid, vatInclusive: isVatInclusive(d) };
       Object.assign(copy.lineItems[idx], invNormalizeLine(line));
       return copy;
     });
   };
+
+  // What a deal-linked line SHOULD bill: that commission side's outstanding
+  // amount, ignoring invoice `selfId` (so re-opening a saved invoice doesn't
+  // read its own lines as already billed). Null when there is nothing to check
+  // against — no deal link, no target, or the linking helpers aren't loaded.
+  // `dealOverride` lets a caller ask "what would this line bill if the deal read
+  // X?" before the corrected deal has come back down the Firestore snapshot.
+  const outstandingFor = (li, selfId, dealOverride) => {
+    if (!li || !li.dealId || typeof commissionInvoicing !== "function") return null;
+    const d = dealOverride || (deals || []).find(x => x.id === li.dealId);
+    if (!d) return null;
+    const others = (invoices || []).filter(x => x.id !== selfId);
+    const side = commissionInvoicing(d, others).commissions.find(c => c.id === (li.commissionId || "single"));
+    if (!side || !(side.target > 0)) return null;
+    return { deal: d, side, expectedCents: side.remainingCents, billedCents: invLineCents(li) };
+  };
+
+  // The same line repriced onto that outstanding amount, at the deal's real
+  // transaction value. Null when it already matches or there is nothing to
+  // match against — so callers can use it as "does this need fixing?".
+  const matchedLine = (li, selfId, dealOverride) => {
+    const o = outstandingFor(li, selfId, dealOverride);
+    if (!o || o.billedCents === o.expectedCents) return null;
+    const incl = typeof isVatInclusive === "function" ? isVatInclusive(o.deal) : false;
+    return invNormalizeLine({ ...li,
+      vatInclusive: incl,
+      dealValue: o.deal.transaction_value ? invFromCents(o.deal.transaction_value) : li.dealValue,
+      commissionPct: invPctForAmount(o.deal.transaction_value || 0, o.expectedCents,
+        o.side.id === "seller" ? o.deal.seller_commission_pct : o.deal.commission_pct, incl) });
+  };
+
+  // The linked DEAL's own stored commission contradicting its value × % — the
+  // deal is wrong, not the line. Conforming the invoice to it would only bill
+  // the wrong amount with a tidier audit trail, so this is reported and the
+  // auto-match below stands down until the deal is corrected.
+  const dealMismatchFor = (li) => {
+    if (!li || !li.dealId || typeof commissionMismatch !== "function") return null;
+    const d = (deals || []).find(x => x.id === li.dealId);
+    const mm = d ? commissionMismatch(d) : null;
+    return mm ? { deal: d, ...mm } : null;
+  };
+
+  const lineOutstanding = (li) => outstandingFor(li, inv.id);
+  const billOutstanding = (idx) => setInv(prev => {
+    const m = matchedLine(prev.lineItems[idx], prev.id);
+    return m ? { ...prev, lineItems: prev.lineItems.map((li, i) => i === idx ? m : li) } : prev;
+  });
+
+  // One click has to leave the invoice correct: write the corrected commission to
+  // the deal, then reprice the line immediately off that corrected figure rather
+  // than waiting for the Firestore snapshot to come back round.
+  const fixDealAndBill = async (idx) => {
+    const dm = dealMismatchFor(inv.lineItems[idx]);
+    if (!dm || !onFixDeal) return;
+    if (!await onFixDeal(dm.deal, dm.implied)) return;
+    const fixedDeal = { ...dm.deal, expected_commission_net: dm.implied };
+    setInv(prev => {
+      const m = matchedLine(prev.lineItems[idx], prev.id, fixedDeal);
+      return m ? { ...prev, lineItems: prev.lineItems.map((li, i) => i === idx ? m : li) } : prev;
+    });
+  };
+
+  // Issuing is the point of no return — an issued invoice is a tax record and is
+  // voided, never edited. So confirm rather than silently issue a line whose deal
+  // contradicts its own value × %.
+  const issueInvoice = () => {
+    const bad = (inv.lineItems || []).map(dealMismatchFor).filter(Boolean);
+    if (bad.length && !window.confirm(
+      `${bad.map(m => `• ${m.deal.property_name || "Deal"}: stored AED ${invFmt(m.stored / 100)}, but value × ${m.deal.commission_pct}% = AED ${invFmt(m.implied / 100)}`).join("\n")}\n\n` +
+      `Issue anyway? An issued invoice can only be voided, not corrected.`
+    )) return;
+    onSave(buildInvoice(), "issued");
+  };
+
+  // A draft is a working document, so bring every deal-linked line onto its
+  // deal's outstanding commission the moment the draft is opened — the deal is
+  // the source of truth for what to bill. Runs once, and only after `deals` has
+  // loaded, so a later Firestore snapshot can never overwrite a hand edit.
+  // Issued invoices are NEVER repriced: they are legal documents, so a mismatch
+  // there is reported only.
+  const autoMatched = React.useRef(false);
+  const [autoMatchCount, setAutoMatchCount] = React.useState(0);
+  React.useEffect(() => {
+    if (autoMatched.current || !(deals && deals.length)) return;
+    autoMatched.current = true;
+    if ((invoice.status || "draft") !== "draft") return;
+    const next = (invoice.lineItems || []).map(li => dealMismatchFor(li) ? null : matchedLine(li, invoice.id));
+    const n = next.filter(Boolean).length;
+    if (!n) return;
+    setInv(prev => ({ ...prev, lineItems: prev.lineItems.map((li, i) => next[i] || li) }));
+    setAutoMatchCount(n);
+  }, [deals, invoices, invoice]);
 
   const addLine    = ()      => setInv(p => ({ ...p, lineItems: [...p.lineItems, invBlankLine()] }));
   const removeLine = (i)     => setInv(p => ({ ...p, lineItems: p.lineItems.filter((_, j) => j !== i) }));
@@ -645,7 +786,7 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
         <div style={{ display: "flex", gap: 10 }}>
           <button style={C.btn("secondary")} onClick={() => onPreview(buildInvoice())}>Preview</button>
           <button style={C.btn()} onClick={() => onSave(buildInvoice(), "draft")} disabled={saving}>{saving ? "Saving…" : "Save Draft"}</button>
-          <button style={{ background: G, color: "#fff", border: "none", padding: "8px 20px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={() => onSave(buildInvoice(), "issued")} disabled={saving}>{saving ? "Issuing…" : "Issue Invoice"}</button>
+          <button style={{ background: G, color: "#fff", border: "none", padding: "8px 20px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={issueInvoice} disabled={saving}>{saving ? "Issuing…" : "Issue Invoice"}</button>
         </div>
       </div>
 
@@ -717,11 +858,16 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
           <span>Description</span>
           <button style={{ ...C.btn("secondary"), fontSize: 11, padding: "4px 14px", textTransform: "none", letterSpacing: 0 }} onClick={addLine}>+ Add Row</button>
         </div>
+        {autoMatchCount > 0 && (
+          <div style={{ marginBottom: 14, fontSize: 11.5, color: "#065F46", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 8, padding: "7px 11px", textTransform: "none", letterSpacing: 0 }}>
+            ✓ {autoMatchCount === 1 ? "One line was" : `${autoMatchCount} lines were`} adjusted to match the linked deal's outstanding commission. Nothing is saved until you click Save.
+          </div>
+        )}
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "#FBF6EC" }}>
-                {[["Project | Unit","left","18%"],["Specification","left","22%"],["Deal Value (AED)","right","12%"],["Commission %","right","10%"],["Commission (AED)","right","13%"],["Vat 5%","right","9%"],["Total Incl. Vat","right","12%"],["","center","4%"]].map(([h,a,w]) => (
+                {[["Project | Unit","left","17%"],["Specification","left","19%"],["Deal Value (AED)","right","12%"],["Commission %","right","13%"],["Commission (AED)","right","13%"],["Vat 5%","right","10%"],["Total Incl. Vat","right","12%"],["","center","4%"]].map(([h,a,w]) => (
                   <th key={h} style={{ padding: "9px 10px", fontSize: 10.5, fontWeight: 700, color: "#1A1A2E", border: "1px solid #E8DCC8", textAlign: a, width: w, letterSpacing: "0.02em" }}>{h}</th>
                 ))}
               </tr>
@@ -730,8 +876,16 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
               {inv.lineItems.map((li, idx) => {
                 const c = invLineCalc(li);
                 const pct = li.commissionPct ?? li.commission_pct;
+                // Guard: linked to a deal but billing something other than that
+                // deal's outstanding commission (excl. VAT — the 5% is added in
+                // the VAT column). Only ever shows on an issued invoice or after
+                // a hand edit; opening a draft lines it up automatically.
+                const dm = dealMismatchFor(li);
+                const o = dm ? null : lineOutstanding(li);
+                const off = o && o.billedCents !== o.expectedCents ? o.expectedCents - o.billedCents : 0;
                 return (
-                  <tr key={li._id}>
+                  <React.Fragment key={li._id}>
+                  <tr>
                     <td style={{ padding: 8, border: "1px solid #E8DCC8", verticalAlign: "top" }}>
                       {(deals && deals.length > 0) && (
                         <select style={{ ...sel, fontSize: 11, marginBottom: 6, padding: "5px 8px" }} value={li.dealId || ""} onChange={e => fillDeal(idx, e.target.value)}>
@@ -760,7 +914,9 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
                     </td>
                     <td style={{ padding: 8, border: "1px solid #E8DCC8", verticalAlign: "top" }}>
                       <div style={{ display: "flex", alignItems: "center", border: "1.5px solid #D0D5DD", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
-                        <input type="number" min="0" max="100" step="0.01" style={{ ...inp, border: "none", borderRadius: 0, fontSize: 12, textAlign: "right", flex: 1, width: "100%", minWidth: 0 }} placeholder="0.00" value={pct || ""} onChange={e => setLine(idx, "commissionPct", e.target.value)} />
+                        {/* step="any": a partial bill needs a rate finer than 2 dp to
+                            land on the exact fils, and step="0.01" marks those invalid. */}
+                        <input type="number" min="0" max="100" step="any" style={{ ...inp, border: "none", borderRadius: 0, fontSize: 12, textAlign: "right", flex: 1, width: "100%", minWidth: 0, padding: "8px 6px" }} placeholder="0.00" value={pct || ""} onChange={e => setLine(idx, "commissionPct", e.target.value)} />
                         <span style={{ padding: "0 7px", color: "#C9A044", fontSize: 13, fontWeight: 700, background: "#FBF6EC", borderLeft: "1px solid #E8DCC8", whiteSpace: "nowrap", userSelect: "none" }}>%</span>
                       </div>
                     </td>
@@ -773,6 +929,37 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
                       )}
                     </td>
                   </tr>
+                  {dm && (
+                    <tr>
+                      <td colSpan={8} style={{ border: "1px solid #FECACA", borderTop: "none", background: "#FEF2F2", padding: "7px 11px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap", fontSize: 11.5, color: "#991B1B" }}>
+                          <span>⛔</span>
+                          <span>
+                            <strong>Fix the deal first.</strong> {dm.deal.property_name || "This deal"} stores AED {invFmt(dm.stored / 100)},
+                            but {invFmt((dm.deal.transaction_value || 0) / 100)} × {dm.deal.commission_pct}% = <strong>AED {invFmt(dm.implied / 100)}</strong> excl. VAT.
+                            Billing it as it stands invoices the wrong amount.
+                          </span>
+                          <button type="button" style={{ ...C.btn("secondary"), fontSize: 11, padding: "3px 10px", textTransform: "none", letterSpacing: 0 }}
+                            onClick={() => fixDealAndBill(idx)}>Set deal to AED {invFmt(dm.implied / 100)} and bill it</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  {off !== 0 && (
+                    <tr>
+                      <td colSpan={8} style={{ border: "1px solid #E8DCC8", borderTop: "none", background: "#FFFBEB", padding: "7px 11px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap", fontSize: 11.5, color: "#92400E" }}>
+                          <span>⚠</span>
+                          <span>
+                            {o.deal.property_name || "Deal"} outstanding <strong>AED {invFmt(o.expectedCents / 100)}</strong> excl. VAT —
+                            this line bills AED {invFmt(o.billedCents / 100)}, {off > 0 ? "under" : "over"} by AED {invFmt(Math.abs(off) / 100)}.
+                          </span>
+                          <button type="button" style={{ ...C.btn("secondary"), fontSize: 11, padding: "3px 10px", textTransform: "none", letterSpacing: 0 }} onClick={() => billOutstanding(idx)}>Match deal</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
@@ -811,7 +998,7 @@ function InvoiceEditor({ invoice, customers, developers, deals, settings, onSave
         <button style={C.btn("secondary")} onClick={onCancel}>Cancel</button>
         <button style={C.btn("secondary")} onClick={() => onPreview(buildInvoice())}>Preview Invoice</button>
         <button style={C.btn()} onClick={() => onSave(buildInvoice(), "draft")} disabled={saving}>{saving ? "Saving…" : "Save Draft"}</button>
-        <button style={{ background: G, color: "#fff", border: "none", padding: "8px 22px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={() => onSave(buildInvoice(), "issued")} disabled={saving}>{saving ? "Issuing…" : "Issue Invoice"}</button>
+        <button style={{ background: G, color: "#fff", border: "none", padding: "8px 22px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={issueInvoice} disabled={saving}>{saving ? "Issuing…" : "Issue Invoice"}</button>
       </div>
     </div>
   );
@@ -1028,13 +1215,13 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
     if (preselectedDeal._commissionId) sides = sides.filter(c => c.id === preselectedDeal._commissionId);
     if (!sides.length && ci) sides = ci.commissions.filter(c => c.target > 0);
     const projectUnit = [preselectedDeal.property_name, preselectedDeal.unit_no].filter(Boolean).join(" – ");
+    const dealIncl = typeof isVatInclusive === "function" ? isVatInclusive(preselectedDeal) : false;
     const mkLine = (c) => {
       const sideLabel = c.id === "buyer" ? "Buyer-side " : c.id === "seller" ? "Seller-side " : "";
       const naturalPct = c.id === "seller" ? preselectedDeal.seller_commission_pct : preselectedDeal.commission_pct;
-      // Use the side's own % when nothing is invoiced yet; otherwise derive a %
-      // that bills exactly that side's outstanding amount.
-      const pct = (c.remainingCents >= c.target && naturalPct) ? naturalPct
-        : (tvCents > 0 ? Math.round((c.remainingCents / tvCents) * 10000) / 100 : (naturalPct || ""));
+      // Bill exactly this side's outstanding amount — invPctForAmount keeps the
+      // deal's own rate when it lands on that, and widens precision when it must.
+      const pct = invPctForAmount(tvCents, c.remainingCents, naturalPct, dealIncl);
       return {
         ...invBlankLine(),
         projectUnit,
@@ -1043,6 +1230,7 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
         commissionPct: pct,
         dealId: preselectedDeal.id || "",
         commissionId: c.id,
+        vatInclusive: dealIncl,
       };
     };
     blank.lineItems = sides.length ? sides.map(mkLine) : [{
@@ -1053,6 +1241,7 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
       commissionPct: preselectedDeal.commission_pct || "",
       dealId: preselectedDeal.id || "",
       commissionId: "single",
+      vatInclusive: dealIncl,
     }];
     setEditing(blank);
     if (onClearPreselected) onClearPreselected();
@@ -1061,6 +1250,29 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
   // Number is NOT assigned on New — it is assigned at first Save to avoid gaps
   const handleNew = () => {
     setEditing(invBlankDoc(settings));
+  };
+
+  // Correct a deal's stored commission from the invoice screen. The deal is the
+  // source of truth for what to bill, so a stored net that contradicts its own
+  // value × % has to be fixed there — patching the invoice instead just hides it.
+  // Resolves true only once the deal is actually written, so the caller knows it
+  // is safe to reprice the line off the corrected figure.
+  const handleFixDeal = async (deal, cents) => {
+    if (!deal || !deal.id) return false;
+    const label = deal.property_name || "this deal";
+    if (!window.confirm(
+      `Set ${label}'s expected commission to AED ${invFmt(cents / 100)}?\n\n` +
+      `That is ${invFmt((deal.transaction_value || 0) / 100)} × ${deal.commission_pct}%, excluding VAT. ` +
+      `The 5% VAT is added on top on the invoice.`
+    )) return false;
+    try {
+      await db.collection("deals").doc(deal.id).set({ expected_commission_net: cents }, { merge: true });
+      toast(`Deal set to AED ${invFmt(cents / 100)} — invoice updated to match`, "success");
+      return true;
+    } catch (err) {
+      toast("Could not update the deal: " + err.message, "error");
+      return false;
+    }
   };
 
   const handleSave = async (inv, status) => {
@@ -1186,10 +1398,12 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
         customers={customers || []}
         developers={developers || []}
         deals={deals || []}
+        invoices={invoices || []}
         settings={settings || {}}
         onSave={handleSave}
         onPreview={inv => setPreviewInv(inv)}
         onCancel={() => setEditing(null)}
+        onFixDeal={handleFixDeal}
         saving={saving}
       />
       {previewInv && <InvoicePreviewModal invoice={previewInv} onClose={() => setPreviewInv(null)} />}

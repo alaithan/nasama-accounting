@@ -207,6 +207,9 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     // ── COMMISSION ↔ INVOICE LINKING ──────────────────
     // Commission (excl VAT) of one invoice line, in cents. Invoice line amounts
     // are major AED units (commission = dealValue × pct%); deals store cents.
+    // Always NET of VAT, since deals store net targets: a VAT-inclusive line
+    // states its all-in amount, so the 5% has to come back out before comparing.
+    // `commissionAmount` is already stored net, so only the fallback backs it out.
     const invLineCommissionCents = (li) => {
       if (!li) return 0;
       let amt = parseFloat(li.commissionAmount);
@@ -214,8 +217,61 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         const dv = parseFloat(String(li.dealValue ?? "").replace(/,/g, "")) || 0;
         const pct = parseFloat(li.commissionPct ?? li.commission_pct) || 0;
         amt = dv > 0 && pct > 0 ? dv * pct / 100 : 0;
+        if (li.vatInclusive) amt = parseFloat((amt / 1.05).toFixed(2));
       }
       return Math.round((amt || 0) * 100);
+    };
+    // ── VAT MODE ──────────────────────────────────────
+    // Two kinds of commission agreement, per deal:
+    //   ON TOP   (default)  — the % is the fee; 5% VAT is added, developer pays 105%.
+    //   INCLUSIVE           — the % is the ALL-IN figure; the 5% is already inside it.
+    // `expected_commission_net` stays the canonical NET (excl VAT) either way, so
+    // every report keeps reading one field. Only the VAT on top of it differs.
+    const isVatInclusive = (deal) => !!(deal && deal.vat_applicable && deal.commission_vat_inclusive);
+
+    // What transaction value × % yields, in cents — the fee under ON TOP terms,
+    // the all-in amount under INCLUSIVE terms. Null when there is nothing to imply
+    // it from (no value or no %), e.g. commission-only deals typed straight in.
+    const impliedCommissionCents = (deal) => {
+      const tv = (deal && deal.transaction_value) || 0;
+      const pct = parseFloat(deal && deal.commission_pct) || 0;
+      if (!tv || !pct) return null;
+      return Math.round(tv * pct / 100);
+    };
+    // The same figure expressed as NET, i.e. what expected_commission_net should
+    // hold. Under INCLUSIVE terms the VAT is backed out: 121,000 all-in → 115,238.10
+    // net + 5,761.90 VAT, which sums back to exactly 121,000.
+    const impliedNetCents = (deal) => {
+      const gross = impliedCommissionCents(deal);
+      if (gross == null) return null;
+      return isVatInclusive(deal) ? Math.round(gross / 1.05) : gross;
+    };
+    // VAT on a deal's commission, in cents. Under INCLUSIVE terms it is the
+    // REMAINDER (all-in − net) rather than 5% of the net, so net + VAT lands on
+    // the agreed all-in figure to the fils instead of a cent either side of it.
+    const dealVatCents = (deal) => {
+      if (!deal || !deal.vat_applicable) return 0;
+      const net = deal.expected_commission_net || 0;
+      if (isVatInclusive(deal)) {
+        const gross = impliedCommissionCents(deal);
+        if (gross != null && gross >= net) return gross - net;
+      }
+      return Math.round(net * 0.05);
+    };
+    // Total cash the developer pays for a deal's commission (net + VAT).
+    const dealGrossCents = (deal) => (deal ? (deal.expected_commission_net || 0) + dealVatCents(deal) : 0);
+
+    // `expected_commission_net` is hand-editable, so it can drift away from what
+    // value × % implies — and then the deal and any invoice raised off it
+    // disagree. Returns {implied, stored, diff} when they differ, else null.
+    // Secondary is exempt: its net is buyer + seller − discount by design.
+    const commissionMismatch = (deal) => {
+      if (!deal || deal.type === "Secondary") return null;
+      const implied = impliedNetCents(deal);
+      if (implied == null) return null;
+      const stored = deal.expected_commission_net || 0;
+      const diff = stored - implied;
+      return diff === 0 ? null : { implied, stored, diff, vatInclusive: isVatInclusive(deal) };
     };
     // The 1–2 commissions a deal can generate, as cents targets. Secondary deals
     // split into buyer-side + seller-side; everything else is one commission.
@@ -316,7 +372,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       });
       receipts.sort((a, b) => String(a.date).localeCompare(String(b.date)));
       const netExpected = (deal && deal.expected_commission_net) || 0;
-      const grossExpected = (deal && deal.vat_applicable) ? Math.round(netExpected * 1.05) : netExpected;
+      const grossExpected = dealGrossCents(deal);
       return { collectedCents, receipts, count: receipts.length, remainingCents: Math.max(0, grossExpected - collectedCents), netExpected, grossExpected };
     };
     // Forward-looking payment plan (Phase 3): reconcile the deal's stored

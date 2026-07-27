@@ -1112,7 +1112,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
     }, err => console.error("Invoice listener error:", err));
     return () => unsub();
   }, []);
-  const empty = { type: "Off-Plan", stage: "Lead", property_name: "", developer: "", developer_id: "", broker_id: "", broker_name: "", customer_id: "", client_name: "", transaction_value: 0, commission_pct: "", expected_commission_net: 0, vat_applicable: true, unit_no: "", notes: "", created_at: todayStr() };
+  const empty = { type: "Off-Plan", stage: "Lead", property_name: "", developer: "", developer_id: "", broker_id: "", broker_name: "", customer_id: "", client_name: "", transaction_value: 0, commission_pct: "", expected_commission_net: 0, vat_applicable: true, commission_vat_inclusive: false, unit_no: "", notes: "", created_at: todayStr() };
   const pipelineSeedDeals = window.PASTED_DEALS || [];
   const dealWriteState = writeMeta?.deals || { status: "idle" };
   const missingPipelineDeals = useMemo(() => findMissingPipelineDeals(deals, pipelineSeedDeals), [deals, pipelineSeedDeals]);
@@ -1431,7 +1431,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
             <td style={{ ...C.td, textAlign: "right" }}>{d.transaction_value ? fmtAED(d.transaction_value) : "--"}</td>
             <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>
               <div>{fmtAED(d.expected_commission_net || 0)}</div>
-              {d.vat_applicable && <div style={{ fontSize: 10, fontWeight: 500, color: "#9CA3AF", marginTop: 1 }}>+ 5% VAT</div>}
+              {d.vat_applicable && <div style={{ fontSize: 10, fontWeight: 500, color: "#9CA3AF", marginTop: 1 }}>{isVatInclusive(d) ? "incl. 5% VAT" : "+ 5% VAT"}</div>}
             </td>
             <td style={C.td}>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1934,8 +1934,8 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
             {isSecondary && kv("Seller commission", fmtAED(deal.seller_commission || 0))}
             {(deal.discount || 0) > 0 && kv("Discount", "− " + fmtAED(deal.discount))}
             {kv("Expected net commission", fmtAED(deal.expected_commission_net || 0))}
-            {kv("VAT", deal.vat_applicable ? "Yes — 5% added on invoice" : "No")}
-            {deal.vat_applicable && kv("Commission incl. VAT", fmtAED(Math.round((deal.expected_commission_net || 0) * 1.05)))}
+            {kv("VAT", !deal.vat_applicable ? "No" : isVatInclusive(deal) ? "Yes — 5% included in the commission" : "Yes — 5% added on invoice")}
+            {deal.vat_applicable && kv("Commission incl. VAT", fmtAED(dealGrossCents(deal)))}
           </div>)}
 
           {sec("Commissions & Invoicing", <div>
@@ -2267,10 +2267,11 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers, i
       const sellerComm = val && sellerPct ? Math.round(val * sellerPct / 100) : 0;
       next.seller_commission = sellerComm;
       next.expected_commission_net = buyerComm + sellerComm - disc;
-    } else if (k === "transaction_value" || k === "commission_pct" || k === "type") {
-      const val = next.transaction_value;
-      const pct = next.commission_pct;
-      if (val && pct) next.expected_commission_net = Math.round(val * parseFloat(pct) / 100);
+    } else if (k === "transaction_value" || k === "commission_pct" || k === "type" || k === "vat_applicable" || k === "commission_vat_inclusive") {
+      // Recompute on a VAT-mode change too: switching to VAT-inclusive backs the
+      // 5% out of value × %, so the stored net has to follow.
+      const implied = impliedNetCents(next);
+      if (implied != null) next.expected_commission_net = implied;
     }
     return next;
   });
@@ -2313,8 +2314,42 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers, i
         {isSecondary && <div><label style={C.label}>Seller Commission %</label><Inp type="number" step="0.01" value={d.seller_commission_pct} onChange={e => up("seller_commission_pct", e.target.value)} placeholder="Optional" /></div>}
         {isSecondary && <div><label style={C.label}>Seller Commission (AED)</label><Inp type="number" step="0.01" value={d.seller_commission ? fromCents(d.seller_commission) : ""} disabled style={{ background: "#F3F4F6", color: "#374151", opacity: 1 }} placeholder="Auto-calculated" /></div>}
         {isSecondary && <div><label style={C.label}>Discount (AED)</label><Inp type="number" step="0.01" value={discountText} onChange={e => { setDiscountText(e.target.value); up("discount", toCents(e.target.value)); }} placeholder="Optional" /></div>}
-        <div><label style={C.label}>Expected Net Commission (AED)</label><Inp type="number" step="0.01" value={expectedText} onChange={e => { setExpectedText(e.target.value); up("expected_commission_net", toCents(e.target.value)); }} disabled={isSecondary} style={isSecondary ? { background: "#F3F4F6", color: "#374151" } : {}} placeholder={isSecondary ? "Auto-calculated (buyer + seller − discount)" : "You can enter this directly from your sheet"} /></div>
-        <div><label style={C.label}>VAT Applicable</label><Sel value={d.vat_applicable ? "yes" : "no"} onChange={e => up("vat_applicable", e.target.value === "yes")}><option value="yes">Yes (5%)</option><option value="no">No</option></Sel></div>
+        <div>
+          <label style={C.label}>Expected Net Commission (AED)</label>
+          <Inp type="number" step="0.01" value={expectedText} onChange={e => { setExpectedText(e.target.value); up("expected_commission_net", toCents(e.target.value)); }} disabled={isSecondary} style={isSecondary ? { background: "#F3F4F6", color: "#374151" } : {}} placeholder={isSecondary ? "Auto-calculated (buyer + seller − discount)" : "You can enter this directly from your sheet"} />
+          {/* Commission is excl. VAT — VAT is added on top on the invoice. A hand-typed
+              figure that no longer matches value × % is the one way the deal and its
+              invoice can disagree, so surface it here with a one-click correction. */}
+          {(() => {
+            const mm = typeof commissionMismatch === "function" ? commissionMismatch(d) : null;
+            if (!mm) return null;
+            return <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "6px 9px" }}>
+              ⚠ {fmtAED(d.transaction_value)} × {d.commission_pct}%
+              {mm.vatInclusive ? ", less the 5% VAT inside it," : ""} = <strong>{fmtAED(mm.implied)}</strong> net,
+              not {fmtAED(mm.stored)} ({mm.diff > 0 ? "+" : "−"}{fmtAED(Math.abs(mm.diff))}).
+              <button type="button" style={{ ...C.btn("secondary", true), fontSize: 11, padding: "3px 8px", marginLeft: 6 }} onClick={() => up("expected_commission_net", mm.implied)}>Use {fmtAED(mm.implied)}</button>
+            </div>;
+          })()}
+        </div>
+        {/* Two kinds of agreement. "On top": the % is the fee and the developer pays
+            105% of it. "Included": the % IS the all-in figure and the 5% is backed
+            out of it. Both keep expected_commission_net as the net (excl VAT). */}
+        <div><label style={C.label}>VAT Applicable</label>
+          <Sel value={!d.vat_applicable ? "no" : d.commission_vat_inclusive ? "incl" : "top"} onChange={e => {
+            const v = e.target.value;
+            up("vat_applicable", v !== "no");
+            up("commission_vat_inclusive", v === "incl");
+          }}>
+            <option value="top">Yes (5%) — added on top</option>
+            <option value="incl">Yes (5%) — included in commission</option>
+            <option value="no">No</option>
+          </Sel>
+          <div style={{ marginTop: 5, fontSize: 10.5, color: "#9CA3AF" }}>
+            {!d.vat_applicable
+              ? "No VAT — invoice total equals the commission"
+              : `${fmtAED(d.expected_commission_net || 0)} + ${fmtAED(dealVatCents(d))} VAT = invoice total ${fmtAED(dealGrossCents(d))}`}
+          </div>
+        </div>
         <div><label style={C.label}>Date Created</label><Inp type="date" value={d.created_at} onChange={e => up("created_at", e.target.value)} /></div>
       </div>
       <div style={{ marginTop: 14 }}><label style={C.label}>Notes</label><textarea style={{ ...C.input, minHeight: 60, resize: "vertical" }} value={d.notes || ""} onChange={e => up("notes", e.target.value)} /></div>
@@ -2328,7 +2363,7 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers, i
         const updateRow = (i, patch) => setSched(sched.map((r, idx) => idx === i ? { ...r, ...patch } : r));
         const addRow = () => setSched([...sched, { id: uid(), dueDate: "", amountCents: 0 }]);
         const removeRow = (i) => setSched(sched.filter((_, idx) => idx !== i));
-        const grossExpected = d.vat_applicable ? Math.round((d.expected_commission_net || 0) * 1.05) : (d.expected_commission_net || 0);
+        const grossExpected = dealGrossCents(d);
         const addMonths = (iso, n) => { const dt = iso ? new Date(iso + "T00:00:00") : new Date(); dt.setMonth(dt.getMonth() + n); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`; };
         const generate = (n) => {
           if (!grossExpected || n < 1) { toast("Set the expected commission first", "warning"); return; }
