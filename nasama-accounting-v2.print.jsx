@@ -742,6 +742,9 @@ function GLPrintDoc({ accounts, txns, filteredTxns, dateFilter, settings, select
                   credit:  cr,
                   balance: runningBal,
                   key:     t.id + "-" + l.id,
+                  // Printed ledgers are often read in mono, so the row also carries
+                  // a word — colour alone must not be the only signal.
+                  accrual: typeof accrualStatus === "function" ? accrualStatus(t, txns) : null,
                 };
               })
           );
@@ -865,23 +868,25 @@ function GLPrintDoc({ accounts, txns, filteredTxns, dateFilter, settings, select
                   const refShort = row.ref
                     ? (row.ref.length > 10 ? row.ref.slice(0, 9) + "…" : row.ref)
                     : "—";
+                  const unpaidAcc = row.accrual === "unpaid";
                   return (
                     <tr key={row.key} style={{ pageBreakInside: "avoid" }}>
-                      <td style={tdGL({ color: PD.inkSub, whiteSpace: "nowrap", overflow: "hidden" })}>
+                      <td style={tdGL({ color: unpaidAcc ? PD.red : PD.inkSub, whiteSpace: "nowrap", overflow: "hidden" })}>
                         {fmtDate(row.date)}
                       </td>
-                      <td title={row.ref || ""} style={tdGL({ fontFamily: PD.mono, fontSize: PD.fXs, color: PD.inkSub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" })}>
+                      <td title={row.ref || ""} style={tdGL({ fontFamily: PD.mono, fontSize: PD.fXs, color: unpaidAcc ? PD.red : PD.inkSub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" })}>
                         {refShort}
                       </td>
-                      <td title={row.desc} style={tdGL({ color: PD.inkMd, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" })}>
+                      <td title={row.desc} style={tdGL({ color: unpaidAcc ? PD.red : PD.inkMd, fontWeight: unpaidAcc ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" })}>
                         {row.desc}
+                        {unpaidAcc && <span style={{ marginLeft: 5, fontSize: PD.fXs, fontWeight: 800, letterSpacing: "0.06em", color: PD.red }}>[UNPAID]</span>}
                       </td>
                       {/* Debit — always dark when non-zero; show dash only in muted */}
-                      <td style={tdGL({ textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", overflow: "hidden", color: row.debit ? PD.inkDk : PD.ruleLt, ...PD.pca })}>
+                      <td style={tdGL({ textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", overflow: "hidden", color: unpaidAcc ? PD.red : (row.debit ? PD.inkDk : PD.ruleLt), fontWeight: unpaidAcc ? 700 : 400, ...PD.pca })}>
                         {row.debit ? pFmt(row.debit) : "—"}
                       </td>
                       {/* Credit */}
-                      <td style={tdGL({ textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", overflow: "hidden", color: row.credit ? PD.inkDk : PD.ruleLt, ...PD.pca })}>
+                      <td style={tdGL({ textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", overflow: "hidden", color: unpaidAcc ? PD.red : (row.credit ? PD.inkDk : PD.ruleLt), fontWeight: unpaidAcc ? 700 : 400, ...PD.pca })}>
                         {row.credit ? pFmt(row.credit) : "—"}
                       </td>
                       {/* Running balance */}

@@ -29,6 +29,68 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       JV: { label: "Journal Voucher", desc: "Manual adjustment entry" },
       CI: { label: "Capital Injection", desc: "Owner capital contribution" },
       OD: { label: "Owner Drawing", desc: "Profit release / owner withdrawal" },
+      AC: { label: "Accrual", desc: "Expense incurred but not yet paid" },
+    };
+
+    // ── ACCRUALS ──────────────────────────────────────
+    // An accrual (AC) recognises an expense before the cash goes out:
+    // DR expense / CR 2210 Accrued Expenses Payable. The entry stays in the ledger
+    // for good, but the money is only still OWED until a settlement clears the
+    // payable — or until the accrual is voided or reversed away.
+    //
+    // Every screen and report renders the flag through these functions, so an
+    // accrual cannot read "Unpaid" on the Journal and something else on a report.
+    const ACCRUAL_TAG = "accrual";
+    const ACCRUAL_SETTLEMENT_TAG = "accrual-settlement";
+    // Tags are compared as whole words: "accrual-settlement" must NOT match a
+    // naive substring test for "accrual", or every settlement reads as an accrual.
+    const txnTagList = (t) => String((t && t.tags) || "").split(/[,;\s]+/).filter(Boolean);
+    const isAccrualTxn = (t) => !!t && (t.txnType === "AC" || txnTagList(t).includes(ACCRUAL_TAG));
+    const isAccrualSettlementTxn = (t) => !!t && txnTagList(t).includes(ACCRUAL_SETTLEMENT_TAG);
+
+    // "unpaid" | "settled" | "reversed" | "void" — null when this isn't an accrual.
+    // The settlement is matched on planned_expense_id, which both postAccrual and
+    // postAccrualSettlement stamp onto their transaction.
+    const accrualStatus = (txn, txns) => {
+      if (!isAccrualTxn(txn)) return null;
+      if (txn.isVoid) return "void";
+      const all = txns || [];
+      if (all.some(r => r.reversesTxnId === txn.id && !r.isVoid)) return "reversed";
+      const pe = txn.planned_expense_id || "";
+      if (pe && all.some(s => !s.isVoid && s.planned_expense_id === pe && isAccrualSettlementTxn(s))) return "settled";
+      return "unpaid";
+    };
+    const ACCRUAL_STATUS = {
+      unpaid:   { label: "Unpaid",   fg: "#B91C1C", bg: "#FEF2F2", br: "#FECACA", title: "Expense recognised but not yet paid — still owed under Accrued Expenses Payable (2210)" },
+      settled:  { label: "Settled",  fg: "#047857", bg: "#ECFDF5", br: "#A7F3D0", title: "This accrual has been paid — a settlement entry cleared the payable" },
+      reversed: { label: "Reversed", fg: "#92400E", bg: "#FFFBEB", br: "#FDE68A", title: "This accrual was reversed by a contra entry and no longer stands" },
+      void:     { label: "Void",     fg: "#6B7280", bg: "#F3F4F6", br: "#E5E7EB", title: "This accrual was voided" },
+    };
+    // Red is reserved for money still owed. A settled accrual is a normal historic
+    // expense and must not keep shouting "Unpaid" once it has been paid.
+    const accrualIsUnpaid = (txn, txns) => accrualStatus(txn, txns) === "unpaid";
+    const ACCRUAL_RED = ACCRUAL_STATUS.unpaid.fg;
+    /** Text colour for an amount/label: red while unpaid, otherwise `fallback`. */
+    const accrualColor = (txn, txns, fallback) => (accrualIsUnpaid(txn, txns) ? ACCRUAL_RED : (fallback ?? undefined));
+
+    /** The small status pill shown beside an accrual anywhere it is listed. */
+    function AccrualTag({ txn, txns, size, style }) {
+      const st = accrualStatus(txn, txns);
+      if (!st) return null;
+      const s = ACCRUAL_STATUS[st];
+      const sm = size === "sm";
+      return <span title={s.title} data-accrual={st} style={{
+        display: "inline-block", marginLeft: 6, padding: sm ? "0px 5px" : "1px 6px",
+        borderRadius: 20, fontSize: sm ? 8.5 : 9.5, fontWeight: 800,
+        letterSpacing: "0.06em", textTransform: "uppercase", lineHeight: 1.6,
+        color: s.fg, background: s.bg, border: "1px solid " + s.br,
+        whiteSpace: "nowrap", verticalAlign: "middle", ...(style || {})
+      }}>{s.label}</span>;
+    }
+    /** Plain-text equivalent for Excel/PDF exports, where a pill cannot render. */
+    const accrualStatusLabel = (txn, txns) => {
+      const st = accrualStatus(txn, txns);
+      return st ? ACCRUAL_STATUS[st].label : "";
     };
 
     // ── RBAC ──────────────────────────────────────────

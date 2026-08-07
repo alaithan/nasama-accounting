@@ -175,6 +175,11 @@ function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, se
     if (!acc || acc.isVoid) return false;
     return !(txns || []).some(r => r.reversesTxnId === item.accrualTxnId && !r.isVoid);
   };
+  // The accrual entry behind a planned expense, so the row can show the same
+  // shared Unpaid/Settled pill the Journal and the reports use.
+  const accrualTxnOf = (item) => (item && item.accrualTxnId)
+    ? (txns || []).find(t => t.id === item.accrualTxnId) || null
+    : null;
 
   useEffect(() => {
     const h = () => { setEditItem(null); setShowModal(true); };
@@ -456,17 +461,25 @@ function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, se
           {filtered.map(item => {
             const status = item.computedStatus;
             const accrued = isAccrualLive(item);
+            // Red follows the accrual entry's own status, not merely "is accrued",
+            // so a settled item stops reading as money still owed.
+            const accTxn = accrualTxnOf(item);
+            const stillOwed = accrued && status !== "Paid" && accrualStatus(accTxn, txns) === "unpaid";
             return <tr key={item.id} style={{ background: status === "Overdue" ? "#FEF2F2" : "transparent" }}>
               <td style={C.td}>
                 <span style={C.badge(FE_STATUS_BADGE[status] || "neutral")}>
                   {FE_STATUS_ICON[status] || ""} {status}
                 </span>
                 {accrued && status !== "Paid" && <div style={{ marginTop: 4 }}>
-                  <span style={C.badge("info")} title="Recognised as an expense and accrued liability; awaiting payment">🧾 Accrued</span>
+                  <span style={stillOwed
+                    ? { ...C.badge("danger"), background: ACCRUAL_STATUS.unpaid.bg, color: ACCRUAL_STATUS.unpaid.fg, border: "1px solid " + ACCRUAL_STATUS.unpaid.br }
+                    : C.badge("neutral")}
+                    title={stillOwed ? ACCRUAL_STATUS.unpaid.title : ""}>🧾 Accrued</span>
+                  <AccrualTag txn={accTxn} txns={txns} size="sm" />
                 </div>}
               </td>
               <td style={C.td}>
-                <div style={{ fontWeight: 600, color: NAVY }}>{item.title || "Untitled"}</div>
+                <div style={{ fontWeight: 600, color: stillOwed ? ACCRUAL_RED : NAVY }}>{item.title || "Untitled"}</div>
                 {item.notes && <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 2 }}>{item.notes.substring(0, 60)}{item.notes.length > 60 ? "…" : ""}</div>}
               </td>
               <td style={C.td}>{getCategoryLabel(item.category)}</td>

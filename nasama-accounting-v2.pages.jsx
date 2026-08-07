@@ -834,13 +834,13 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
           <XlsxSignBtn
             title="Export recent transactions to Excel"
             onExport={() => xlsxExport("Recent Transactions", `nasama-recent-transactions-${todayStr()}.xlsx`,
-              [["Date", "Ref", "Type", "Description", "Counterparty", "Amount (AED)"],
+              [["Date", "Ref", "Type", "Description", "Counterparty", "Accrual", "Amount (AED)"],
                 ...recentTxns.map(t => {
                   const typeInfo = TXN_TYPES[t.txnType] || { label: t.txnType || "JV" };
                   const total = (t.lines || []).reduce((sum, line) => sum + (line.debit || 0), 0);
-                  return [fmtDate(t.date), t.ref || "", typeInfo.label, t.description || "Manual journal entry", t.counterparty || "Internal", xAED(total)];
+                  return [fmtDate(t.date), t.ref || "", typeInfo.label, t.description || "Manual journal entry", t.counterparty || "Internal", accrualStatusLabel(t, txns), xAED(total)];
                 })],
-              [5])} />
+              [6])} />
           <button style={C.btn("ghost", true)} onClick={e => { e.stopPropagation(); setPage("journal"); }}>Open Journal</button>
           <span style={{ fontSize: 18, color: "#98A2B3", userSelect: "none", lineHeight: 1 }}>{showRecentTxns ? "▲" : "▼"}</span>
         </div>
@@ -852,11 +852,14 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
           const total = (t.lines || []).reduce((sum, line) => sum + (line.debit || 0), 0);
           return <div key={t.id || i} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.2fr auto auto", gap: 12, alignItems: "center", padding: "11px 0", borderBottom: i < recentTxns.length - 1 ? "1px solid #F3F4F6" : "none", fontSize: 13 }}>
             <div>
-              <div style={{ fontWeight: 700, color: NAVY }}>{t.description || "Manual journal entry"}</div>
+              <div style={{ fontWeight: 700, color: accrualColor(t, txns, NAVY) }}>
+                {t.description || "Manual journal entry"}
+                <AccrualTag txn={t} txns={txns} size="sm" />
+              </div>
               <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 4 }}>{fmtDate(t.date)} · {typeInfo.label} · {t.counterparty || "Internal"}</div>
             </div>
             <span style={{ ...C.badge(t.txnType === "SR" ? "success" : t.txnType === "PV" || t.txnType === "BP" ? "warning" : "info"), justifySelf: isMobile ? "start" : "center" }}>{t.ref}</span>
-            <div style={{ fontWeight: 700, color: "#374151", textAlign: isMobile ? "left" : "right" }}>{fmtAED(total || 0)}</div>
+            <div style={{ fontWeight: 700, color: accrualColor(t, txns, "#374151"), textAlign: isMobile ? "left" : "right" }}>{fmtAED(total || 0)}</div>
           </div>;
         })}
       </div>}
@@ -3664,6 +3667,7 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
             {filtered.length === 0 && <tr><td colSpan={8} style={{ ...C.td, textAlign: "center", padding: 40, color: "#9CA3AF" }}>No journal entries found.</td></tr>}
             {filtered.map(t => {
               const typeInfo = TXN_TYPES[t.txnType] || { label: t.txnType || "?" };
+              const unpaidAccrual = accrualIsUnpaid(t, txns);
               const isReversalRow = t.statusLabel === "Reversal";
               const canEditReverse = t.statusLabel === "Posted";        // Edit / Reverse only on live, un-reversed entries
               const canDelete = t.statusLabel === "Posted" || isReversalRow; // deleting a reversal cleanly un-offsets the original
@@ -3675,10 +3679,15 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
                     {t.ref || "—"}
                   </span>
                 </td>
-                <td style={{ ...C.td, ...journalCol.type }}><span style={C.badge(t.txnType === "SR" ? "success" : t.txnType === "PV" || t.txnType === "BP" ? "warning" : "neutral")}>{typeInfo.label}</span></td>
+                <td style={{ ...C.td, ...journalCol.type }}>
+                  <span style={unpaidAccrual
+                    ? { ...C.badge("danger"), background: ACCRUAL_STATUS.unpaid.bg, color: ACCRUAL_STATUS.unpaid.fg, border: "1px solid " + ACCRUAL_STATUS.unpaid.br }
+                    : C.badge(t.txnType === "SR" ? "success" : t.txnType === "PV" || t.txnType === "BP" ? "warning" : "neutral")}>{typeInfo.label}</span>
+                  <AccrualTag txn={t} txns={txns} size="sm" />
+                </td>
                 <td style={{ ...C.td, ...journalCol.description }} title={t.description || ""}>{t.description || "—"}</td>
                 <td style={{ ...C.td, ...journalCol.party }} title={t.counterparty || ""}>{t.counterparty || "—"}</td>
-                <td style={{ ...C.td, ...journalCol.amount }}>{fmtAED(t.totalDr)}</td>
+                <td style={{ ...C.td, ...journalCol.amount, color: accrualColor(t, txns), fontWeight: unpaidAccrual ? 700 : undefined }}>{fmtAED(t.totalDr)}</td>
                 <td style={{ ...C.td, ...journalCol.status }}><span style={C.badge(statusBadge)}>{t.statusLabel}</span></td>
                 <td style={{ ...C.td, ...journalCol.actions }}>
                   {canEditReverse && hasPermission(userRole, 'canEditTxns') && <button style={{ ...C.btn("secondary", true), marginRight: 4 }} onClick={() => setEditTxnId(t.id)}>Edit</button>}

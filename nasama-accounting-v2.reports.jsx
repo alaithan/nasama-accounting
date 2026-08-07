@@ -1131,6 +1131,7 @@ function GLReport(props) {
                   credit:  cr,
                   balance: runningBal,
                   key:     t.id + "-" + l.id,
+                  txn:     t,
                 };
               });
           });
@@ -1358,20 +1359,27 @@ function GLReport(props) {
               var refDisplay = row.ref
                 ? (row.ref.length > 12 ? row.ref.slice(0, 10) + "\u2026" : row.ref)
                 : "\u2014";
+              /* An accrual that is still owed reads red here too, so the ledger
+                 agrees with the Journal and the Future Expenses screen. */
+              var unpaidAcc = typeof accrualIsUnpaid === "function" && accrualIsUnpaid(row.txn, txns);
               return React.createElement("tr", { key: row.key },
                 React.createElement("td", { style: td({ color: RPT.subtle, whiteSpace: "nowrap" }) }, fmtDate(row.date)),
                 React.createElement("td", {
                   title: row.ref || "",
-                  style: td({ fontFamily: "ui-monospace,'SF Mono',Consolas,monospace", fontSize: 10.5, color: RPT.subtle, whiteSpace: "nowrap" })
+                  style: td({ fontFamily: "ui-monospace,'SF Mono',Consolas,monospace", fontSize: 10.5, color: unpaidAcc ? ACCRUAL_RED : RPT.subtle, whiteSpace: "nowrap" })
                 }, refDisplay),
                 React.createElement("td", {
-                  style: td({ color: RPT.textHeavy, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }),
+                  style: td({ color: unpaidAcc ? ACCRUAL_RED : RPT.textHeavy, fontWeight: unpaidAcc ? 600 : 400, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }),
                   title: row.desc
-                }, row.desc),
-                React.createElement("td", { style: td({ textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", color: row.debit ? RPT.blue : RPT.subtle, fontWeight: row.debit ? 600 : 400 }) },
+                }, row.desc,
+                  typeof AccrualTag === "function"
+                    ? React.createElement(AccrualTag, { txn: row.txn, txns: txns, size: "sm" })
+                    : null
+                ),
+                React.createElement("td", { style: td({ textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", color: unpaidAcc ? ACCRUAL_RED : (row.debit ? RPT.blue : RPT.subtle), fontWeight: (row.debit || unpaidAcc) ? 600 : 400 }) },
                   row.debit ? fmtAED(row.debit) : "\u2014"
                 ),
-                React.createElement("td", { style: td({ textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", color: row.credit ? RPT.purple : RPT.subtle, fontWeight: row.credit ? 600 : 400 }) },
+                React.createElement("td", { style: td({ textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", color: unpaidAcc ? ACCRUAL_RED : (row.credit ? RPT.purple : RPT.subtle), fontWeight: (row.credit || unpaidAcc) ? 600 : 400 }) },
                   row.credit ? fmtAED(row.credit) : "\u2014"
                 ),
                 React.createElement("td", { style: td({ textAlign: "right", fontWeight: 600, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", color: row.balance >= 0 ? RPT.textHeavy : RPT.red }) },
