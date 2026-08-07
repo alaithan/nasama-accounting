@@ -2137,7 +2137,7 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
             ["Transaction Value", fmtAED(deal.transaction_value || 0)],
             [isSecondary ? "Buyer Commission %" : "Commission %", deal.commission_pct ? deal.commission_pct + "%" : "—"],
             ...(isSecondary ? [["Seller Commission %", deal.seller_commission_pct ? deal.seller_commission_pct + "%" : "—"]] : []),
-            ["VAT", deal.vat_applicable ? "Yes — 5% added on invoice" : "No"],
+            ["VAT", !deal.vat_applicable ? "No" : isVatInclusive(deal) ? "Yes — 5% included in the commission" : "Yes — 5% added on invoice"],
           ].map((row, idx) => <div key={idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 2px", borderBottom: "1px solid #EFF1F4" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
               <span style={{ fontSize: 11, fontWeight: 700, color: "#C9A038", minWidth: 18 }}>{String(idx + 1).padStart(2, "0")}</span>

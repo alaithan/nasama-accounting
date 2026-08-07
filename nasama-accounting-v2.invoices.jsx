@@ -1260,10 +1260,18 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
   const handleFixDeal = async (deal, cents) => {
     if (!deal || !deal.id) return false;
     const label = deal.property_name || "this deal";
+    // The stored figure is the NET under either VAT mode, but how it relates to
+    // value × % differs — say which basis is in play rather than assuming "on top".
+    const incl = typeof isVatInclusive === "function" ? isVatInclusive(deal) : false;
+    const basis = !deal.vat_applicable
+      ? `That is ${invFmt((deal.transaction_value || 0) / 100)} × ${deal.commission_pct}%. No VAT applies.`
+      : incl
+        ? `That is ${invFmt((deal.transaction_value || 0) / 100)} × ${deal.commission_pct}% with the 5% VAT taken out of it, ` +
+          `so the invoice still totals AED ${invFmt(((deal.transaction_value || 0) * (parseFloat(deal.commission_pct) || 0) / 100) / 100)} including VAT.`
+        : `That is ${invFmt((deal.transaction_value || 0) / 100)} × ${deal.commission_pct}%, excluding VAT. ` +
+          `The 5% VAT is added on top on the invoice.`;
     if (!window.confirm(
-      `Set ${label}'s expected commission to AED ${invFmt(cents / 100)}?\n\n` +
-      `That is ${invFmt((deal.transaction_value || 0) / 100)} × ${deal.commission_pct}%, excluding VAT. ` +
-      `The 5% VAT is added on top on the invoice.`
+      `Set ${label}'s expected commission to AED ${invFmt(cents / 100)}?\n\n${basis}`
     )) return false;
     try {
       await db.collection("deals").doc(deal.id).set({ expected_commission_net: cents }, { merge: true });
