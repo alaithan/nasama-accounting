@@ -4,7 +4,8 @@
       "Bash(grep -E \"\\\\.\\(js|ts|tsx|jsx|sql\\)$\")",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "mcp__claude_ai_Google_Drive__read_file_content"
     ]
   }
 }
