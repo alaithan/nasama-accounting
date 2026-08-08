@@ -4354,21 +4354,26 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
   }).filter(r => r.count > 0);
   const maxTypeCount = Math.max(1, ...byType.map(r => r.count));
   // Deals created per month, split by type (Off-Plan / Secondary / Rental), last 12 months.
+  // Each month also carries the total transaction value + commission of the very same
+  // deals the bar counts, so the figure printed above a bar always matches its height.
   const dealsPerMonth = (() => {
     const byMonth = {};
     (deals || []).forEach(d => {
       if (!d.created_at) return;
       const k = String(d.created_at).slice(0, 7);
-      if (!byMonth[k]) byMonth[k] = {};
+      if (!byMonth[k]) byMonth[k] = { types: {}, value: 0, commission: 0 };
       const ty = d.type || "Other";
-      byMonth[k][ty] = (byMonth[k][ty] || 0) + 1;
+      byMonth[k].types[ty] = (byMonth[k].types[ty] || 0) + 1;
+      byMonth[k].value += d.transaction_value || 0;
+      byMonth[k].commission += d.expected_commission_net || 0;
     });
     const out = [];
     const push = dt => {
       const k = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
-      const t = byMonth[k] || {};
+      const b = byMonth[k] || { types: {}, value: 0, commission: 0 };
+      const t = b.types;
       const offplan = t["Off-Plan"] || 0, secondary = t["Secondary"] || 0, rental = t["Rental"] || 0;
-      out.push({ label: dt.toLocaleDateString("en-GB", { month: "short", year: "2-digit" }), offplan, secondary, rental, count: offplan + secondary + rental });
+      out.push({ label: dt.toLocaleDateString("en-GB", { month: "short", year: "2-digit" }), offplan, secondary, rental, count: offplan + secondary + rental, value: b.value, commission: b.commission });
     };
     if (perfYear !== "all" && /^\d{4}$/.test(perfYear)) {
       // A specific sale year is selected: show Jan–Dec of that year.
@@ -4382,6 +4387,16 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
   })();
   const maxDealsPerMonth = Math.max(1, ...dealsPerMonth.map(m => m.count));
   const dealsPerMonthTotal = dealsPerMonth.reduce((s, m) => s + m.count, 0);
+  const dealsPerMonthValue = dealsPerMonth.reduce((s, m) => s + m.value, 0);
+  // Compact money for the chart labels — amounts are in fils, so /100 first.
+  // 12 columns leave no room for "AED 24,600,000.00"; the unit lives in the legend.
+  const shortAED = c => {
+    const n = Number(c || 0), v = Math.abs(n) / 100, sign = n < 0 ? "−" : "";
+    if (v >= 1e9) return `${sign}${(v / 1e9).toFixed(v >= 1e10 ? 0 : 1).replace(/\.0$/, "")}B`;
+    if (v >= 1e6) return `${sign}${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1).replace(/\.0$/, "")}M`;
+    if (v >= 1e3) return `${sign}${Math.round(v / 1e3)}K`;
+    return sign + Math.round(v).toLocaleString("en-AE");
+  };
 
   // ── Broker Performance ───────────────────────────
   const brokerMap = new Map();
@@ -4638,19 +4653,29 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
       </div>
 
       {/* ── Deals per Month ── */}
-      {sectionCard("Deals per Month", `Deals created per month — all stages included · ${dealsPerMonthTotal} ${perfYear === "all" ? "in the last 12 months" : `in ${perfYear}`}`,
+      {sectionCard("Deals per Month", `Deals created per month — all stages included · ${dealsPerMonthTotal} deals worth ${fmtAED(dealsPerMonthValue)} ${perfYear === "all" ? "in the last 12 months" : `in ${perfYear}`}`,
         <div>
-          <div style={{ display: "flex", gap: 16, padding: "0 6px 10px", fontSize: 10.5, color: "#6B7280", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "0 6px 10px", fontSize: 10.5, color: "#6B7280", flexWrap: "wrap" }}>
             {["Off-Plan", "Secondary", "Rental"].map(t => <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: TYPE_COLOR[t] }} />{t}</span>)}
+            <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: .3, color: "#8A6D1F", background: "linear-gradient(180deg,#FFFBEF,#FCF3DC)", border: "1px solid #EFE0B4", borderRadius: 999, padding: "2px 7px" }}>AED</span>
+              deal value above each bar · {fmtAED(dealsPerMonthValue)} total
+            </span>
           </div>
-          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", height: 188, gap: 10, padding: "4px 6px 0", borderBottom: "2px solid #EEF0F3" }}>
+          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", height: 200, gap: 10, padding: "4px 6px 0", borderBottom: "2px solid #EEF0F3" }}>
             {dealsPerMonth.map((m, i) => {
               const h = m.count > 0 ? Math.max(8, (m.count / maxDealsPerMonth) * 100) : 0;
               const segs = [["Rental", m.rental], ["Secondary", m.secondary], ["Off-Plan", m.offplan]];
-              return <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", height: "100%" }}>
-                <div style={{ fontSize: 11.5, fontWeight: 800, color: m.count > 0 ? NAVY : "#D1D5DB", height: 18 }}>{m.count}</div>
+              const tip = `${m.label}: ${m.count} deal${m.count === 1 ? "" : "s"} — Off-Plan ${m.offplan}, Secondary ${m.secondary}, Rental ${m.rental}\nDeal value ${fmtAED(m.value)} · Commission ${fmtAED(m.commission)}`;
+              return <div key={i} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", height: "100%" }}>
+                <div title={m.count > 0 ? tip : undefined} style={{ height: 38, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", gap: 2, maxWidth: "100%" }}>
+                  {m.count > 0
+                    ? <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: .2, color: "#8A6D1F", background: "linear-gradient(180deg,#FFFBEF,#FCF3DC)", border: "1px solid #EFE0B4", borderRadius: 999, padding: "2px 7px", whiteSpace: "nowrap", boxShadow: "0 1px 2px rgba(16,24,40,.06)", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis" }}>{shortAED(m.value)}</span>
+                    : <span style={{ fontSize: 9.5, color: "#E5E7EB" }}>—</span>}
+                  <span style={{ fontSize: 11.5, fontWeight: 800, color: m.count > 0 ? NAVY : "#D1D5DB" }}>{m.count}</span>
+                </div>
                 <div style={{ flex: 1, display: "flex", alignItems: "flex-end", width: "100%", justifyContent: "center" }}>
-                  <div title={`${m.label}: ${m.count} total — Off-Plan ${m.offplan}, Secondary ${m.secondary}, Rental ${m.rental}`} style={{ width: "72%", height: `${h}%`, minHeight: m.count > 0 ? 8 : 0, borderRadius: "7px 7px 2px 2px", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 3px 8px rgba(16,24,40,.13)" }}>
+                  <div title={tip} style={{ width: "72%", height: `${h}%`, minHeight: m.count > 0 ? 8 : 0, borderRadius: "7px 7px 2px 2px", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 3px 8px rgba(16,24,40,.13)" }}>
                     {segs.map(([t, c]) => c > 0 ? <div key={t} title={`${t}: ${c}`} style={{ height: `${(c / m.count) * 100}%`, background: TYPE_COLOR[t] }} /> : null)}
                   </div>
                 </div>
@@ -4663,8 +4688,9 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
         </div>,
         <button style={C.btn("ghost", true)} onClick={() => setPage("deals")}>View Deals →</button>,
         () => xlsxExport("Deals per Month", `nasama-deals-per-month-${todayStr()}.xlsx`,
-          [["Month", "Off-Plan", "Secondary", "Rental", "Total"],
-            ...dealsPerMonth.map(m => [m.label, m.offplan, m.secondary, m.rental, m.count])])
+          [["Month", "Off-Plan", "Secondary", "Rental", "Total", "Deal Value (AED)", "Commission (AED)"],
+            ...dealsPerMonth.map(m => [m.label, m.offplan, m.secondary, m.rental, m.count, xAED(m.value), xAED(m.commission)])],
+          [5, 6])
       )}
 
       {/* ── Broker Performance Bar Chart ── */}
