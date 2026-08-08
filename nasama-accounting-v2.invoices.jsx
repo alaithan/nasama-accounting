@@ -1173,7 +1173,11 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
   const [saving,     setSaving]     = React.useState(false);
   const [sortKey,    setSortKey]    = React.useState("date");
   const [sortDir,    setSortDir]    = React.useState("desc");
-  const [statusFilter, setStatusFilter] = usePersistedState("inv_status_filter", "all");
+  // The list is organised by what an invoice still needs from you rather than by
+  // its raw status: Open (money still to collect) → Paid → Drafts → Void. A new
+  // storage key, so a stale "issued"/"all" from the old status filter can't stick.
+  const [bucketFilter, setBucketFilter] = usePersistedState("inv_bucket_filter", "open");
+  const [query, setQuery] = React.useState("");
   const invStatusKey = inv => inv.status === "issued" ? "issued" : inv.status === "void" ? "void" : "draft";
 
   // Real-time Firestore listener
@@ -1351,6 +1355,51 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
     return m;
   }, [txns]);
 
+  // Brokers behind an invoice, via the deals its lines bill. Shared by the Broker
+  // column and the search index so the two can never disagree.
+  const brokerNamesOf = React.useCallback(inv => {
+    const ids = [...new Set((inv.lineItems || []).map(li => li.dealId).filter(Boolean))];
+    return [...new Set(ids.map(id => (deals || []).find(d => d.id === id)?.broker_name).filter(Boolean))];
+  }, [deals]);
+
+  // Per-invoice collection state. `paid` counts only cash actually banked, so an
+  // invoice collected in instalments sits in "partial" until the last dirham
+  // lands. Sub-AED remainders are rounding, not a debt — hence the 0.5 tolerance.
+  const invMeta = React.useMemo(() => {
+    const m = new Map();
+    const today = todayStr();
+    (invoices || []).forEach(inv => {
+      const rcs    = receiptsByInvoiceId.get(inv.id) || [];
+      const paid   = rcs.reduce((s, t) => s + srReceivedAED(t, accounts), 0);
+      const total  = inv.totals?.incl || 0;
+      const due    = Math.max(0, total - paid);
+      const status = invStatusKey(inv);
+      const bucket = status === "void"  ? "void"
+                   : status === "draft" ? "draft"
+                   : rcs.length === 0   ? "unpaid"
+                   : due > 0.5          ? "partial"
+                   : "paid";
+      const overdueDays = (bucket === "unpaid" || bucket === "partial") && inv.dueDate && inv.dueDate < today
+        ? Math.round((new Date(today) - new Date(inv.dueDate)) / 86400000) : 0;
+      m.set(inv.id, { rcs, paid, total, due, bucket, overdueDays, open: bucket === "unpaid" || bucket === "partial" });
+    });
+    return m;
+  }, [invoices, receiptsByInvoiceId, accounts]);
+
+  // One lower-cased haystack per invoice: number, both date spellings, client,
+  // broker, what was billed, and the total — so a single box answers "find the
+  // one for Tarek in Aug" without the user picking a field first.
+  const searchIndex = React.useMemo(() => {
+    const m = new Map();
+    (invoices || []).forEach(inv => m.set(inv.id, [
+      inv.invoiceNumber, inv.invoiceNumberRaw, inv.invoiceDate, invFmtDate(inv.invoiceDate),
+      inv.invoicedTo?.companyName, brokerNamesOf(inv).join(" "),
+      (inv.lineItems || []).map(li => `${li.projectUnit || ""} ${li.specification || ""}`).join(" "),
+      invFmt(inv.totals?.incl),
+    ].filter(Boolean).join(" ").toLowerCase()));
+    return m;
+  }, [invoices, brokerNamesOf]);
+
   // Hand off to the Sale Receipts page with a receipt pre-filled from this invoice
   // (deal, amount incl VAT, today's date) so the collection lands on the deal card
   // with no re-entry. Mirrors the deals→invoice navigation pattern.
@@ -1430,19 +1479,50 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
       </div>
 
       {!loading && invoices.length > 0 && (() => {
-        const counts = { all: invoices.length, issued: 0, draft: 0, void: 0 };
-        invoices.forEach(inv => counts[invStatusKey(inv)]++);
-        const opts = [["all", "All"], ["issued", "Issued"], ["draft", "Draft"]];
-        if (counts.void > 0) opts.push(["void", "Void"]);
-        return <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
-          {opts.map(([k, label]) => {
-            const active = statusFilter === k;
-            return <button key={k} onClick={() => setStatusFilter(k)} style={{
-              padding: "6px 15px", borderRadius: 999, fontSize: 13, fontWeight: 600, cursor: "pointer",
-              border: `1px solid ${active ? "#C9A044" : "#E5E7EB"}`, background: active ? "#C9A044" : "#fff",
-              color: active ? "#fff" : "#475569", transition: "all .12s",
-            }}>{label} <span style={{ opacity: 0.72, fontWeight: 700 }}>({counts[k]})</span></button>;
-          })}
+        const counts = { open: 0, paid: 0, draft: 0, void: 0, all: invoices.length };
+        let openDue = 0, overdueCount = 0, overdueDue = 0;
+        invoices.forEach(inv => {
+          const b = invMeta.get(inv.id) || {};
+          const k = b.open ? "open" : b.bucket;
+          counts[k] = (counts[k] || 0) + 1;
+          if (b.open) { openDue += b.due; if (b.overdueDays > 0) { overdueCount++; overdueDue += b.due; } }
+        });
+        const chips = [
+          ["open",  "Open",   "#B54708", "Issued and still owed to you"],
+          ["paid",  "Paid",   "#027A48", "Fully collected — parked out of the way"],
+          ["draft", "Drafts", "#475467", "Not issued yet"],
+        ];
+        if (counts.void > 0) chips.push(["void", "Void", "#667085", "Cancelled, kept on record"]);
+        chips.push(["all", "All", "#344054", "Every invoice"]);
+        return <div style={{ marginBottom: 18 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {chips.map(([k, label, accent, tip]) => {
+              const active = bucketFilter === k;
+              return <button key={k} title={tip} onClick={() => setBucketFilter(k)} style={{
+                padding: "6px 15px", borderRadius: 999, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                border: `1px solid ${active ? accent : "#E5E7EB"}`, background: active ? accent : "#fff",
+                color: active ? "#fff" : "#475569", transition: "all .12s",
+                opacity: query ? 0.55 : 1,
+              }}>{label} <span style={{ opacity: active ? 0.8 : 0.6, fontWeight: 700, color: active ? "#fff" : accent }}>{counts[k] || 0}</span></button>;
+            })}
+            <div style={{ marginLeft: "auto", position: "relative", minWidth: 250 }}>
+              <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "#98A2B3", pointerEvents: "none" }}>🔍</span>
+              <input
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                onKeyDown={e => { if (e.key === "Escape") setQuery(""); }}
+                placeholder="Search number, date, client, broker…"
+                style={{ ...C.input, padding: "8px 30px 8px 32px", borderRadius: 999 }}
+              />
+              {query && <button onClick={() => setQuery("")} title="Clear (Esc)" style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", border: "none", background: "none", cursor: "pointer", color: "#98A2B3", fontSize: 14, lineHeight: 1, padding: 2 }}>✕</button>}
+            </div>
+          </div>
+          {!query && bucketFilter === "open" && counts.open > 0 && (
+            <div style={{ marginTop: 10, fontSize: 12.5, color: "#475467", display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+              <span><strong style={{ color: "#B54708", fontSize: 13.5 }}>AED {invFmt(openDue)}</strong> still to collect from {counts.open} invoice{counts.open === 1 ? "" : "s"}</span>
+              {overdueCount > 0 && <span style={{ ...C.badge("danger") }}>{overdueCount} overdue · AED {invFmt(overdueDue)}</span>}
+            </div>
+          )}
         </div>;
       })()}
 
@@ -1462,7 +1542,15 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
         };
         const arrow = (key) => sortKey === key ? (sortDir === "asc" ? " ▲" : " ▼") : " ↕";
         const sortBtnStyle = (key) => ({ background: "none", border: "none", padding: 0, margin: 0, font: "inherit", color: sortKey === key ? "#C9A044" : "inherit", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.07em" });
-        const filtered = statusFilter === "all" ? invoices : invoices.filter(inv => invStatusKey(inv) === statusFilter);
+        // A search looks across every bucket on purpose: an invoice must never be
+        // able to hide behind the filter that happens to be selected.
+        const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        const filtered = invoices.filter(inv => {
+          if (terms.length) return terms.every(t => (searchIndex.get(inv.id) || "").includes(t));
+          if (bucketFilter === "all") return true;
+          const b = invMeta.get(inv.id) || {};
+          return bucketFilter === "open" ? !!b.open : b.bucket === bucketFilter;
+        });
         const sorted = [...filtered].sort((a, b) => {
           let av, bv;
           if (sortKey === "number") {
@@ -1476,10 +1564,16 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
         });
         return (
         <div style={{ background: "#fff", border: "1px solid #EAECF0", borderRadius: 14, overflow: "hidden", boxShadow: "0 1px 3px rgba(16,24,40,.06)" }}>
+          {terms.length > 0 && (
+            <div style={{ padding: "9px 16px", background: "#F9FAFB", borderBottom: "1px solid #EAECF0", fontSize: 12.5, color: "#475467", display: "flex", alignItems: "center", gap: 10 }}>
+              <span><strong>{sorted.length}</strong> match{sorted.length === 1 ? "" : "es"} for “{query.trim()}” — searching all {invoices.length} invoices, any status</span>
+              <button onClick={() => setQuery("")} style={{ ...C.btn("ghost", true), marginLeft: "auto", color: "#C9A044" }}>Clear search</button>
+            </div>
+          )}
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "#F9FAFB", borderBottom: "1px solid #EAECF0" }}>
-                <th style={C.th}><button style={sortBtnStyle("number")} onClick={() => toggleSort("number")}>Invoice No.{arrow("number")}</button></th>
+                <th style={{ ...C.th, borderLeft: "3px solid transparent" }}><button style={sortBtnStyle("number")} onClick={() => toggleSort("number")}>Invoice No.{arrow("number")}</button></th>
                 <th style={C.th}><button style={sortBtnStyle("date")} onClick={() => toggleSort("date")}>Date{arrow("date")}</button></th>
                 {[["Developer / Client",""],["Broker",""],["Excl. VAT","right"],["VAT","right"],["Total Incl. VAT","right"],["Status",""],["Actions",""]].map(([h,a]) => (
                   <th key={h} style={{ ...C.th, textAlign: a || "left" }}>{h}</th>
@@ -1487,26 +1581,48 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
               </tr>
             </thead>
             <tbody>
-              {sorted.length === 0 && <tr><td colSpan={9} style={{ ...C.td, textAlign: "center", padding: 32, color: "#9CA3AF" }}>No {statusFilter} invoices.</td></tr>}
+              {sorted.length === 0 && <tr><td colSpan={9} style={{ ...C.td, textAlign: "center", padding: 32, color: "#9CA3AF" }}>
+                {terms.length ? <>Nothing matches “{query.trim()}”. Try an invoice number, a broker, or a month like “Aug”.</>
+                  : bucketFilter === "open" ? "Nothing outstanding — every issued invoice has been collected. 🎉"
+                  : `No ${bucketFilter} invoices.`}
+              </td></tr>}
               {sorted.map(inv => {
-                // Paid = has one or more linked Sale Receipts. Grey the row so it reads
-                // as settled / locked and shouldn't be edited.
-                const isPaid = (receiptsByInvoiceId.get(inv.id) || []).length > 0;
+                // Settled work recedes, live work leads. Paid/void rows go quiet
+                // (grey text, no gold) while anything still owed keeps full contrast
+                // and carries a coloured left edge — gold when open, red once overdue.
+                const meta = invMeta.get(inv.id) || {};
+                const dim  = meta.bucket === "paid" || meta.bucket === "void";
+                const accent = meta.bucket === "unpaid" ? (meta.overdueDays > 0 ? "#D92D20" : "#C9A044")
+                             : meta.bucket === "partial" ? "#F79009"
+                             : meta.bucket === "draft" ? "#D0D5DD"
+                             : "transparent";
+                const rowTitle = meta.bucket === "paid" ? `Paid in full — AED ${invFmt(meta.paid)} received. Best not to edit.`
+                               : meta.bucket === "partial" ? `AED ${invFmt(meta.paid)} received of AED ${invFmt(meta.total)} — AED ${invFmt(meta.due)} still due.`
+                               : meta.overdueDays > 0 ? `Due ${invFmtDate(inv.dueDate)} — ${meta.overdueDays} day${meta.overdueDays === 1 ? "" : "s"} overdue.`
+                               : undefined;
                 return (
-                <tr key={inv.id} title={isPaid ? "Paid — receipt recorded. Best not to edit." : undefined} style={{ borderTop: "1px solid #F2F4F7", background: isPaid ? "#FEE2E2" : undefined, color: isPaid ? "#991B1B" : undefined }}>
-                  <td style={C.td}><strong style={{ color: "#C9A044", fontFamily: "monospace", fontSize: 13 }}>{inv.invoiceNumber}</strong></td>
+                <tr key={inv.id} title={rowTitle} style={{ borderTop: "1px solid #F2F4F7", background: dim ? "#FCFCFD" : undefined, color: dim ? "#98A2B3" : undefined }}>
+                  <td style={{ ...C.td, borderLeft: `3px solid ${accent}` }}><strong style={{ color: dim ? "#98A2B3" : "#C9A044", fontFamily: "monospace", fontSize: 13, textDecoration: meta.bucket === "void" ? "line-through" : undefined }}>{inv.invoiceNumber}</strong></td>
                   <td style={C.td}>{invFmtDate(inv.invoiceDate)}</td>
-                  <td style={C.td}>{inv.invoicedTo?.companyName || "—"}</td>
-                  <td style={C.td}>{(() => {
-                    const ids = [...new Set((inv.lineItems || []).map(li => li.dealId).filter(Boolean))];
-                    const names = [...new Set(ids.map(id => (deals || []).find(d => d.id === id)?.broker_name).filter(Boolean))];
+                  <td style={{ ...C.td, color: dim ? "#98A2B3" : undefined, fontWeight: dim ? 400 : 500 }}>{inv.invoicedTo?.companyName || "—"}</td>
+                  <td style={{ ...C.td, color: dim ? "#98A2B3" : undefined }}>{(() => {
+                    const names = brokerNamesOf(inv);
                     return names.length > 0 ? names.join(", ") : <span style={{ color: "#9CA3AF" }}>—</span>;
                   })()}</td>
-                  <td style={{ ...C.td, textAlign: "right" }}>{invFmt(inv.totals?.excl)}</td>
-                  <td style={{ ...C.td, textAlign: "right", color: "#6B7280" }}>{invFmt(inv.totals?.vat)}</td>
-                  <td style={{ ...C.td, textAlign: "right", fontWeight: 700, color: "#C9A044" }}>{invFmt(inv.totals?.incl)}</td>
-                  <td style={C.td}><span style={C.badge(inv.status === "void" ? "neutral" : inv.status === "issued" ? "success" : "warning")}>{inv.status === "void" ? "Void" : inv.status === "issued" ? "Issued" : "Draft"}</span></td>
+                  <td style={{ ...C.td, textAlign: "right", color: dim ? "#98A2B3" : undefined }}>{invFmt(inv.totals?.excl)}</td>
+                  <td style={{ ...C.td, textAlign: "right", color: dim ? "#B0B7C3" : "#6B7280" }}>{invFmt(inv.totals?.vat)}</td>
+                  <td style={{ ...C.td, textAlign: "right", fontWeight: 700, color: dim ? "#98A2B3" : "#C9A044" }}>{invFmt(inv.totals?.incl)}</td>
                   <td style={C.td}>
+                    {meta.bucket === "void"    && <span style={C.badge("neutral")}>Void</span>}
+                    {meta.bucket === "draft"   && <span style={C.badge("warning")}>Draft</span>}
+                    {meta.bucket === "paid"    && <span style={C.badge("success")}>✓ Paid</span>}
+                    {meta.bucket === "unpaid"  && <span style={C.badge(meta.overdueDays > 0 ? "danger" : "gold")}>{meta.overdueDays > 0 ? `Overdue ${meta.overdueDays}d` : "Unpaid"}</span>}
+                    {meta.bucket === "partial" && <>
+                      <span style={C.badge("info")}>Part-paid</span>
+                      <div style={{ fontSize: 10.5, color: meta.overdueDays > 0 ? "#B42318" : "#B54708", marginTop: 3, fontWeight: 600 }}>AED {invFmt(meta.due)} due</div>
+                    </>}
+                  </td>
+                  <td style={{ ...C.td, opacity: dim ? 0.65 : 1 }}>
                     <div style={{ display: "flex", gap: 6 }}>
                       {hasPermission(userRole, 'sales.edit') && <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12 }} onClick={() => setEditing({ ...inv })}>Edit</button>}
                       <button style={{ ...C.btn("secondary"), padding: "4px 10px", fontSize: 12 }} onClick={() => setPreviewInv(inv)}>Preview</button>
