@@ -251,9 +251,11 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
 
   // Projected Runway assuming 50% collection of pipeline
   const projectedRunway = useMemo(() => {
-    const effectiveCash = kpis.cash + (includePending ? (kpis.pendingPipelineCommission * 0.5) : 0);
+    // availableCash, not cash: client funds held in our own bank account are not
+    // runway — they must be handed to someone else. See CLIENT FUNDS in core.jsx.
+    const effectiveCash = kpis.availableCash + (includePending ? (kpis.pendingPipelineCommission * 0.5) : 0);
     return kpis.avgMonthlyExpense > 0 ? effectiveCash / kpis.avgMonthlyExpense : Infinity;
-  }, [kpis.cash, kpis.pendingPipelineCommission, kpis.avgMonthlyExpense, includePending]);
+  }, [kpis.availableCash, kpis.pendingPipelineCommission, kpis.avgMonthlyExpense, includePending]);
   const runwayAlertLevel = projectedRunway === Infinity ? null : projectedRunway < 1 ? "critical" : projectedRunway < 3 ? "warning" : null;
 
   // KPIs recomputed for the selected date period (responds to date filter)
@@ -299,7 +301,8 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     const due30 = active.filter(e => { if (!e.nextDueDate) return false; const d = new Date(e.nextDueDate + "T12:00:00"); return d >= today && d <= next30; });
     const totalObligations = overdue.reduce((s, e) => s + (e.amountExpected || 0), 0) + due30.reduce((s, e) => s + (e.amountExpected || 0), 0);
     
-    const availableFunds = kpis.cash + (includePending ? (kpis.pendingPipelineCommission * 0.5) : 0);
+    // Client funds cannot cover our obligations — availableCash, not cash.
+    const availableFunds = kpis.availableCash + (includePending ? (kpis.pendingPipelineCommission * 0.5) : 0);
 
     // Calculate historical coverage trend
     let runningFunds = availableFunds;
@@ -318,7 +321,7 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
       coverageSeries,
       maxRatio: Math.max(2, ...coverageSeries.map(s => s.ratio))
     };
-  }, [plannedExpenses, includePending, kpis.cash, kpis.pendingPipelineCommission, kpis.cashFlowSeries]);
+  }, [plannedExpenses, includePending, kpis.availableCash, kpis.pendingPipelineCommission, kpis.cashFlowSeries]);
   const sectionTitle = (title, sub, actionLabel, actionPage, onExport) => <div style={{ padding: "16px 20px 13px", borderBottom: "1px solid #EAECF0", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
     <div>
       <div style={{ fontWeight: 700, fontSize: 13.5, color: dark ? "#F1F3F9" : NAVY, letterSpacing: "-0.01em" }}>{title}</div>
@@ -385,7 +388,10 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
   const obligationCoverageLabel = feKpis.coverageRatio === Infinity ? "Fully covered" : `${feKpis.coverageRatio.toFixed(1)}x`;
   const periodLabel = dateFilter.from && dateFilter.to ? `${dateFilter.from} → ${dateFilter.to}` : "Selected period";
   const liquidityMetrics = [
-    { label: "Cash & Bank", value: fmtAED(kpis.cash), sub: "Available liquidity — current balance", accent: "#2563EB", rawValue: kpis.cash, prevValue: priorCash, higherIsBetter: true, timeBasis: "balance" },
+    // Value stays the FULL bank balance so this tile ties to Banking and the bank
+    // statement. When client money is held, the sub-line says how much of it is
+    // not ours — the old "Available liquidity" claim was false in that case.
+    { label: "Cash & Bank", value: fmtAED(kpis.cash), sub: kpis.clientFundsHeld > 0 ? `Incl. ${fmtAED(kpis.clientFundsHeld)} held for clients — available ${fmtAED(kpis.availableCash)}` : "Available liquidity — current balance", accent: "#2563EB", rawValue: kpis.cash, prevValue: priorCash, higherIsBetter: true, timeBasis: "balance" },
     { label: "Operating Cash Flow", value: fmtAED(filteredKpis.operatingCashFlow), sub: periodLabel, accent: filteredKpis.operatingCashFlow >= 0 ? "#059669" : "#DC2626", rawValue: filteredKpis.operatingCashFlow, prevValue: priorFilteredKpis.operatingCashFlow, higherIsBetter: true, timeBasis: "period" },
     { label: "Gross Commission", value: fmtAED(filteredKpis.rev), sub: periodLabel, accent: filteredKpis.rev >= 0 ? "#0F766E" : "#B91C1C", rawValue: filteredKpis.rev, prevValue: priorFilteredKpis.rev, higherIsBetter: true, timeBasis: "period" },
     { label: includePending ? "Projected Runway" : "Cash Runway", value: projectedRunway === Infinity ? "✓ Healthy" : `${projectedRunway.toFixed(1)} months`, sub: projectedRunway !== Infinity && projectedRunway < 3 ? (projectedRunway < 1 ? "Immediate action required — less than 1 month left" : "Below safe threshold — target 3+ months") : (includePending ? "Assumes 50% pipeline collection" : "Cash ÷ avg monthly expense"), accent: runwayAlertLevel === "critical" ? "#DC2626" : runwayAlertLevel === "warning" ? "#F59E0B" : "#059669", alertLevel: runwayAlertLevel, timeBasis: "balance" },
@@ -469,6 +475,9 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
       if (runwayAlertLevel === "critical") alerts.push({ level: "critical", msg: `Cash Runway: ${projectedRunway.toFixed(1)} months — immediate action required. Review expenses or secure funding.`, action: { label: "Review Expenses", page: "futureExpenses" } });
       else if (runwayAlertLevel === "warning") alerts.push({ level: "warning", msg: `Cash Runway: ${projectedRunway.toFixed(1)} months — below safe threshold of 3 months.`, action: { label: "Review Expenses", page: "futureExpenses" } });
       if (kpis.cash < 0) alerts.push({ level: "critical", msg: `Negative total cash balance: ${fmtAED(kpis.cash)}. Check account entries immediately.` });
+      // Client funds are not segregated, so the only thing standing between the
+      // company and spending them is this alert.
+      if (kpis.clientFundsHeld > 0 && kpis.availableCash < 0) alerts.push({ level: "critical", msg: `Client funds spent: ${fmtAED(kpis.clientFundsHeld)} is held on behalf of clients but only ${fmtAED(kpis.cash)} is in the bank — company money is short by ${fmtAED(-kpis.availableCash)}.`, action: { label: "Review Banking", page: "banking" } });
       if (feKpis.overdueCount > 0) alerts.push({ level: "warning", msg: `${feKpis.overdueCount} planned expense${feKpis.overdueCount > 1 ? "s" : ""} are overdue — ${fmtAED(feKpis.overdueTotal)} total unpaid.`, action: { label: "View Overdue", page: "futureExpenses" } });
       if (alerts.length === 0) return null;
       const hasCritical = alerts.some(a => a.level === "critical");
@@ -671,7 +680,9 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
           () => xlsxExport("Cash by Account", `nasama-cash-by-account-${todayStr()}.xlsx`,
             [["Account", "Balance (AED)"],
               ...cashAccounts.map(a => [a.name, xAED(accountBalance(a, ledger))]),
-              ["Total Cash", xAED(kpis.cash)]],
+              ["Total Cash", xAED(kpis.cash)],
+              // The export must not disagree with the screen about whose money this is.
+              ...(kpis.clientFundsHeld > 0 ? [["Less: held for clients (2230)", xAED(-kpis.clientFundsHeld)], ["Available to the company", xAED(kpis.availableCash)]] : [])],
             [1]))}
         <div style={{ padding: "8px 18px" }}>
           {cashAccounts.map((a, i) => {
@@ -685,6 +696,18 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
             <span>Total Cash</span>
             <span style={{ color: "#2563EB" }}>{fmtAED(kpis.cash)}</span>
           </div>
+          {/* The account balances above are the real bank balances. When client
+              money sits among them, spell out how much of it is not ours. */}
+          {kpis.clientFundsHeld > 0 && <>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12.5, color: "#B91C1C" }}>
+              <span>Less: held for clients (2230)</span>
+              <span style={{ fontWeight: 700 }}>−{fmtAED(kpis.clientFundsHeld)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0 4px", borderTop: "1px solid #E5E7EB", fontSize: 13.5, fontWeight: 800 }}>
+              <span>Available to the company</span>
+              <span style={{ color: kpis.availableCash >= 0 ? "#059669" : "#DC2626" }}>{fmtAED(kpis.availableCash)}</span>
+            </div>
+          </>}
         </div>
       </div>
     </div>
@@ -6558,6 +6581,26 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     }).catch(err => { console.error('mgr_override_acct_v1', err); mgrAcctRan.current = false; });
   }, [fbLoaded, accounts]);
 
+  // One-time (client_funds_acct_v1): ensure the Client Funds Held liability
+  // account (2230) exists for pre-existing books. SEED_ACCOUNTS only seeds an
+  // EMPTY chart, so live books would otherwise never gain the account and every
+  // client-funds posting would fail. Idempotent; skips if the code is present.
+  // Deliberately NOT flagged isBank/isCash — that would double-count the
+  // commingled dirhams into kpis.cash. See CLIENT FUNDS in core.jsx.
+  const clientFundsAcctRan = useRef(false);
+  useEffect(() => {
+    if (!fbLoaded || clientFundsAcctRan.current) return;
+    if (localStorage.getItem('client_funds_acct_v1')) { clientFundsAcctRan.current = true; return; }
+    if (!Array.isArray(accounts) || accounts.length === 0) return;
+    clientFundsAcctRan.current = true;
+    if (accounts.some(a => a.code === "2230")) { localStorage.setItem('client_funds_acct_v1', '1'); return; }
+    const acct = { id: "a2230", code: "2230", name: "Client Security Deposits Held", type: "Liability", isBank: false, isCash: false, isOutputVAT: false, isInputVAT: false };
+    window.fsBatchWrite([{ col: 'accounts', id: acct.id, data: JSON.parse(JSON.stringify(acct)) }]).then(() => {
+      setAccounts(prev => { const next = prev.some(a => a.code === "2230") ? prev : [...prev, acct]; ls_set('accounts', next); return next; });
+      localStorage.setItem('client_funds_acct_v1', '1');
+    }).catch(err => { console.error('client_funds_acct_v1', err); clientFundsAcctRan.current = false; });
+  }, [fbLoaded, accounts]);
+
   // User presence tracking
   useEffect(() => {
     if (!userEmail || typeof db === 'undefined') return;
@@ -6714,6 +6757,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       case "customers": return <CustomersPage {...shared} />;
       case "brokers": return <BrokersPage {...shared} />;
       case "employees": return <EmployeesPage {...shared} />;
+      case "deposits": return <DepositsPage {...shared} />;
       case "developers": return <DevelopersPage {...shared} />;
       case "vendors": return <VendorsPage {...shared} />;
       case "banking": return <BankingPageV2 {...shared} />;

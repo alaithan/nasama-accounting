@@ -30,6 +30,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       CI: { label: "Capital Injection", desc: "Owner capital contribution" },
       OD: { label: "Owner Drawing", desc: "Profit release / owner withdrawal" },
       AC: { label: "Accrual", desc: "Expense incurred but not yet paid" },
+      CF: { label: "Client Funds", desc: "Money held on behalf of a client — not company revenue" },
     };
 
     // ── ACCRUALS ──────────────────────────────────────
@@ -91,6 +92,127 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     const accrualStatusLabel = (txn, txns) => {
       const st = accrualStatus(txn, txns);
       return st ? ACCRUAL_STATUS[st].label : "";
+    };
+
+    // ── CLIENT FUNDS HELD (2230) ──────────────────────
+    // Money a client pays in that is NOT ours: a deposit owed to a seller, rent
+    // owed to a landlord, a developer payment passing through. The funds are NOT
+    // segregated — they land in the company's own Mashreq account — so the same
+    // dirhams are simultaneously real cash in 1002 and a real liability in 2230.
+    // The pair nets to zero on revenue, profit and equity.
+    //
+    // THE CONSEQUENCE THAT MATTERS: `cash` (every isBank account) therefore counts
+    // money that must be handed to someone else. Anything meaning "cash we may
+    // spend" must read availableCash, never cash — above all the runway. Banking,
+    // Reconcile and the Balance Sheet keep using the full balance, because that is
+    // what the bank statement says.
+    const CLIENT_FUNDS_CODE = "2230";
+    const CLIENT_FUNDS_RECEIVED_TAG = "client-funds-received";
+    const CLIENT_FUNDS_EARNED_TAG   = "client-funds-earned";
+    const CLIENT_FUNDS_PAID_TAG     = "client-funds-paid";
+    // Whole-word tags, same trap as the accrual tags above: all three tags begin
+    // with "client-funds", so a naive substring test cannot tell them apart.
+    const isClientFundsTxn = (t) => !!t && (t.txnType === "CF" || txnTagList(t).some(g =>
+      g === CLIENT_FUNDS_RECEIVED_TAG || g === CLIENT_FUNDS_EARNED_TAG || g === CLIENT_FUNDS_PAID_TAG));
+    /** "received" | "earned" | "paid" — null when this isn't a client-funds txn. */
+    const clientFundsMovement = (t) => {
+      if (!isClientFundsTxn(t)) return null;
+      const tags = txnTagList(t);
+      if (tags.includes(CLIENT_FUNDS_RECEIVED_TAG)) return "received";
+      if (tags.includes(CLIENT_FUNDS_EARNED_TAG))   return "earned";
+      if (tags.includes(CLIENT_FUNDS_PAID_TAG))     return "paid";
+      return null;
+    };
+    /** Total still held for clients — the 2230 balance. 0 when the account is absent. */
+    const clientFundsHeldTotal = (accounts, ledger) => {
+      const a = (accounts || []).find(x => x.code === CLIENT_FUNDS_CODE);
+      return a ? accountBalance(a, ledger) : 0;
+    };
+
+    // THE DEPOSIT LIFECYCLE (owner, 2026-08-13): money comes in as a REFUNDABLE
+    // SECURITY DEPOSIT and is held until the deal closes. At closing it is either
+    // refunded in full, or the commission is deducted from it and the rest
+    // refunded. VAT arises only on the commission, and only at that moment —
+    // which is why the deposit receipt itself carries no VAT: holding a
+    // refundable deposit is not a supply, so there is nothing to tax yet.
+    //
+    // The distinction that makes this correct is that it is genuinely REFUNDABLE
+    // security, not a prepayment against the commission. If it were an advance
+    // payment on account, the tax point would fall on receipt instead.
+    //
+    // The commission deducted comes from the deal's own VAT mode via
+    // dealGrossCents (declared below; only read at call time), so an ON TOP deal
+    // deducts net + 5% while an INCLUSIVE deal deducts the agreed all-in figure
+    // with the VAT already inside it.
+    //
+    // `alreadyCollectedCents` is what the deal has ALREADY collected elsewhere — a
+    // Sale Receipt, a paid invoice. Without it a deal that was already paid for
+    // would have its whole commission recognised a second time out of the deposit.
+    // Reads 0 by default so a caller that has not worked it out keeps the old
+    // behaviour rather than silently under-deducting.
+    const depositCloseoutPlan = (deal, heldCents, alreadyCollectedCents = 0) => {
+      const held = Math.max(0, heldCents || 0);
+      const fullCommission   = deal ? dealGrossCents(deal) : 0;
+      const alreadyCollected = Math.max(0, alreadyCollectedCents || 0);
+      const commissionGross  = Math.max(0, fullCommission - alreadyCollected);
+      const applied   = Math.min(commissionGross, held);
+      const shortfall = Math.max(0, commissionGross - held);   // deposit cannot cover the commission
+      const refundDue = Math.max(0, held - applied);
+      let net = applied, vat = 0;
+      if (deal && deal.vat_applicable && applied > 0) {
+        if (applied === fullCommission) {
+          // The deduction covers the deal's WHOLE commission: take the deal's own
+          // net so an INCLUSIVE deal lands on its agreed all-in cheque to the fils,
+          // and VAT is the remainder. Tested against fullCommission, not
+          // commissionGross — once part has been collected elsewhere the stored net
+          // no longer describes what is being deducted here, and using it would
+          // hand back a net larger than the deduction and so a NEGATIVE VAT.
+          net = deal.expected_commission_net || Math.round(applied / 1.05);
+          vat = applied - net;
+        } else {
+          net = Math.round(applied / 1.05);
+          vat = applied - net;
+        }
+      }
+      return { held, fullCommission, alreadyCollected, commissionGross, applied, net, vat, refundDue, shortfall };
+    };
+
+    /**
+     * Per-deal / per-client deposit subledger: what each party paid in, what was
+     * applied to commission, what was refunded, and what is still held.
+     *
+     * Closed off with a control total against the GL movement on 2230 over the
+     * SAME transactions — including any untagged manual entry touching 2230, which
+     * surfaces as `untracked` rather than silently vanishing from the subledger.
+     * Same discipline as the payroll register: a subledger, not a dashboard.
+     */
+    const buildClientFundsLedger = ({ txns, accounts, from, to } = {}) => {
+      const cfA = (accounts || []).find(a => a.code === CLIENT_FUNDS_CODE);
+      const inRange = t => (!from || (t.date || "") >= from) && (!to || (t.date || "") <= to);
+      const rows = new Map();
+      let received = 0, applied = 0, refunded = 0, glMovement = 0;
+      (txns || []).forEach(t => {
+        if (!cfA || t.isVoid || !inRange(t)) return;
+        // Signed 2230 movement: a credit increases what we hold, a debit releases it.
+        const delta = (t.lines || []).reduce((s, l) =>
+          l.accountId === cfA.id ? s + (l.credit || 0) - (l.debit || 0) : s, 0);
+        if (delta === 0) return;
+        glMovement += delta;
+        const mv = clientFundsMovement(t);
+        if (!mv) return;                                  // untagged → falls into `untracked`
+        const key = t.deal_id || t.customer_id || `party:${t.counterparty || "(unidentified)"}`;
+        if (!rows.has(key)) rows.set(key, { key, deal_id: t.deal_id || "", customer_id: t.customer_id || "",
+          counterparty: t.counterparty || "", received: 0, applied: 0, refunded: 0, held: 0, txns: [] });
+        const r = rows.get(key);
+        if (mv === "received")    { r.received += delta;  received += delta; }
+        else if (mv === "earned") { r.applied  += -delta; applied  += -delta; }
+        else if (mv === "paid")   { r.refunded += -delta; refunded += -delta; }
+        r.held += delta;
+        r.txns.push(t);
+      });
+      const parties = [...rows.values()].sort((a, b) => b.held - a.held);
+      const held = parties.reduce((s, r) => s + r.held, 0);
+      return { parties, received, applied, refunded, held, glMovement, untracked: glMovement - held };
     };
 
     // ── RBAC ──────────────────────────────────────────
@@ -201,6 +323,10 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       deals:          "sales.read",
       auditDeals:     "sales.read",
       receipts:       "sales.read",
+      // Viewing/recording deposits sits with sales (whoever takes the money);
+      // closing out and refunding are gated separately on accounting.create
+      // inside the page, because those move cash and recognise revenue.
+      deposits:       "sales.read",
       invoices:       "sales.read",
       customers:      "sales.read",
       brokers:        "sales.read",
@@ -424,12 +550,23 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         const a = (accounts || []).find(x => x.id === id);
         return !!(a && (a.isBank || a.isCash || a.code === "1001" || a.code === "1002"));
       };
+      const cfAcctId = (accounts || []).find(x => x.code === CLIENT_FUNDS_CODE)?.id;
       let collectedCents = 0; const receipts = [];
       if (dealId) (txns || []).forEach(t => {
         if (t.isVoid) return;
         const linkedToDeal = t.deal_id === dealId || (t.lines || []).some(l => l.deal_id === dealId);
         if (!linkedToDeal) return;
-        const amt = (t.lines || []).reduce((s, l) => s + (isCashAcct(l.accountId) ? (l.debit || 0) : 0), 0);
+        // A deposit is NOT a collection. Receiving one debits the bank, and the
+        // refund that reverses it is a CREDIT this debit-only sum would never
+        // subtract — so a deposit linked to a deal would read as commission
+        // collected, permanently, even after being refunded in full. Only the
+        // moment it becomes ours counts, and that entry (DR 2230 / CR Revenue)
+        // carries no cash line of its own, so take its 2230 debit instead.
+        const mv = clientFundsMovement(t);
+        let amt;
+        if (mv === "earned") amt = cfAcctId ? (t.lines || []).reduce((s, l) => s + (l.accountId === cfAcctId ? (l.debit || 0) : 0), 0) : 0;
+        else if (mv) return;                       // "received" / "paid" — not collection
+        else amt = (t.lines || []).reduce((s, l) => s + (isCashAcct(l.accountId) ? (l.debit || 0) : 0), 0);
         if (amt > 0) { collectedCents += amt; receipts.push({ date: t.date || "", ref: t.ref || "", cents: amt }); }
       });
       receipts.sort((a, b) => String(a.date).localeCompare(String(b.date)));
@@ -804,6 +941,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       { id: "a2105", code: "2105", name: "VAT Rounding Adjustment", type: "Liability", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a2200", code: "2200", name: "Loan Payable", type: "Liability", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a2210", code: "2210", name: "Accrued Expenses Payable", type: "Liability", isBank: false, isOutputVAT: false, isInputVAT: false },
+      { id: "a2230", code: "2230", name: "Client Security Deposits Held", type: "Liability", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a3000", code: "3000", name: "Capital Injection", type: "Equity", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a3002", code: "3002", name: "Retained Earnings", type: "Equity", isBank: false, isOutputVAT: false, isInputVAT: false },
       { id: "a3100", code: "3100", name: "Owner Drawings", type: "Equity", isBank: false, isOutputVAT: false, isInputVAT: false },
@@ -1424,6 +1562,138 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         return txn;
       };
 
+      // ── CLIENT FUNDS (2230) — money that is not ours ──────────────
+      // Model documented in the CLIENT FUNDS block near the top of this file.
+      // Funds are commingled in the company's own bank account, so all three
+      // entries move the 2230 liability. Only postClientFundsEarned touches profit.
+      const aed = c => (c / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+      /** Current 2230 balance in fils (credit-normal: what is still held). */
+      const clientFundsHeldCents = () => {
+        const cfA = byCode(CLIENT_FUNDS_CODE);
+        if (!cfA) return 0;
+        return (txns || []).reduce((sum, t) => t.isVoid ? sum : sum + (t.lines || []).reduce(
+          (s, l) => l.accountId === cfA.id ? s + (l.credit || 0) - (l.debit || 0) : s, 0), 0);
+      };
+
+      // CLIENT FUNDS RECEIVED — DR Bank / CR 2230.
+      // No revenue and no VAT: receiving money on someone else's behalf is not a
+      // supply, so nothing here may touch profit or output VAT.
+      // `purpose` is what the receipt document prints. It defaults to Security
+      // Deposit because that is the dominant case, and because a receipt naming a
+      // REFUNDABLE deposit is what makes charging no VAT on it defensible.
+      const postClientFunds = ({ date, amount, bankCode = "1002", receivedFrom = "", customer_id = "", deal_id = "", purpose = "Security Deposit", memo = "", commit = true }) => {
+        const bankA = byCode(bankCode) || accounts.find(a => a.isBank);
+        if (!bankA) throw new Error(`Bank account not found for code: ${bankCode}`);
+        const cfA = byCode(CLIENT_FUNDS_CODE);
+        if (!cfA) throw new Error(`Missing account ${CLIENT_FUNDS_CODE} — Client Funds Held`);
+        if (!String(receivedFrom || "").trim()) throw new Error("receivedFrom is required — client funds must record whose money this is");
+        const amtC = toCents(amount);
+        if (amtC <= 0) throw new Error("Amount must be positive");
+
+        const lines = [
+          makeLine({ accountId: bankA.id, debit: amtC,  memo: `${purpose} received — ${receivedFrom}`, deal_id: deal_id || undefined }),
+          makeLine({ accountId: cfA.id,   credit: amtC, memo: `Held on behalf of ${receivedFrom}`,     deal_id: deal_id || undefined }),
+        ];
+        validateBalanced(lines);
+        const txn = { id: uid(), date, description: `${purpose} received: ${receivedFrom}${memo ? ` — ${memo}` : ""}`,
+          ref: `CF-${Date.now().toString(36).toUpperCase()}`, counterparty: receivedFrom,
+          tags: CLIENT_FUNDS_RECEIVED_TAG, txnType: "CF", isVoid: false, lines,
+          createdAt: new Date().toISOString(), customer_id: customer_id || "", deal_id: deal_id || "", purpose };
+        if (commit) {
+          saveTxn(txn);
+          if (typeof logAudit === "function") logAudit("postClientFunds", { txId: txn.id, amount: amtC, receivedFrom }, "system", "system").catch(() => {});
+        }
+        return txn;
+      };
+
+      // CLIENT FUNDS → EARNED — the moment part of the held money becomes ours.
+      // DR 2230 / CR Revenue (net) / CR Output VAT. Deliberately NO cash line:
+      // the dirhams are already in the bank, they simply stop being someone
+      // else's. This is the only client-funds entry that recognises revenue.
+      const postClientFundsEarned = ({ date, deal, gross, vatRate = 5, netCents = null, memo = "", commit = true }) => {
+        if (!deal || !deal.id) throw new Error("deal is required to recognise commission revenue");
+        const revenueCodeMap = { "Off-Plan": "4000", Secondary: "4010", Rental: "4020" };
+        if (!revenueCodeMap[deal.type]) throw new Error(`Invalid deal type: ${deal.type}. Must be Off-Plan, Secondary, or Rental`);
+        const cfA  = byCode(CLIENT_FUNDS_CODE);
+        const revA = byCode(revenueCodeMap[deal.type]);
+        const roundingA = byCode("2105") || byCode("5605");
+        if (!cfA)  throw new Error(`Missing account ${CLIENT_FUNDS_CODE} — Client Funds Held`);
+        if (!revA) throw new Error(`Revenue account not found for deal type: ${deal.type}`);
+
+        const grossC = toCents(gross);
+        if (grossC <= 0) throw new Error("Gross amount must be positive");
+        const held = clientFundsHeldCents();
+        if (grossC > held) throw new Error(`Cannot recognise AED ${aed(grossC)} — only AED ${aed(held)} is held for clients`);
+        // The close-out modal has already shown the user a net/VAT split and had it
+        // approved. Honour it rather than re-deriving one, which can differ under
+        // INCLUSIVE terms when a deal's stored net has drifted away from
+        // value × % (the drift commissionMismatch exists to flag).
+        let netC, vatC, roundingAdjustment;
+        if (netCents != null && vatRate > 0) {
+          netC = Math.round(netCents);
+          if (netC < 0 || netC > grossC) throw new Error(`netCents must be between 0 and the gross (got ${netC} against ${grossC})`);
+          vatC = grossC - netC;
+          roundingAdjustment = 0;
+        } else {
+          ({ netC, vatC, roundingAdjustment } = computeVATSplit(grossC, vatRate));
+        }
+
+        const lines = [
+          makeLine({ accountId: cfA.id,  debit: grossC, memo: `Commission earned from client funds — ${deal.property_name || memo}`, deal_id: deal.id, broker_id: deal.broker_id, developer_id: deal.developer }),
+          makeLine({ accountId: revA.id, credit: netC,  memo: `Revenue — ${deal.property_name || memo}`,                              deal_id: deal.id, broker_id: deal.broker_id, developer_id: deal.developer }),
+        ];
+        if (vatC > 0) {
+          if (!outputVAT) throw new Error("Missing Output VAT account");
+          lines.push(makeLine({ accountId: outputVAT.id, credit: vatC, memo: `Output VAT ${vatRate}%`, deal_id: deal.id }));
+        }
+        if (roundingAdjustment !== 0) {
+          if (!roundingA) throw new Error("Missing VAT Rounding Adjustment account");
+          if (roundingAdjustment > 0) lines.push(makeLine({ accountId: roundingA.id, credit: roundingAdjustment, memo: "VAT rounding adjustment", deal_id: deal.id }));
+          else                        lines.push(makeLine({ accountId: roundingA.id, debit: -roundingAdjustment, memo: "VAT rounding adjustment", deal_id: deal.id }));
+        }
+        validateBalanced(lines);
+        const txn = { id: uid(), date, description: `Commission earned from client funds: ${deal.property_name || memo}`,
+          ref: `CFE-${Date.now().toString(36).toUpperCase()}`, counterparty: deal.client_name || "",
+          tags: CLIENT_FUNDS_EARNED_TAG, txnType: "CF", isVoid: false, lines,
+          createdAt: new Date().toISOString(), deal_id: deal.id };
+        if (commit) {
+          saveTxn(txn);
+          if (typeof logAudit === "function") logAudit("postClientFundsEarned", { txId: txn.id, deal_id: deal.id, gross: grossC, net: netC, vat: vatC }, "system", "system").catch(() => {});
+        }
+        return txn;
+      };
+
+      // CLIENT FUNDS PAID OUT — DR 2230 / CR Bank.
+      // Handing the money to whoever it belongs to. This is NOT an expense:
+      // paying out money that was never income is not a cost, it clears a liability.
+      const postClientFundsPayout = ({ date, amount, bankCode = "1002", paidTo = "", customer_id = "", deal_id = "", memo = "", commit = true }) => {
+        const bankA = byCode(bankCode) || accounts.find(a => a.isBank);
+        if (!bankA) throw new Error(`Bank account not found for code: ${bankCode}`);
+        const cfA = byCode(CLIENT_FUNDS_CODE);
+        if (!cfA) throw new Error(`Missing account ${CLIENT_FUNDS_CODE} — Client Funds Held`);
+        if (!String(paidTo || "").trim()) throw new Error("paidTo is required — a payout must record who received the money");
+        const amtC = toCents(amount);
+        if (amtC <= 0) throw new Error("Amount must be positive");
+        const held = clientFundsHeldCents();
+        if (amtC > held) throw new Error(`Cannot pay out AED ${aed(amtC)} — only AED ${aed(held)} is held for clients`);
+
+        const lines = [
+          makeLine({ accountId: cfA.id,   debit: amtC,  memo: `Client funds paid out — ${paidTo}`, deal_id: deal_id || undefined }),
+          makeLine({ accountId: bankA.id, credit: amtC, memo: `Paid to ${paidTo}`,                 deal_id: deal_id || undefined }),
+        ];
+        validateBalanced(lines);
+        const txn = { id: uid(), date, description: `Client funds paid out: ${paidTo}${memo ? ` — ${memo}` : ""}`,
+          ref: `CFP-${Date.now().toString(36).toUpperCase()}`, counterparty: paidTo,
+          tags: CLIENT_FUNDS_PAID_TAG, txnType: "CF", isVoid: false, lines,
+          createdAt: new Date().toISOString(), customer_id: customer_id || "", deal_id: deal_id || "" };
+        if (commit) {
+          saveTxn(txn);
+          if (typeof logAudit === "function") logAudit("postClientFundsPayout", { txId: txn.id, amount: amtC, paidTo }, "system", "system").catch(() => {});
+        }
+        return txn;
+      };
+
       // PAYMENT VOUCHER — Expense paid immediately (no AP step)
       // DR Expense (net) / DR Input VAT / CR Bank (gross)
       const postPayment = ({ date, memo, gross, vatRate = 0, expenseCode, paidFromCode = "1002", counterparty = "", broker_id = "", commit = true }) => {
@@ -1691,7 +1961,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         return { passed: issues.length === 0, issues };
       };
 
-      return { post, postSaleReceipt, postPayment, postAccrual, postAccrualSettlement, postBrokerPayment, postBankTransfer, reverseTransaction, getVATReport, validateDealRevenueReceipt };
+      return { post, postSaleReceipt, postPayment, postAccrual, postAccrualSettlement, postBrokerPayment, postBankTransfer, postClientFunds, postClientFundsEarned, postClientFundsPayout, clientFundsHeldCents, reverseTransaction, getVATReport, validateDealRevenueReceipt };
     }
 
     // ── STYLE HELPERS ─────────────────────────────────
@@ -2188,6 +2458,11 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       const accountById = new Map(accounts.map(a => [a.id, a]));
       const banks = accounts.filter(a => a.isBank || a.code === "1001");
       const cash = banks.reduce((s, a) => s + accountBalance(a, ledger), 0);
+      // Client money is commingled in the company's own bank account, so `cash`
+      // includes dirhams owed to someone else. Every spending decision — runway,
+      // expense coverage — must use availableCash. See the CLIENT FUNDS block.
+      const clientFundsHeld = clientFundsHeldTotal(accounts, ledger);
+      const availableCash = cash - clientFundsHeld;
       const outputVATA = accounts.find(a => a.isOutputVAT);
       const inputVATA  = accounts.find(a => a.isInputVAT);
       const vat = txns
@@ -2274,7 +2549,9 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       const currentMonthPerf  = monthlyPerformance.find(item => item.key === currentMonthKey) || { revenue: 0, expense: 0, net: 0 };
       const currentMonthCash  = cashFlowSeries.find(item => item.key === currentMonthKey)    || { inflow: 0, outflow: 0, net: 0 };
       const avgMonthlyExpense = monthlyPerformance.length > 0 ? monthlyPerformance.reduce((s, item) => s + item.expense, 0) / monthlyPerformance.length : 0;
-      const runwayMonths      = avgMonthlyExpense > 0 ? cash / avgMonthlyExpense : Infinity;
+      // Runway is spendable months, so it divides availableCash — not cash, which
+      // would count client money as company runway.
+      const runwayMonths      = avgMonthlyExpense > 0 ? availableCash / avgMonthlyExpense : Infinity;
       const pendingPipelineCommission = (deals || []).filter(d => d.stage !== "Commission Collected").reduce((s, d) => s + (d.expected_commission_net || 0), 0);
       const pipelineByType = DEAL_TYPES.map(type => {
         const group = (deals || []).filter(d => d.type === type && d.stage !== "Commission Collected");
@@ -2291,7 +2568,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         .sort((a, b) => b.amount - a.amount).slice(0, 5);
 
       return {
-        cash, vat, rev, exp, totalAssets, totalLiabilities, totalEquity, netWorth,
+        cash, clientFundsHeld, availableCash, vat, rev, exp, totalAssets, totalLiabilities, totalEquity, netWorth,
         operatingMargin, grossCommissionCollected, brokerShare, companyNetCommissionRetained,
         monthlyPerformance, cashFlowSeries,
         currentMonth: {
@@ -2309,7 +2586,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     // ── NAV ────────────────────────────────────────────
     const NAV = [
       { s: "OVERVIEW" }, { id: "dashboard", label: "Dashboard", icon: "🏠" }, { id: "banana2", label: "Performance", icon: "📊" },
-      { s: "SALES" }, { id: "deals", label: "Deals / Pipeline", icon: "🤝" }, { id: "auditDeals", label: "Auditing Deals", icon: "📋" }, { id: "receipts", label: "Sale Receipts", icon: "💰" }, { id: "invoices", label: "Invoices", icon: "🧾" }, { id: "customers", label: "Customers", icon: "👥" }, { id: "brokers", label: "Brokers", icon: "👔" }, { id: "developers", label: "Developers", icon: "🏗️" },
+      { s: "SALES" }, { id: "deals", label: "Deals / Pipeline", icon: "🤝" }, { id: "auditDeals", label: "Auditing Deals", icon: "📋" }, { id: "receipts", label: "Sale Receipts", icon: "💰" }, { id: "invoices", label: "Invoices", icon: "🧾" }, { id: "deposits", label: "Client Deposits", icon: "🔒" }, { id: "customers", label: "Customers", icon: "👥" }, { id: "brokers", label: "Brokers", icon: "👔" }, { id: "developers", label: "Developers", icon: "🏗️" },
       // PEOPLE — admin only. `employees` is deliberately absent from PAGE_ACCESS_BRIDGE and
       // from the legacy role map above, so canAccessPage() returns true for admin on its first
       // line and falls through to false for every other role. Do not register it in either map.

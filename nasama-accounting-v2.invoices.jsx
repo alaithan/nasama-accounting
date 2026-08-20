@@ -254,7 +254,10 @@ function invTs() {
 //  ∙ jsPDF consumes that canvas and outputs a proper PDF.
 //  ∙ Both available as CDN UMD bundles, zero build step.
 // ═══════════════════════════════════════════════════════════════════
-async function invExportPDF(elementId, invoiceNumber) {
+// `filename` is optional — omitted, it keeps the original invoice naming, so the
+// single-A4-page logic below can be reused for other documents (deposit receipts)
+// without duplicating it.
+async function invExportPDF(elementId, invoiceNumber, filename) {
   if (!window.html2canvas || !window.jspdf) {
     toast("PDF libraries not loaded. Add the jsPDF + html2canvas CDN scripts to nasama-accounting-v2.html.", "error");
     return false;
@@ -294,7 +297,7 @@ async function invExportPDF(elementId, invoiceNumber) {
     const offsetX = (pageW - drawW) / 2;
     pdf.addImage(img, "PNG", offsetX, 0, drawW, drawH);
 
-    pdf.save(`Nasama_Invoice_${invoiceNumber || "draft"}.pdf`);
+    pdf.save(filename || `Nasama_Invoice_${invoiceNumber || "draft"}.pdf`);
     return true;
   } catch (err) {
     console.error(err);
