@@ -1029,31 +1029,64 @@ function LinkReceiptModal({ invoice, txns, deals, accounts, linked, onLink, onUn
   const linkedTotal = (linked || []).reduce((s, t) => s + srGross(t), 0);
   const remaining = invIncl - linkedTotal;
 
+  // What a bank-imported line is actually *about* lives in its description /
+  // narration / line memos — deal_id and counterparty are usually blank on it.
+  // Everything below (label, search, name match) reads from this one blob so a
+  // collection can never be present-but-invisible.
+  const txnLabel = t => dealName(t.deal_id) || t.counterparty || t.description || t.import_narration || "";
+  const txnText  = t => [t.description, t.import_narration, t.ref, t.counterparty, dealName(t.deal_id),
+                         ...(t.lines || []).map(l => l.memo)].filter(Boolean).join(" ");
+
+  // Words from this invoice worth matching against a bank narration: the party
+  // name and each line's project / unit, minus boilerplate that matches everything.
+  const LINK_NOISE = new Set(["properties", "property", "development", "developments", "developer", "estate", "real",
+    "llc", "l.l.c", "company", "group", "unit", "invoice", "commission", "buyer", "seller", "from", "with", "trading"]);
+  const invTokens = React.useMemo(() => {
+    const raw = [invoice.invoicedTo?.companyName || "",
+      ...(invoice.lineItems || []).map(li => `${li.projectUnit || ""} ${li.specification || ""}`),
+      ...[...invDealIds].map(dealName)].join(" ");
+    return [...new Set(raw.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/)
+      .filter(w => w.length >= 4 && !LINK_NOISE.has(w)))];
+  }, [invoice, deals]);
+
+  // A receipt already stamped with another invoice's id is hidden by default —
+  // but it is still shown on request, because "the collection I want has quietly
+  // vanished from this list" is otherwise undiagnosable from the UI.
+  const [showLinkedElsewhere, setShowLinkedElsewhere] = React.useState(false);
+
   // Candidate = any non-void transaction that received cash into a bank/cash
-  // account, is not yet linked to an invoice, and isn't an internal bank transfer.
-  // This includes both Sale Receipts (SR) and manual Journal Vouchers (JV) used
-  // to book a commission collection. Ranked: same deal, then amount, then recency.
-  const candidates = React.useMemo(() => (txns || [])
-    .filter(t => !t.isVoid && !t.invoice_id && t.txnType !== "BT" && srGross(t) > 0)
+  // account and isn't an internal bank transfer. This includes Sale Receipts (SR),
+  // manual Journal Vouchers (JV) and imported bank lines (BK) where the commission
+  // was banked. Ranked: same deal, then client / project name, then amount, then recency.
+  const allCandidates = React.useMemo(() => (txns || [])
+    .filter(t => !t.isVoid && t.txnType !== "BT" && !(t.invoice_id && t.invoice_id === invoice.id) && srGross(t) > 0)
     .map(t => {
       const g = srGross(t);
       const dealMatch = !!(t.deal_id && invDealIds.has(t.deal_id));
+      const blob = txnText(t).toLowerCase();
+      const nameMatch = !dealMatch && invTokens.some(w => blob.includes(w));
       const amtDiff = Math.abs(g - (remaining > 0.01 ? remaining : invIncl));
       const amtMatch = invIncl > 0 && amtDiff <= Math.max(1, invIncl * 0.01);
-      return { t, g, dealMatch, amtMatch, amtDiff, score: (dealMatch ? 2 : 0) + (amtMatch ? 1 : 0) };
+      const otherInv = t.invoice_id ? (t.invoice_no || "?") : "";
+      return { t, g, dealMatch, nameMatch, amtMatch, amtDiff, otherInv,
+               score: (dealMatch ? 4 : 0) + (nameMatch ? 2 : 0) + (amtMatch ? 1 : 0) };
     })
     .sort((a, b) => b.score - a.score || a.amtDiff - b.amtDiff || (b.t.date || "").localeCompare(a.t.date || "")),
-    [txns, invoice, linkedTotal]);
+    [txns, invoice, linkedTotal, invTokens]);
+
+  const linkedElsewhereCount = allCandidates.filter(c => c.otherInv).length;
+  const candidates = showLinkedElsewhere ? allCandidates : allCandidates.filter(c => !c.otherInv);
 
   const money = n => <span style={{ fontVariantNumeric: "tabular-nums" }}>AED {invFmt(n)}</span>;
 
-  // Free-text filter across the candidate columns (date, receipt ref, deal/property, amount).
+  // Free-text filter over everything the row knows — including the bank narration
+  // and line memos, which are where a client or project name actually appears.
   const [receiptQuery, setReceiptQuery] = React.useState("");
   const shownCandidates = React.useMemo(() => {
     const needle = receiptQuery.trim().toLowerCase();
     if (!needle) return candidates;
     return candidates.filter(({ t, g }) => {
-      const hay = [t.ref, dealName(t.deal_id), t.counterparty, t.date ? fmtDate(t.date) : "", t.date || "", invFmt(g), String(g)]
+      const hay = [txnText(t), t.date ? fmtDate(t.date) : "", t.date || "", invFmt(g), String(g)]
         .filter(Boolean).join(" ").toLowerCase();
       return hay.includes(needle);
     });
@@ -1112,14 +1145,18 @@ function LinkReceiptModal({ invoice, txns, deals, accounts, linked, onLink, onUn
           <div style={{ padding: "10px 14px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, marginBottom: 12, fontSize: 13, color: "#1D4ED8" }}>
             Link an existing collection already in your books — a Sale Receipt (<code>SR-</code>) or a manual Journal Voucher (<code>JV-</code>) where the commission was banked. <strong>No new entry is posted.</strong> You can link several to one invoice (partial / instalments). Best matches first.
           </div>
-          {candidates.length === 0
-            ? <div style={{ padding: 24, textAlign: "center", color: "#9CA3AF", fontSize: 13 }}>No unlinked bank collections available. {onCreateNew && "Use “+ New receipt” below to record a new collection."}</div>
+          {allCandidates.length === 0
+            ? <div style={{ padding: 24, textAlign: "center", color: "#9CA3AF", fontSize: 13 }}>No bank collections available to link. {onCreateNew && "Use “+ New receipt” below to record a new collection."}</div>
             : <>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                <input value={receiptQuery} onChange={e => setReceiptQuery(e.target.value)} placeholder="Filter by date, receipt, deal / property or amount…" style={{ flex: 1, border: "1.5px solid #D0D5DD", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+                <input value={receiptQuery} onChange={e => setReceiptQuery(e.target.value)} placeholder="Search date, reference, bank narration, client / project or amount…" style={{ flex: 1, border: "1.5px solid #D0D5DD", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", boxSizing: "border-box" }} />
                 {receiptQuery && <button onClick={() => setReceiptQuery("")} style={{ ...C.btn("secondary"), padding: "6px 12px", fontSize: 12 }}>Clear</button>}
                 <span style={{ fontSize: 12, color: "#9CA3AF", whiteSpace: "nowrap" }}>{shownCandidates.length} of {candidates.length}</span>
               </div>
+              {linkedElsewhereCount > 0 && <label style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10, fontSize: 12.5, color: "#6B7280", cursor: "pointer" }}>
+                <input type="checkbox" checked={showLinkedElsewhere} onChange={e => setShowLinkedElsewhere(e.target.checked)} style={{ cursor: "pointer" }} />
+                Also show {linkedElsewhereCount} collection{linkedElsewhereCount === 1 ? "" : "s"} already linked to another invoice — tick this if the receipt you are looking for is missing from the list.
+              </label>}
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
                 <colgroup>
                   <col style={{ width: 108 }} />
@@ -1134,19 +1171,33 @@ function LinkReceiptModal({ invoice, txns, deals, accounts, linked, onLink, onUn
                 </tr></thead>
                 <tbody>
                   {shownCandidates.length === 0 && <tr><td colSpan={6} style={{ ...C.td, textAlign: "center", padding: 24, color: "#9CA3AF" }}>No receipts match this filter.</td></tr>}
-                  {shownCandidates.map(({ t, g, dealMatch, amtMatch }) => (
-                    <tr key={t.id}>
+                  {shownCandidates.map(({ t, g, dealMatch, nameMatch, amtMatch, otherInv }) => (
+                    <tr key={t.id} style={otherInv ? { background: "#FFFBEB" } : undefined}>
                       <td style={{ ...C.td, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.date ? fmtDate(t.date) : "—"}</td>
                       <td style={{ ...C.td, fontFamily: "monospace", color: "#6B7280", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={t.ref || ""}>{t.ref || "—"}</td>
-                      <td style={{ ...C.td, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={dealName(t.deal_id) || t.counterparty || ""}>{dealName(t.deal_id) || t.counterparty || <span style={{ color: "#9CA3AF" }}>—</span>}</td>
+                      <td style={{ ...C.td, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={txnText(t)}>{txnLabel(t) || <span style={{ color: "#9CA3AF" }}>—</span>}</td>
                       <td style={{ ...C.td, textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{invFmt(g)}</td>
                       <td style={{ ...C.td, whiteSpace: "nowrap" }}>
                         {dealMatch && <span style={{ ...C.badge("success") }}>deal ✓</span>}
-                        {amtMatch && <span style={{ ...C.badge("info"), marginLeft: dealMatch ? 4 : 0 }}>amt ✓</span>}
-                        {!dealMatch && !amtMatch && <span style={{ color: "#9CA3AF", fontSize: 12 }}>—</span>}
+                        {nameMatch && <span style={{ ...C.badge("success") }}>name ✓</span>}
+                        {amtMatch && <span style={{ ...C.badge("info"), marginLeft: (dealMatch || nameMatch) ? 4 : 0 }}>amt ✓</span>}
+                        {otherInv && <span style={{ ...C.badge("warning"), marginLeft: (dealMatch || nameMatch || amtMatch) ? 4 : 0 }}>Inv #{otherInv}</span>}
+                        {!dealMatch && !nameMatch && !amtMatch && !otherInv && <span style={{ color: "#9CA3AF", fontSize: 12 }}>—</span>}
                       </td>
                       <td style={{ ...C.td, textAlign: "right" }}>
-                        <button style={{ ...C.btn("secondary"), padding: "4px 8px", fontSize: 12, color: "#047857", borderColor: "#A7F3D0", background: "#ECFDF5" }} onClick={() => onLink(t)}>Link</button>
+                        <button
+                          style={{ ...C.btn("secondary"), padding: "4px 8px", fontSize: 12, ...(otherInv
+                            ? { color: "#B45309", borderColor: "#FDE68A", background: "#FFFBEB" }
+                            : { color: "#047857", borderColor: "#A7F3D0", background: "#ECFDF5" }) }}
+                          title={otherInv ? `Currently collected against invoice #${otherInv}` : ""}
+                          onClick={() => {
+                            // Moving a receipt off another invoice un-collects that
+                            // invoice, so never do it silently.
+                            if (otherInv && !confirm(`This collection is currently linked to invoice #${otherInv}.
+
+Move it to invoice #${invoice.invoiceNumber}? Invoice #${otherInv} will show as uncollected again.`)) return;
+                            onLink(t);
+                          }}>{otherInv ? "Move" : "Link"}</button>
                       </td>
                     </tr>
                   ))}
