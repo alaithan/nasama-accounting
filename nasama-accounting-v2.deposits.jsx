@@ -83,7 +83,7 @@ async function depGenReceiptNumber() {
 //  B. DepositReceiptDoc — A4 document handed to the client
 //     Deliberately has NO VAT block and NO tax-invoice wording.
 // ═══════════════════════════════════════════════════════════════════
-function DepositReceiptDoc({ receipt, settings }) {
+function DepositReceiptDoc({ receipt, settings, refund }) {
   const R = receipt || {};
   const GOLDC = "#C9A044", INK = "#0C0F1E";
   const co = {
@@ -119,6 +119,19 @@ function DepositReceiptDoc({ receipt, settings }) {
     foot:    { display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: 34 },
     stampTx: { fontSize: 9, color: "#6B7280", letterSpacing: "0.1em", textTransform: "uppercase" },
     line:    { width: 190, borderTop: "1px solid #9CA3AF", marginTop: 6 },
+    // The PAID stamp: a rubber-stamp look, so a settled receipt is obvious at a glance.
+    paidMark:{ position: "absolute", top: 250, right: 70, padding: "8px 26px", border: "5px double #15803D",
+               borderRadius: 10, color: "#15803D", fontSize: 54, fontWeight: 900, letterSpacing: "0.14em",
+               transform: "rotate(-14deg)", opacity: 0.82, fontFamily: "Arial, Helvetica, sans-serif",
+               textAlign: "center", lineHeight: 1, background: "rgba(255,255,255,0.35)" },
+    paidSub: { display: "block", fontSize: 11, letterSpacing: "0.18em", marginTop: 6, fontWeight: 800 },
+    ackBox:  { marginTop: 22, border: "1.5px solid #15803D", borderRadius: 4, padding: "14px 18px", background: "#F6FBF7" },
+    ackTtl:  { fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: "#15803D" },
+    ackTx:   { fontSize: 11, color: "#374151", lineHeight: 1.6, marginTop: 8 },
+    sigRow:  { display: "flex", gap: 22, marginTop: 26 },
+    sigCell: { flex: 1 },
+    sigLine: { borderTop: "1px solid #6B7280", marginTop: 30 },
+    sigLbl:  { fontSize: 8.5, color: "#6B7280", letterSpacing: "0.1em", textTransform: "uppercase", marginTop: 5 },
     voidMark:{ position: "absolute", top: 300, left: 0, right: 0, textAlign: "center", fontSize: 86,
                fontWeight: 800, color: "rgba(220,38,38,0.14)", letterSpacing: "0.1em", transform: "rotate(-18deg)" },
   };
@@ -134,6 +147,8 @@ function DepositReceiptDoc({ receipt, settings }) {
 
   return <div id="dep-receipt-doc" style={S.page}>
     {R.status === "void" && <div style={S.voidMark}>VOID</div>}
+    {R.status !== "void" && refund && <div style={S.paidMark}>PAID
+      <span style={S.paidSub}>{refund.applied > 0 ? "SETTLED" : "REFUNDED"} {refund.date ? fmtDate(refund.date) : ""}</span></div>}
 
     <div style={S.hdr}>
       <div>
@@ -180,6 +195,26 @@ function DepositReceiptDoc({ receipt, settings }) {
       balance refunded. Where commission is deducted, VAT at 5% applies to that commission and a separate
       <strong> tax invoice</strong> will be issued for it.
     </div>
+
+    {/* Once the deposit is settled, the same voucher doubles as the client's
+        acknowledgement that the money came back — signed on paper. */}
+    {R.status !== "void" && refund && <div style={S.ackBox}>
+      <div style={S.ackTtl}>Refund Acknowledgement — Received by Client</div>
+      <div style={S.ackTx}>
+        I, <strong>{R.receivedFrom || "the client"}</strong>, confirm that I have received back{" "}
+        <strong>{money(refund.amount)}</strong> ({depAmountInWords(refund.amount)})
+        {refund.applied > 0 && <> after deduction of the agreed commission of <strong>{money(refund.applied)}</strong> (incl. VAT)</>}
+        {refund.isTotal && <>, being the total for this {R.propertyLabel && R.propertyLabel !== "—" ? "deal" : "client"}</>}
+        , in full settlement of the security deposit above, paid on{" "}
+        <strong>{refund.date ? fmtDate(refund.date) : "—"}</strong>{refund.from ? <> from {refund.from}</> : null}.
+        I have no further claim against {co.name} in respect of this deposit.
+      </div>
+      <div style={S.sigRow}>
+        {["Client Name", "Client Signature", "Date"].map(k => <div key={k} style={S.sigCell}>
+          <div style={S.sigLine} /><div style={S.sigLbl}>{k}</div>
+        </div>)}
+      </div>
+    </div>}
 
     <div style={S.foot}>
       <div style={{ fontSize: 9, color: "#9CA3AF", maxWidth: 300, lineHeight: 1.5 }}>
@@ -320,6 +355,25 @@ function DepositsPage({ accounts, txns, deals, customers, ledger, journal, persi
       toast(`Receipt ${formatted} issued`, "success");
     } catch (err) { toast("Could not issue receipt: " + err.message, "error"); }
     finally { setBusy(false); }
+  };
+
+  // Settlement details for a receipt: only once nothing is held any more for its
+  // client / deal. A fully refunded deposit acknowledges this receipt's own amount;
+  // a party with several receipts or a commission deducted shows the party total.
+  const refundInfoFor = (rc) => {
+    if (!rc || !rc.txn_id) return null;
+    const party = sub.parties.find(p => (p.txns || []).some(t => t.id === rc.txn_id));
+    if (!party || party.held !== 0 || party.refunded <= 0) return null;
+    const paid = party.txns.filter(t => clientFundsMovement(t) === "paid");
+    const date = paid.reduce((mx, t) => (t.date || "") > mx ? t.date : mx, "");
+    const cfA = acctByCode.get("2230");
+    const from = [...new Set(paid.flatMap(t => (t.lines || [])
+      .filter(l => (l.credit || 0) > 0 && l.accountId !== cfA?.id)
+      .map(l => (accounts || []).find(a => a.id === l.accountId)?.name).filter(Boolean)))].join(", ");
+    const receiptsInParty = party.txns.filter(t => clientFundsMovement(t) === "received").length;
+    // Refunded in full with nothing deducted: every receipt came back whole.
+    if (party.applied === 0) return { amount: rc.amount, applied: 0, date, from, isTotal: false };
+    return { amount: party.refunded, applied: party.applied, date, from, isTotal: receiptsInParty > 1 };
   };
 
   const handleExportPDF = async () => {
@@ -693,7 +747,7 @@ function DepositsPage({ accounts, txns, deals, customers, ledger, journal, persi
         </div>
         <div style={{ ...C.mbdy, overflow: "auto", background: "#F3F4F6", display: "flex", justifyContent: "center", padding: 18 }}>
           <div style={{ boxShadow: "0 2px 18px rgba(0,0,0,0.14)" }}>
-            <DepositReceiptDoc receipt={preview} settings={settings} />
+            <DepositReceiptDoc receipt={preview} settings={settings} refund={refundInfoFor(preview)} />
           </div>
         </div>
         <div style={C.mftr}>
