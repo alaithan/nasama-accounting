@@ -247,6 +247,16 @@ function DepositsPage({ accounts, txns, deals, customers, ledger, journal, persi
   }, [receipts]);
 
   const money = c => fmtAED(c);
+  // Which account(s) a refund leaves from: the ones the deposit actually came
+  // into. Mashreq 1002 only for anything that cannot be traced to an account.
+  const refundLegs = (party, cents) => {
+    const fallback = acctByCode.get("1002") || bankAccts[0];
+    return clientFundsRefundSplit(party, accounts, cents, fallback?.id)
+      .map(l => { const a = (accounts || []).find(x => x.id === l.accountId); return { ...l, code: a?.code, name: a?.name }; })
+      .filter(l => l.code && l.cents > 0);
+  };
+  const legsText = (party, cents) => refundLegs(party, cents)
+    .map(l => `${l.name} (${l.code})${refundLegs(party, cents).length > 1 ? ` — ${money(l.cents)}` : ""}`).join(", ");
   const dealLabel = d => d ? `${d.property_name || "—"}${d.unit_no ? ` · Unit ${d.unit_no}` : ""}` : "";
 
   // ── record a new deposit ──────────────────────────────────────────
@@ -343,12 +353,14 @@ function DepositsPage({ accounts, txns, deals, customers, ledger, journal, persi
       }
       if (plan.refundDue > 0) {
         try {
-          const pay = journal.postClientFundsPayout({
-            date: todayStr(), amount: plan.refundDue / 100, bankCode: "1002",
-            paidTo: closing.counterparty || "Client", deal_id: closing.deal_id,
-            customer_id: closing.customer_id,   // must match the deposit's subledger key
-            commit: false });
-          await persistTxn(pay);
+          for (const leg of refundLegs(closing, plan.refundDue)) {
+            const pay = journal.postClientFundsPayout({
+              date: todayStr(), amount: leg.cents / 100, bankCode: leg.code,
+              paidTo: closing.counterparty || "Client", deal_id: closing.deal_id,
+              customer_id: closing.customer_id,   // must match the deposit's subledger key
+              commit: false });
+            await persistTxn(pay);
+          }
         } catch (payErr) {
           // The two postings are not atomic. Say exactly where it stopped rather
           // than leaving the user to guess whether the commission went through.
@@ -368,12 +380,16 @@ function DepositsPage({ accounts, txns, deals, customers, ledger, journal, persi
     if (!refunding) return;
     setBusy(true);
     try {
-      const pay = journal.postClientFundsPayout({
-        date: todayStr(), amount: refunding.held / 100, bankCode: "1002",
-        paidTo: refunding.counterparty || "Client", deal_id: refunding.deal_id,
-        customer_id: refunding.customer_id,   // must match the deposit's subledger key
-        commit: false });
-      await persistTxn(pay);
+      // One payout per account the deposit sits in — cash goes back out of cash,
+      // bank out of bank — never a blanket 1002.
+      for (const leg of refundLegs(refunding, refunding.held)) {
+        const pay = journal.postClientFundsPayout({
+          date: todayStr(), amount: leg.cents / 100, bankCode: leg.code,
+          paidTo: refunding.counterparty || "Client", deal_id: refunding.deal_id,
+          customer_id: refunding.customer_id,   // must match the deposit's subledger key
+          commit: false });
+        await persistTxn(pay);
+      }
       toast(`Refunded ${money(refunding.held)} in full — no VAT, no revenue`, "success");
       setRefunding(null);
     } catch (err) { toast(err.message, "error"); }
@@ -633,7 +649,7 @@ function DepositsPage({ accounts, txns, deals, customers, ledger, journal, persi
           </div>}
           <div style={{ marginTop: 14, fontSize: 11.5, color: "#9CA3AF", lineHeight: 1.5 }}>
             Posts {plan.applied > 0 ? "two entries" : "one entry"}: {plan.applied > 0 ? "DR 2230 / CR Revenue + Output VAT (no cash line — the money is already in the bank), then " : ""}
-            DR 2230 / CR Bank for the refund. A separate <strong>tax invoice</strong> still has to be issued
+            DR 2230 / CR {plan.refundDue > 0 ? legsText(closing, plan.refundDue) : "Bank"} for the refund. A separate <strong>tax invoice</strong> still has to be issued
             for the commission.
           </div>
         </div>
@@ -656,8 +672,9 @@ function DepositsPage({ accounts, txns, deals, customers, ledger, journal, persi
             Return <strong>{money(refunding.held)}</strong> to <strong>{refunding.counterparty || "the client"}</strong>?
           </p>
           <p style={{ fontSize: 12.5, color: "#6B7280", marginTop: 10 }}>
-            Posts DR 2230 / CR Bank. No commission is recognised and <strong>no VAT arises</strong> — the
-            money was never income.
+            Paid out of <strong>{legsText(refunding, refunding.held)}</strong> — the account the deposit
+            was received into. Posts DR 2230 / CR that account. No commission is recognised and
+            <strong> no VAT arises</strong> — the money was never income.
           </p>
         </div>
         <div style={C.mftr}>

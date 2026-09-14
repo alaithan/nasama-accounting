@@ -215,6 +215,67 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       return { parties, received, applied, refunded, held, glMovement, untracked: glMovement - held };
     };
 
+    /**
+     * WHERE a party's held money physically sits — per bank/cash account, in fils.
+     *
+     * A refund must leave from the account the deposit came into: a deposit taken
+     * in cash (1001) and refunded out of Mashreq (1002) leaves the cash drawer
+     * overstated and the bank understated, even though 2230 nets to zero.
+     *
+     * Receipts add their cash/bank debit to that account; payouts take their
+     * credit back off it. Commission earned has no cash line, so it is drawn from
+     * the accounts in the order the money arrived (first in, first applied).
+     * Any account driven negative (an old refund posted from the wrong account)
+     * is netted against the others, so the result always sums to what is held.
+     *
+     * Returns [{ accountId, cents }] in arrival order, positive amounts only.
+     */
+    const clientFundsHeldByAccount = (party, accounts) => {
+      const cfA = (accounts || []).find(a => a.code === CLIENT_FUNDS_CODE);
+      const isMoney = id => { const a = (accounts || []).find(x => x.id === id); return !!a && a.id !== cfA?.id && (a.isBank || a.isCash || a.code === "1001"); };
+      const buckets = new Map();
+      const take = (cents) => {          // draw from buckets, first in first out
+        for (const [id, v] of buckets) { if (cents <= 0) break; if (v <= 0) continue;
+          const d = Math.min(v, cents); buckets.set(id, v - d); cents -= d; }
+      };
+      [...((party && party.txns) || [])].sort((a, b) => (a.date || "").localeCompare(b.date || "")).forEach(t => {
+        if (t.isVoid) return;
+        const mv = clientFundsMovement(t);
+        const cfDelta = (t.lines || []).reduce((s, l) => cfA && l.accountId === cfA.id ? s + (l.credit || 0) - (l.debit || 0) : s, 0);
+        let moved = 0;
+        (t.lines || []).forEach(l => {
+          if (!isMoney(l.accountId)) return;
+          const d = (l.debit || 0) - (l.credit || 0);
+          buckets.set(l.accountId, (buckets.get(l.accountId) || 0) + d);
+          moved += d;
+        });
+        // Whatever left 2230 without a matching cash line (commission earned).
+        const unmatched = moved - cfDelta;
+        if (mv !== "received" && unmatched > 0) take(unmatched);
+      });
+      // Net any negative account against the positive ones.
+      for (const [id, v] of buckets) if (v < 0) { buckets.set(id, 0); take(-v); }
+      return [...buckets].filter(([, v]) => v > 0).map(([accountId, cents]) => ({ accountId, cents }));
+    };
+
+    /**
+     * Split a refund across the accounts the money sits in. Drawn from the most
+     * recently funded account first, so any part NOT refunded (commission kept at
+     * close-out) stays on the earliest money — the same first-in order
+     * clientFundsHeldByAccount uses to read a later close-out back.
+     * Falls back to `fallbackAccountId` for anything it cannot place.
+     */
+    const clientFundsRefundSplit = (party, accounts, refundCents, fallbackAccountId) => {
+      const out = new Map();
+      let left = Math.max(0, Math.round(refundCents || 0));
+      [...clientFundsHeldByAccount(party, accounts)].reverse().forEach(({ accountId, cents }) => {
+        if (left <= 0) return;
+        const d = Math.min(cents, left); out.set(accountId, d); left -= d;
+      });
+      if (left > 0 && fallbackAccountId) out.set(fallbackAccountId, (out.get(fallbackAccountId) || 0) + left);
+      return [...out].map(([accountId, cents]) => ({ accountId, cents }));
+    };
+
     // ── RBAC ──────────────────────────────────────────
     const USER_ROLES = { ADMIN: 'admin', ACCOUNTANT: 'accountant', SECRETARY: 'secretary', SALES: 'sales' };
     const AUTH_SESSION_KEY = "auth_session";

@@ -41,6 +41,7 @@ const CORE = new Function(...NAMES, code + `
   ; return { createJournalEngine, calculateAppKpis, accountBalance, buildLedger, toCents,
              clientFundsHeldTotal, isClientFundsTxn, clientFundsMovement,
              depositCloseoutPlan, buildClientFundsLedger, dealGrossCents, dealCollection,
+             clientFundsHeldByAccount, clientFundsRefundSplit,
              TXN_TYPES, SEED_ACCOUNTS, CLIENT_FUNDS_CODE };`)
   .apply(null, NAMES.map(n =>
     n === "React"   ? { createElement: () => null, Fragment: "F", useState: () => [], useEffect: () => {}, useMemo: () => {}, useCallback: () => {}, useRef: () => ({}) }
@@ -448,6 +449,57 @@ throws(() => J5.postClientFundsEarned({ date: "2026-08-14", deal: DRIFTED, gross
   "netCents must be between", "a net larger than the gross is refused");
 throws(() => J5.postClientFundsEarned({ date: "2026-08-14", deal: DRIFTED, gross: 121000, vatRate: 5, netCents: -1, commit: false }),
   "netCents must be between", "a negative net is refused");
+
+// ── 13. A refund leaves from the account the deposit came into ──────────────
+// Owner, 2026-09-14: a deposit received into cash (1001) was refunded out of
+// Mashreq (1002) because the payout hardcoded 1002 — cash stayed overstated,
+// the bank understated, while 2230 still netted to zero and hid it.
+console.log("refunds go back out of the receiving account");
+{
+const cfParty = (txns) => CORE.buildClientFundsLedger({ txns, accounts: ACCOUNTS }).parties[0];
+const JC = engineOver([]);
+const IN_CASH = { ...JC.postClientFunds({ date: "2026-08-11", amount: 35000, bankCode: "1001", receivedFrom: "Neeraj", commit: false }), id: "rc1" };
+const IN_BANK = { ...JC.postClientFunds({ date: "2026-08-12", amount: 28000, bankCode: "1002", receivedFrom: "Neeraj", commit: false }), id: "rb1" };
+
+const cashOnly = CORE.clientFundsHeldByAccount(cfParty([IN_CASH]), ACCOUNTS);
+eq(cashOnly.length, 1, "a cash deposit sits in one account");
+eq(cashOnly[0].accountId, "aCash", "and that account is Cash 1001, not the bank");
+const cashSplit = CORE.clientFundsRefundSplit(cfParty([IN_CASH]), ACCOUNTS, 3500000, "aBank");
+eq(cashSplit.length, 1, "refunding it in full is one leg");
+eq(cashSplit[0].accountId, "aCash", "paid out of Cash 1001");
+eq(cashSplit[0].cents, 3500000, "for the whole 35,000");
+const cashPay = engineOver([IN_CASH]).postClientFundsPayout({ date: "2026-09-14", amount: 35000, bankCode: "1001", paidTo: "Neeraj", commit: false });
+eq(balOf("1001", [IN_CASH, cashPay]), 0, "cash returns to where it started after the refund");
+eq(balOf("1002", [IN_CASH, cashPay]), 0, "and the bank is never touched");
+
+const mixed = CORE.clientFundsRefundSplit(cfParty([IN_CASH, IN_BANK]), ACCOUNTS, 6300000, "aBank");
+eq(mixed.length, 2, "a client who paid part cash, part bank is refunded from both");
+eq(mixed.find(l => l.accountId === "aCash").cents, 3500000, "35,000 back out of cash");
+eq(mixed.find(l => l.accountId === "aBank").cents, 2800000, "28,000 back out of the bank");
+
+// A partial refund (close-out) comes off the most recent money first, so the
+// commission kept stays on the earliest — the order the reader assumes later.
+const partial = CORE.clientFundsRefundSplit(cfParty([IN_CASH, IN_BANK]), ACCOUNTS, 2000000, "aBank");
+eq(partial.length, 1, "a 20,000 refund fits in one account");
+eq(partial[0].accountId, "aBank", "and is drawn from the most recently funded one");
+
+// Commission earned has no cash line; it is read as taken from the earliest money.
+const EARN13 = { ...engineOver([IN_CASH, IN_BANK]).postClientFundsEarned({ date: "2026-09-01", deal: DEAL, gross: 10000, vatRate: 0, commit: false }),
+  customer_id: "", deal_id: "", counterparty: "Neeraj" };
+const afterEarn = CORE.clientFundsHeldByAccount({ txns: [IN_CASH, IN_BANK, EARN13] }, ACCOUNTS);
+eq(afterEarn.find(l => l.accountId === "aCash").cents, 2500000, "10,000 commission reduces the cash held first");
+eq(afterEarn.find(l => l.accountId === "aBank").cents, 2800000, "the bank portion is untouched");
+eq(afterEarn.reduce((s, l) => s + l.cents, 0), 5300000, "and the accounts still sum to what is held");
+
+// The mis-posting that prompted this: cash in, refunded from the bank.
+const WRONG = { ...engineOver([IN_CASH]).postClientFundsPayout({ date: "2026-09-14", amount: 35000, bankCode: "1002", paidTo: "Neeraj", commit: false }), id: "wp" };
+eq(CORE.clientFundsHeldByAccount({ txns: [IN_CASH, WRONG] }, ACCOUNTS).length, 0,
+  "a wrongly-sourced refund nets out — nothing is shown as still held");
+
+// Nothing traceable → fall back rather than drop the refund.
+const fb = CORE.clientFundsRefundSplit({ txns: [] }, ACCOUNTS, 50000, "aBank");
+eq(fb.length === 1 && fb[0].accountId === "aBank" && fb[0].cents === 50000, true, "untraceable money falls back to the given account");
+}
 
 // ── done ────────────────────────────────────────────────────────────────────
 console.log(`\n${passed} passed, ${failed} failed`);

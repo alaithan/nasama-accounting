@@ -22,7 +22,7 @@ const code = babel.transform(fs.readFileSync(path.join(ROOT, "nasama-accounting-
 // Component bodies never run, so the globals they close over only need names.
 const NAMES = ["React", "useState", "useEffect", "useMemo", "db", "firebase", "C", "NAVY", "toast",
   "fmtAED", "fmtDate", "todayStr", "toCents", "hasPermission", "PageHeader", "Inp", "Sel",
-  "buildClientFundsLedger", "clientFundsHeldTotal", "clientFundsMovement", "depositCloseoutPlan",
+  "buildClientFundsLedger", "clientFundsHeldTotal", "clientFundsMovement", "depositCloseoutPlan", "clientFundsRefundSplit",
   "dealCollection",
   "isVatInclusive", "invExportPDF", "NASAMA_STAMP_SRC"];
 const DEP = new Function(...NAMES, code + `
