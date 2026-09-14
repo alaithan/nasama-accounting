@@ -206,7 +206,7 @@ function DepositReceiptDoc({ receipt, settings, refund }) {
         {refund.applied > 0 && <> after deduction of the agreed commission of <strong>{money(refund.applied)}</strong> (incl. VAT)</>}
         {refund.isTotal && <>, being the total for this {R.propertyLabel && R.propertyLabel !== "—" ? "deal" : "client"}</>}
         , in full settlement of the security deposit above, paid on{" "}
-        <strong>{refund.date ? fmtDate(refund.date) : "—"}</strong>{refund.from ? <> from {refund.from}</> : null}.
+        <strong>{refund.date ? fmtDate(refund.date) : "—"}</strong>.
         I have no further claim against {co.name} in respect of this deposit.
       </div>
       <div style={S.sigRow}>
@@ -366,14 +366,11 @@ function DepositsPage({ accounts, txns, deals, customers, ledger, journal, persi
     if (!party || party.held !== 0 || party.refunded <= 0) return null;
     const paid = party.txns.filter(t => clientFundsMovement(t) === "paid");
     const date = paid.reduce((mx, t) => (t.date || "") > mx ? t.date : mx, "");
-    const cfA = acctByCode.get("2230");
-    const from = [...new Set(paid.flatMap(t => (t.lines || [])
-      .filter(l => (l.credit || 0) > 0 && l.accountId !== cfA?.id)
-      .map(l => (accounts || []).find(a => a.id === l.accountId)?.name).filter(Boolean)))].join(", ");
     const receiptsInParty = party.txns.filter(t => clientFundsMovement(t) === "received").length;
     // Refunded in full with nothing deducted: every receipt came back whole.
-    if (party.applied === 0) return { amount: rc.amount, applied: 0, date, from, isTotal: false };
-    return { amount: party.refunded, applied: party.applied, date, from, isTotal: receiptsInParty > 1 };
+    // Refunded in full with nothing deducted: every receipt came back whole.
+    if (party.applied === 0) return { amount: rc.amount, applied: 0, date, isTotal: false };
+    return { amount: party.refunded, applied: party.applied, date, isTotal: receiptsInParty > 1 };
   };
 
   const handleExportPDF = async () => {
