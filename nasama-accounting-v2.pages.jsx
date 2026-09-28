@@ -447,6 +447,14 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     const cnt = dealsOverdueInstallments.reduce((s, x) => s + x.inst.overdueCount, 0);
     mgmtAlerts.push({ level: tot > 100000 ? "critical" : "warning", title: `${cnt} installment${cnt !== 1 ? "s" : ""} overdue across ${dealsOverdueInstallments.length} deal${dealsOverdueInstallments.length !== 1 ? "s" : ""}`, detail: `${fmtAED(tot)} in scheduled commission payments is past its due date and not yet collected. Follow up to keep collections on plan.`, deals: dealsOverdueInstallments.map(x => x.deal), action: { label: "View Deals", page: "deals" } });
   }
+  // Rental renewals: tenancy contracts expiring within the reminder window
+  // that still need a reminder or a renewal decision.
+  const dealsRenewalDue = (deals || []).map(d => { const ri = renewalInfo(d); return ri && ri.inWindow ? { deal: d, ri } : null; }).filter(Boolean).sort((a, b) => a.ri.daysLeft - b.ri.daysLeft);
+  if (dealsRenewalDue.length > 0) {
+    const tot = dealsRenewalDue.reduce((s, x) => s + (x.deal.expected_commission_net || 0), 0);
+    const expiredCount = dealsRenewalDue.filter(x => x.ri.tier === "expired").length;
+    mgmtAlerts.push({ level: expiredCount > 0 ? "critical" : "warning", title: `${dealsRenewalDue.length} rental tenanc${dealsRenewalDue.length === 1 ? "y" : "ies"} due for renewal within ${RENEWAL_WINDOW_DAYS} days${expiredCount ? ` — ${expiredCount} already expired` : ""}`, detail: `${fmtAED(tot)} in renewal commission is at stake. Send each client a renewal reminder from the Deals page (Renewals view) and record the outcome.`, deals: dealsRenewalDue.map(x => x.deal), action: { label: "View Renewals", page: "deals", presetFilter: "Renewals" } });
+  }
   const AGING_BUCKETS = [
     { label: "0–30 days",  min: 0,  max: 30,       color: "#059669", bg: "#ECFDF5" },
     { label: "31–60 days", min: 31, max: 60,       color: "#2563EB", bg: "#EFF6FF" },
@@ -559,7 +567,7 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
                 <div style={{ fontWeight: 700, fontSize: 13, color: alert.level === "critical" ? "#991B1B" : "#92400E" }}>{alert.title}{hasDeals && <span style={{ marginLeft: 8, fontSize: 11, color: "#9CA3AF", fontWeight: 600 }}>{expanded ? "▲ hide" : "▼ show deals"}</span>}</div>
                 <div style={{ fontSize: 12, color: "#6B7280", marginTop: 3, lineHeight: 1.5 }}>{alert.detail}</div>
               </div>
-              {alert.action && <button onClick={() => setPage(alert.action.page)} style={{ flexShrink: 0, fontSize: 11, padding: "5px 12px", borderRadius: 6, border: "1px solid #E5E7EB", background: "white", color: NAVY, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>{alert.action.label}</button>}
+              {alert.action && <button onClick={() => { if (alert.action.presetFilter) ls_set("deals_filter", alert.action.presetFilter); setPage(alert.action.page); }} style={{ flexShrink: 0, fontSize: 11, padding: "5px 12px", borderRadius: 6, border: "1px solid #E5E7EB", background: "white", color: NAVY, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>{alert.action.label}</button>}
             </div>
             {expanded && hasDeals && <div style={{ marginTop: 10, marginLeft: 28, border: "1px solid #F3F4F6", borderRadius: 6, overflow: "hidden" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
@@ -1138,7 +1146,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
     }, err => console.error("Invoice listener error:", err));
     return () => unsub();
   }, []);
-  const empty = { type: "Off-Plan", stage: "Lead", property_name: "", developer: "", developer_id: "", broker_id: "", broker_name: "", customer_id: "", client_name: "", transaction_value: 0, commission_pct: "", expected_commission_net: 0, vat_applicable: true, commission_vat_inclusive: false, unit_no: "", notes: "", created_at: todayStr() };
+  const empty = { type: "Off-Plan", stage: "Lead", property_name: "", developer: "", developer_id: "", broker_id: "", broker_name: "", customer_id: "", client_name: "", transaction_value: 0, commission_pct: "", expected_commission_net: 0, vat_applicable: true, commission_vat_inclusive: false, unit_no: "", notes: "", created_at: todayStr(), tenancy_start: "", tenancy_end: "" };
   const pipelineSeedDeals = window.PASTED_DEALS || [];
   const dealWriteState = writeMeta?.deals || { status: "idle" };
   const missingPipelineDeals = useMemo(() => findMissingPipelineDeals(deals, pipelineSeedDeals), [deals, pipelineSeedDeals]);
@@ -1200,6 +1208,69 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
       (deal.client_name || "") !== (normalized.client_name || "");
     return count + (changed ? 1 : 0);
   }, 0), [deals, normalizedDeals]);
+
+  // ── Rental renewals ────────────────────────────────────────────────────────
+  // Radar rows: rentals whose tenancy_end falls inside the reminder window and
+  // that are not yet resolved or snoozed. Sorted most-urgent first.
+  const renewalRows = useMemo(() => (normalizedDeals || [])
+    .map(d => { const ri = renewalInfo(d); return ri && ri.inWindow ? { deal: d, ri } : null; })
+    .filter(Boolean)
+    .sort((a, b) => a.ri.daysLeft - b.ri.daysLeft), [normalizedDeals]);
+  const renewalById = useMemo(() => new Map(renewalRows.map(x => [x.deal.id, x.ri])), [renewalRows]);
+  // Backfill nudge: a rental with no tenancy_end can never appear on the radar.
+  const rentalsMissingDates = useMemo(() => (normalizedDeals || []).filter(d => d.type === "Rental" && d.stage !== "Cancelled" && !d.tenancy_end), [normalizedDeals]);
+  // Approval modal — the email is only ever a pre-filled draft the user reviews;
+  // "send" happens in their own mail client, never from the app.
+  const [renew, setRenew] = useState(null); // { deal, to, subject, body, snoozeUntil, createNext }
+  const openRenewal = (deal) => {
+    const client = (customers || []).find(c => c.id === deal.customer_id);
+    const em = renewalReminderEmail(deal, client, settings);
+    setRenew({ deal, to: em.to, subject: em.subject, body: em.body, snoozeUntil: isoAddDays(todayStr(), 14), createNext: true });
+  };
+  const patchRenewalDeal = (deal, patch, auditAction, toastMsg) => {
+    setDealMutationLabel("Deal renewal update");
+    setDeals(prev => prev.map(x => x.id === deal.id ? { ...x, ...patch } : x));
+    // Keep the audit doc lean (and undefined-free for Firestore): log the
+    // reminder count, not the full reminder array.
+    const { renewal_reminders, ...auditPatch } = patch;
+    logAudit(auditAction, { dealId: deal.id, ...auditPatch, ...(renewal_reminders ? { reminderCount: renewal_reminders.length } : {}) }, userRole, userEmail);
+    toast(toastMsg, "success");
+    setRenew(null);
+  };
+  const handleReminderApproved = (openMailApp) => {
+    if (!renew) return;
+    const em = { to: renew.to, subject: renew.subject, body: renew.body };
+    if (openMailApp) window.location.href = mailtoHref(em);
+    const entry = { date: todayStr(), to: renew.to || "", subject: renew.subject || "", by: userEmail || "" };
+    patchRenewalDeal(renew.deal, {
+      renewal_status: "reminder_sent",
+      renewal_reminders: [...(renew.deal.renewal_reminders || []), entry],
+    }, "renewal_reminder_sent", openMailApp ? "Email draft opened — review it and press Send in your email app" : "Reminder marked as sent");
+  };
+  const handleMarkRenewed = () => {
+    if (!renew) return;
+    const old = renew.deal;
+    if (renew.createNext) {
+      // Renewal = a fresh commission opportunity: clone the deal into the next
+      // tenancy year, linked both ways, with collection state reset.
+      const start = old.tenancy_end ? isoAddDays(old.tenancy_end, 1) : todayStr();
+      const nd = {
+        ...old, id: uid(), created_at: todayStr(), stage: "Lead",
+        tenancy_start: start, tenancy_end: defaultTenancyEnd(start),
+        renewal_status: "", renewal_snooze_until: "", renewal_reminders: [],
+        renewed_from_deal_id: old.id, renewed_to_deal_id: "",
+        installment_schedule: [], broker_paid_amount: 0,
+      };
+      setDealMutationLabel("Deal renewal");
+      setDeals(prev => [...prev.map(x => x.id === old.id ? { ...x, renewal_status: "renewed", renewed_to_deal_id: nd.id } : x), nd]);
+      logDealStageChange(nd, null, nd.stage, userRole, userEmail);
+      logAudit("deal_renewed", { dealId: old.id, newDealId: nd.id, tenancy_start: nd.tenancy_start, tenancy_end: nd.tenancy_end }, userRole, userEmail);
+      toast(`Renewal deal created — tenancy ${fmtDate(nd.tenancy_start)} to ${fmtDate(nd.tenancy_end)}`, "success");
+      setRenew(null);
+    } else {
+      patchRenewalDeal(old, { renewal_status: "renewed" }, "deal_renewed", "Deal marked as renewed");
+    }
+  };
 
   const save = (d) => {
     const normalized = normalizeLinkedDealRefs(d);
@@ -1311,7 +1382,9 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
     return [...ys].sort();
   }, [normalizedDeals]);
   const yearFiltered = dealYear === "all" ? normalizedDeals : normalizedDeals.filter(d => dealYearOf(d) === dealYear);
-  const filtered = filter === "All" ? yearFiltered : yearFiltered.filter(d => d.type === filter || d.stage === filter);
+  // "Renewals" ignores the year filter on purpose: an old rental expiring soon
+  // must surface no matter which period is selected.
+  const filtered = filter === "Renewals" ? renewalRows.map(x => x.deal) : filter === "All" ? yearFiltered : yearFiltered.filter(d => d.type === filter || d.stage === filter);
   // Label + filename reflect both the period and the active type/stage filter, since
   // the CEO report exports exactly the currently-filtered set.
   const reportPeriodLabel = `${dealYear === "all" ? "All periods" : dealYear}${filter !== "All" ? " · " + filter : ""}`;
@@ -1329,13 +1402,16 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
         default: return "";
       }
     };
+    // The Renewals view keeps its own most-urgent-first order (soonest
+    // tenancy_end at the top) regardless of the column sort.
+    if (filter === "Renewals") return filtered;
     return [...filtered].sort((a, b) => {
       const av = getSortValue(a, sortKey);
       const bv = getSortValue(b, sortKey);
       if (typeof av === "number" && typeof bv === "number") return sortDir === "asc" ? av - bv : bv - av;
       return sortDir === "asc" ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
     });
-  }, [filtered, sortKey, sortDir]);
+  }, [filtered, sortKey, sortDir, filter]);
   const sortLabel = key => sortKey === key ? (sortDir === "asc" ? " ▲" : " ▼") : " ↕";
   const SortTh = ({ sortBy, align = "left", children }) => <th style={{ ...C.th, textAlign: align }}>
     <button onClick={() => toggleSort(sortBy)} style={{ background: "none", border: "none", padding: 0, margin: 0, font: "inherit", color: "inherit", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, textTransform: "inherit", letterSpacing: "inherit" }}>
@@ -1361,6 +1437,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
     <PageHeader title="Deals / Pipeline" sub={`${deals.length} deals total${duplicateDealCount ? ` • ${duplicateDealCount} suspected duplicates` : ""}`}>
       <Sel value={filter} onChange={e => setFilter(e.target.value)}>
         <option value="All">All Deals</option>
+        <option value="Renewals">🔔 Renewals due</option>
         {DEAL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
         {DEAL_STAGES.map(s => <option key={s} value={s}>{s}</option>)}
       </Sel>
@@ -1391,6 +1468,9 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
         const active = filter === t;
         return <button key={t} onClick={() => setFilter(t)} style={{ ...C.btn(active ? "primary" : "secondary", true), fontSize: 13, padding: "7px 16px" }}>{t === "All" ? "All Deals" : t}</button>;
       })}
+      <button onClick={() => setFilter("Renewals")} style={{ ...C.btn(filter === "Renewals" ? "primary" : "secondary", true), fontSize: 13, padding: "7px 16px" }} title={`Rental tenancies expiring within ${RENEWAL_WINDOW_DAYS} days that still need a renewal decision`}>
+        🔔 Renewals{renewalRows.length > 0 && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, background: filter === "Renewals" ? "rgba(255,255,255,.25)" : "#FEF2F2", color: filter === "Renewals" ? "#fff" : "#DC2626", borderRadius: 999, padding: "1px 7px" }}>{renewalRows.length}</span>}
+      </button>
     </div>
 
     {/* Confidential deals report — preview + PDF download (no client names/contacts) */}
@@ -1437,6 +1517,10 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
       Firestore currently contains {duplicateDealCount} suspected duplicate deal records across {duplicateGroups.length} duplicate group{duplicateGroups.length === 1 ? "" : "s"}. This usually happens when old seed deals were written into the database. Projected post-dedup counts: {formatDealCounts(dedupePreview.counts)}. Target counts: {formatDealCounts(TARGET_DEAL_COUNTS)}. New deleted deals should no longer come back after the sync fix.
     </div>}
 
+    {rentalsMissingDates.length > 0 && <div style={{ ...C.card, padding: "12px 16px", marginBottom: 14, borderLeft: "4px solid #D97706", background: "#FFFBEB", color: "#92400E", fontSize: 13 }}>
+      🔔 {rentalsMissingDates.length} rental deal{rentalsMissingDates.length === 1 ? " has" : "s have"} no Tenancy End date, so renewal reminders cannot be tracked for {rentalsMissingDates.length === 1 ? "it" : "them"}. Open each one and fill in Tenancy Start / End: {rentalsMissingDates.slice(0, 4).map(d => [d.property_name, d.unit_no].filter(Boolean).join(" ")).join(", ")}{rentalsMissingDates.length > 4 ? "…" : ""}.
+    </div>}
+
     <div style={{ ...C.card, overflowX: "auto", overflowY: "visible" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
         <thead><tr>
@@ -1446,12 +1530,24 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
           <th style={C.th}>Actions</th>
         </tr></thead>
         <tbody>
-          {filtered.length === 0 && <tr><td colSpan={9} style={{ ...C.td, textAlign: "center", padding: 40, color: "#9CA3AF" }}>No deals found. Click "+ New Deal" to create one.</td></tr>}
+          {filtered.length === 0 && <tr><td colSpan={9} style={{ ...C.td, textAlign: "center", padding: 40, color: "#9CA3AF" }}>{filter === "Renewals" ? `No rental renewals due — nothing expires within ${RENEWAL_WINDOW_DAYS} days that hasn't been handled.` : "No deals found. Click \"+ New Deal\" to create one."}</td></tr>}
           {sortedDeals.map(d => <tr key={d.id} style={{ cursor: hasPermission(userRole, 'sales.edit') ? "pointer" : "default" }} onClick={() => { if (hasPermission(userRole, 'sales.edit')) { setEdit(d); setShow(true); } }}>
             <td style={C.td}>{d.created_at ? fmtDate(d.created_at) : "--"}</td>
             <td style={C.td}><div style={{ fontWeight: 500 }}>{d.property_name || "—"}</div><div style={{ fontSize: 11, color: "#9CA3AF" }}>{d.unit_no && `Unit ${d.unit_no}`}</div></td>
             <td style={C.td}><span style={C.badge(d.type === "Off-Plan" ? "info" : d.type === "Secondary" ? "gold" : "success")}>{d.type}</span></td>
-            <td style={C.td}><span style={C.badge(d.stage?.includes("Collected") ? "success" : d.stage?.includes("Earned") ? "gold" : "neutral")}>{d.stage}</span></td>
+            <td style={C.td}>
+              <span style={C.badge(d.stage?.includes("Collected") ? "success" : d.stage?.includes("Earned") ? "gold" : "neutral")}>{d.stage}</span>
+              {(() => {
+                const ri = renewalById.get(d.id);
+                if (ri) {
+                  const ts = RENEWAL_TIER_STYLE[ri.tier] || RENEWAL_TIER_STYLE.later;
+                  return <div style={{ marginTop: 4 }}><span style={{ fontSize: 10, fontWeight: 700, color: ts.color, background: ts.bg, border: `1px solid ${ts.bd}`, borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>🔔 {ri.daysLeft < 0 ? `expired ${-ri.daysLeft}d ago` : `renews in ${ri.daysLeft}d`}{ri.status === "reminder_sent" ? " · ✉ reminded" : ""}</span></div>;
+                }
+                if (d.type === "Rental" && d.renewal_status === "renewed") return <div style={{ marginTop: 4 }}><span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>↻ Renewed</span></div>;
+                if (d.type === "Rental" && d.renewal_status === "not_renewed") return <div style={{ marginTop: 4 }}><span style={{ fontSize: 10, fontWeight: 700, color: "#6B7280", background: "#F3F4F6", border: "1px solid #E5E7EB", borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>Not renewed</span></div>;
+                return null;
+              })()}
+            </td>
             <td style={C.td}>{d.client_name || "—"}</td>
             <td style={C.td}>{d.broker_name || "—"}</td>
             <td style={{ ...C.td, textAlign: "right" }}>{d.transaction_value ? fmtAED(d.transaction_value) : "--"}</td>
@@ -1462,6 +1558,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
             <td style={C.td}>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button style={C.btn("secondary", true)} onClick={e => { e.stopPropagation(); setCardDeal(d); }} title="Open the full deal dossier">📋 Card</button>
+                {hasPermission(userRole, 'sales.edit') && renewalById.has(d.id) && <button style={{ ...C.btn("secondary", true), borderColor: "#DC2626", color: "#DC2626" }} onClick={e => { e.stopPropagation(); openRenewal(d); }} title="Send a renewal reminder or record the renewal outcome">🔔 Renewal</button>}
                 {hasPermission(userRole, 'sales.create') && (() => {
                   const isDone = d.stage === "Commission Collected" || d.stage === "Cancelled";
                   if (isDone) return null;
@@ -1511,6 +1608,67 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
         <DealForm initial={normalizeLinkedDealRefs(edit || empty)} onSave={save} onCancel={() => setShow(false)} customers={customers} brokers={brokers} developers={developers} invoices={dealInvoices} txns={txns} accounts={accounts} />
       </div>
     </div>}
+
+    {/* Renewal Modal — reminder needs explicit approval; the email is a draft
+        opened in the user's own mail client, the app never sends anything. */}
+    {renew && (() => {
+      const d = renew.deal;
+      const ri = renewalInfo(d) || { daysLeft: 0, tier: "later", status: "" };
+      const ts = RENEWAL_TIER_STYLE[ri.tier] || RENEWAL_TIER_STYLE.later;
+      const reminders = d.renewal_reminders || [];
+      const secHdr = (t) => <div style={{ fontSize: 11, fontWeight: 700, color: NAVY, letterSpacing: "0.04em", textTransform: "uppercase", margin: "16px 0 8px" }}>{t}</div>;
+      return <div style={C.modal} onClick={() => setRenew(null)}>
+        <div style={C.mbox(680)} onClick={e => e.stopPropagation()}>
+          <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>🔔 Tenancy Renewal</span><button onClick={() => setRenew(null)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
+          <div style={C.mbdy}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap", padding: "10px 12px", background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8 }}>
+              <div>
+                <div style={{ fontWeight: 700, color: NAVY }}>{d.property_name || "—"}{d.unit_no ? <span style={{ color: "#9CA3AF", fontWeight: 500 }}> · Unit {d.unit_no}</span> : null}</div>
+                <div style={{ fontSize: 12, color: "#6B7280", marginTop: 3 }}>{d.client_name || "No linked client"} · Tenancy {d.tenancy_start ? fmtDate(d.tenancy_start) : "—"} → <strong>{d.tenancy_end ? fmtDate(d.tenancy_end) : "—"}</strong></div>
+                <div style={{ fontSize: 12, color: "#6B7280", marginTop: 2 }}>Expected renewal commission: <strong style={{ color: NAVY }}>{fmtAED(d.expected_commission_net || 0)}</strong></div>
+              </div>
+              <span style={{ fontSize: 11, fontWeight: 700, color: ts.color, background: ts.bg, border: `1px solid ${ts.bd}`, borderRadius: 6, padding: "3px 10px", whiteSpace: "nowrap" }}>{ri.daysLeft < 0 ? `Expired ${-ri.daysLeft} days ago` : `${ri.daysLeft} days to expiry`}</span>
+            </div>
+
+            {secHdr("Reminder email — review before sending")}
+            {!renew.to && <div style={{ marginBottom: 8, padding: "7px 10px", borderRadius: 6, background: "#FFFBEB", border: "1px solid #FDE68A", color: "#92400E", fontSize: 11.5 }}>No email saved for this client — type the address below (and add it to the customer record for next time).</div>}
+            <div style={{ display: "grid", gap: 8 }}>
+              <div><label style={C.label}>To</label><Inp type="email" value={renew.to} onChange={e => setRenew(p => ({ ...p, to: e.target.value }))} placeholder="client@email.com" /></div>
+              <div><label style={C.label}>Subject</label><Inp value={renew.subject} onChange={e => setRenew(p => ({ ...p, subject: e.target.value }))} /></div>
+              <div><label style={C.label}>Message</label><textarea style={{ ...C.input, minHeight: 170, resize: "vertical", lineHeight: 1.55 }} value={renew.body} onChange={e => setRenew(p => ({ ...p, body: e.target.value }))} /></div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <button style={C.btn()} onClick={() => handleReminderApproved(true)}>✉ Approve & Open in Email App</button>
+              <button style={C.btn("secondary", true)} onClick={() => {
+                const txt = `To: ${renew.to}\nSubject: ${renew.subject}\n\n${renew.body}`;
+                if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(() => toast("Email text copied — paste it into any app", "success"), () => toast("Could not copy — select the text manually", "warning"));
+                else toast("Could not copy — select the text manually", "warning");
+              }}>📋 Copy Text</button>
+              <button style={C.btn("secondary", true)} onClick={() => handleReminderApproved(false)} title="Record that a reminder was sent outside the app (e.g. WhatsApp or phone)">✓ Mark Sent (no email)</button>
+            </div>
+            <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 6 }}>Nothing is sent by the app itself — the draft opens in your email program and only goes out when you press Send there.</div>
+            {reminders.length > 0 && <div style={{ marginTop: 10, fontSize: 11.5, color: "#6B7280" }}>
+              {reminders.map((r, i) => <div key={i} style={{ padding: "2px 0" }}>✉ Reminder {i + 1} · {fmtDate(r.date)}{r.to ? ` · to ${r.to}` : ""}{r.by ? ` · by ${r.by}` : ""}</div>)}
+            </div>}
+
+            {secHdr("Outcome")}
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#374151", marginBottom: 10, cursor: "pointer" }}>
+              <input type="checkbox" checked={renew.createNext} onChange={e => setRenew(p => ({ ...p, createNext: e.target.checked }))} />
+              On renewal, create a linked deal for the next tenancy year ({d.tenancy_end ? `${fmtDate(isoAddDays(d.tenancy_end, 1))} → ${fmtDate(defaultTenancyEnd(isoAddDays(d.tenancy_end, 1)))}` : "dates from today"}) so the new commission enters the pipeline
+            </label>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <button style={{ ...C.btn(), background: "#059669" }} onClick={handleMarkRenewed}>✔ Mark Renewed</button>
+              <button style={{ ...C.btn("secondary"), color: "#B91C1C", borderColor: "#FECACA" }} onClick={() => { if (confirm("Mark this tenancy as NOT renewed? It will leave the renewal radar.")) patchRenewalDeal(d, { renewal_status: "not_renewed" }, "deal_not_renewed", "Marked as not renewed"); }}>✕ Not Renewed</button>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: "auto" }}>
+                <Inp type="date" value={renew.snoozeUntil} onChange={e => setRenew(p => ({ ...p, snoozeUntil: e.target.value }))} style={{ width: 150 }} />
+                <button style={C.btn("secondary", true)} onClick={() => { if (!renew.snoozeUntil) { toast("Pick a snooze-until date first", "warning"); return; } patchRenewalDeal(d, { renewal_snooze_until: renew.snoozeUntil }, "renewal_snoozed", `Snoozed until ${fmtDate(renew.snoozeUntil)}`); }}>😴 Snooze</button>
+              </span>
+            </div>
+          </div>
+          <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setRenew(null)}>Close</button></div>
+        </div>
+      </div>;
+    })()}
 
     {cardDeal && <DealCard deal={cardDeal} txns={txns} accounts={accounts} invoices={dealInvoices} customers={customers} brokers={brokers} developers={developers} dealStageChanges={dealStageChanges} settings={settings} persistTxn={persistTxn} userRole={userRole} onClose={() => setCardDeal(null)} />}
 
@@ -1955,6 +2113,7 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
 
           {sec("Deal economics", <div>
             {kv("Transaction value", fmtAED(deal.transaction_value || 0))}
+            {deal.type === "Rental" && (deal.tenancy_start || deal.tenancy_end) && kv("Tenancy period", `${deal.tenancy_start ? fmtDate(deal.tenancy_start) : "—"} → ${deal.tenancy_end ? fmtDate(deal.tenancy_end) : "—"}`)}
             {kv(isSecondary ? "Buyer commission %" : "Commission %", deal.commission_pct ? deal.commission_pct + "%" : "—")}
             {isSecondary && kv("Seller commission %", deal.seller_commission_pct ? deal.seller_commission_pct + "%" : "—")}
             {isSecondary && kv("Seller commission", fmtAED(deal.seller_commission || 0))}
@@ -2377,6 +2536,15 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers, i
           </div>
         </div>
         <div><label style={C.label}>Date Created</label><Inp type="date" value={d.created_at} onChange={e => up("created_at", e.target.value)} /></div>
+        {d.type === "Rental" && <div><label style={C.label}>Tenancy Start</label>
+          {/* Filling the start auto-derives end = start + 1yr − 1 day, but only
+              when end is still blank — a hand-set end date is never overwritten. */}
+          <Inp type="date" value={d.tenancy_start || ""} onChange={e => { const v = e.target.value; setD(p => ({ ...p, tenancy_start: v, tenancy_end: p.tenancy_end || defaultTenancyEnd(v) })); }} />
+        </div>}
+        {d.type === "Rental" && <div><label style={C.label}>Tenancy End</label>
+          <Inp type="date" value={d.tenancy_end || ""} onChange={e => up("tenancy_end", e.target.value)} />
+          <div style={{ marginTop: 5, fontSize: 10.5, color: "#9CA3AF" }}>Renewal reminders start {RENEWAL_WINDOW_DAYS} days before this date.</div>
+        </div>}
       </div>
       <div style={{ marginTop: 14 }}><label style={C.label}>Notes</label><textarea style={{ ...C.input, minHeight: 60, resize: "vertical" }} value={d.notes || ""} onChange={e => up("notes", e.target.value)} /></div>
 

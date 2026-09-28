@@ -668,6 +668,76 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     const uid = () => "_" + Math.random().toString(36).substr(2, 9);
     const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
     const fmtDate = d => { if (!d) return "—"; try { return new Date(d + "T12:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); } catch { return d; } };
+
+    // ── RENTAL RENEWALS ───────────────────────────────
+    // A Rental deal carries its tenancy contract dates: tenancy_start /
+    // tenancy_end (ISO yyyy-mm-dd). The renewal radar is derived live from
+    // tenancy_end — nothing is scheduled and no email ever leaves the app on
+    // its own. The radar only PROPOSES a reminder; sending is a user action
+    // (a pre-filled mailto: draft the user reviews and sends from their own
+    // mail client), stamped into deal.renewal_reminders and the audit trail.
+    // Renewal bookkeeping fields on the deal, all optional:
+    //   renewal_status        "" | "reminder_sent" | "renewed" | "not_renewed"
+    //   renewal_snooze_until  ISO date — hide from the radar until then
+    //   renewal_reminders     [{ date, to, subject, by }]
+    //   renewed_from_deal_id / renewed_to_deal_id — the renewal chain
+    const RENEWAL_WINDOW_DAYS = 90;
+    const isoAddDays = (iso, n) => { const dt = new Date(iso + "T12:00:00"); dt.setDate(dt.getDate() + n); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`; };
+    const isoAddYears = (iso, n) => { const dt = new Date(iso + "T12:00:00"); dt.setFullYear(dt.getFullYear() + n); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`; };
+    const isoDaysBetween = (fromIso, toIso) => Math.round((new Date(toIso + "T12:00:00").getTime() - new Date(fromIso + "T12:00:00").getTime()) / 86400000);
+    // Standard UAE tenancy term: start + 1 year − 1 day (01 Jan → 31 Dec).
+    const defaultTenancyEnd = (startIso) => startIso ? isoAddDays(isoAddYears(startIso, 1), -1) : "";
+    // Renewal state of one deal. Null when there is nothing to track (not a
+    // Rental, cancelled, or no valid tenancy_end). Otherwise:
+    //   { daysLeft, tier, status, snoozed, inWindow }
+    //   tier: "expired" | "d30" | "d60" | "d90" | "later"
+    //   inWindow: the radar should surface this deal today — within the window
+    //   and not yet resolved (renewed / not renewed) or snoozed.
+    const renewalInfo = (deal, today = todayStr()) => {
+      if (!deal || deal.type !== "Rental" || deal.stage === "Cancelled") return null;
+      const end = deal.tenancy_end || "";
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return null;
+      const daysLeft = isoDaysBetween(today, end);
+      const tier = daysLeft < 0 ? "expired" : daysLeft <= 30 ? "d30" : daysLeft <= 60 ? "d60" : daysLeft <= RENEWAL_WINDOW_DAYS ? "d90" : "later";
+      const status = deal.renewal_status || "";
+      const snoozed = !!deal.renewal_snooze_until && deal.renewal_snooze_until > today;
+      const inWindow = tier !== "later" && status !== "renewed" && status !== "not_renewed" && !snoozed;
+      return { daysLeft, tier, status, snoozed, inWindow };
+    };
+    // Urgency chip palette, matching the commission-aging buckets.
+    const RENEWAL_TIER_STYLE = {
+      expired: { label: "Expired", color: "#B91C1C", bg: "#FEF2F2", bd: "#FECACA" },
+      d30: { label: "≤ 30 days", color: "#DC2626", bg: "#FEF2F2", bd: "#FECACA" },
+      d60: { label: "≤ 60 days", color: "#D97706", bg: "#FFFBEB", bd: "#FDE68A" },
+      d90: { label: "≤ 90 days", color: "#2563EB", bg: "#EFF6FF", bd: "#BFDBFE" },
+      later: { label: "Later", color: "#6B7280", bg: "#F3F4F6", bd: "#E5E7EB" },
+    };
+    // Pre-filled renewal reminder email. Recipient = the linked client's email
+    // (may be blank — the user fills it in the approval modal before sending).
+    const renewalReminderEmail = (deal, client, settings) => {
+      const company = (settings && settings.company) || "Nasama Properties";
+      const prop = [deal.property_name, deal.unit_no ? `Unit ${deal.unit_no}` : ""].filter(Boolean).join(" · ") || "your rented property";
+      const end = deal.tenancy_end ? fmtDate(deal.tenancy_end) : "soon";
+      const name = (client && client.name) || deal.client_name || "Valued Client";
+      return {
+        to: (client && client.email) || "",
+        subject: `Tenancy renewal — ${prop} (contract expires ${end})`,
+        body: [
+          `Dear ${name},`,
+          ``,
+          `We hope this message finds you well. This is a friendly reminder from ${company} that the tenancy contract for ${prop} is due to expire on ${end}.`,
+          ``,
+          `Kindly let us know whether you would like to renew the tenancy for another term, so we can prepare the renewal contract and arrange the next steps in good time.`,
+          ``,
+          `We look forward to hearing from you.`,
+          ``,
+          `Best regards,`,
+          `${company}`,
+        ].join("\n"),
+      };
+    };
+    const mailtoHref = ({ to, subject, body }) => `mailto:${encodeURIComponent(to || "")}?subject=${encodeURIComponent(subject || "")}&body=${encodeURIComponent(body || "")}`;
+
     const ls_get = (k, fb) => { try { const v = localStorage.getItem("na2_" + k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
     const ls_set = (k, v) => { try { localStorage.setItem("na2_" + k, JSON.stringify(v)); } catch { } };
     const ls_remove = (k) => { try { localStorage.removeItem("na2_" + k); } catch { } };
