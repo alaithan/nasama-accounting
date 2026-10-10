@@ -15,7 +15,12 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
     // ── CONSTANTS ─────────────────────────────────────
     const DEAL_STAGES = ["Lead", "EOI", "Booking Form Signed", "First Payment Paid", "MOU Signed", "SPA Signed", "Handover", "Commission Earned", "Commission Collected", "Cancelled"];
-    const DEAL_TYPES = ["Off-Plan", "Secondary", "Rental"];
+    const DEAL_TYPES = ["Off-Plan", "Secondary", "Rental", "Renewal"];
+    // Tenancy deals carry tenancy_start / tenancy_end and ride the renewal radar.
+    // A Renewal is a renewed tenancy: it books to 4020 Rental Commission like a Rental.
+    const TENANCY_DEAL_TYPES = ["Rental", "Renewal"];
+    const isTenancyType = t => TENANCY_DEAL_TYPES.includes(t);
+    const DEAL_TYPE_BADGE = { "Off-Plan": "info", Secondary: "gold", Rental: "success", Renewal: "purple" };
     const ACCT_TYPES = ["Asset", "Liability", "Equity", "Revenue", "Expense"];
     const NORMAL_BAL = { Asset: "debit", Expense: "debit", Liability: "credit", Equity: "credit", Revenue: "credit" };
 
@@ -688,13 +693,13 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     // Standard UAE tenancy term: start + 1 year − 1 day (01 Jan → 31 Dec).
     const defaultTenancyEnd = (startIso) => startIso ? isoAddDays(isoAddYears(startIso, 1), -1) : "";
     // Renewal state of one deal. Null when there is nothing to track (not a
-    // Rental, cancelled, or no valid tenancy_end). Otherwise:
+    // Rental/Renewal, cancelled, or no valid tenancy_end). Otherwise:
     //   { daysLeft, tier, status, snoozed, inWindow }
     //   tier: "expired" | "d30" | "d60" | "d90" | "later"
     //   inWindow: the radar should surface this deal today — within the window
     //   and not yet resolved (renewed / not renewed) or snoozed.
     const renewalInfo = (deal, today = todayStr()) => {
-      if (!deal || deal.type !== "Rental" || deal.stage === "Cancelled") return null;
+      if (!deal || !isTenancyType(deal.type) || deal.stage === "Cancelled") return null;
       const end = deal.tenancy_end || "";
       if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return null;
       const daysLeft = isoDaysBetween(today, end);
@@ -1652,10 +1657,10 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       const postSaleReceipt = ({ date, deal, gross, vatRate = 5, bankCode = "1002", memo = "", invoiceId = "", invoiceNo = "", commit = true }) => {
         if (!deal || !deal.id) throw new Error("deal_id is required for commission revenue tracking");
         if (!bankCode) throw new Error("bankCode is mandatory for a sale receipt");
-        if (!deal.type || !["Off-Plan", "Secondary", "Rental"].includes(deal.type)) throw new Error(`Invalid deal type: ${deal.type}. Must be Off-Plan, Secondary, or Rental`);
+        if (!deal.type || !DEAL_TYPES.includes(deal.type)) throw new Error(`Invalid deal type: ${deal.type}. Must be ${DEAL_TYPES.join(", ")}`);
 
         const bankA = byCode(bankCode) || accounts.find(a => a.isBank) || byCode("1001");
-        const revenueCodeMap = { "Off-Plan": "4000", Secondary: "4010", Rental: "4020" };
+        const revenueCodeMap = { "Off-Plan": "4000", Secondary: "4010", Rental: "4020", Renewal: "4020" };
         const revA = byCode(revenueCodeMap[deal.type]);
         const roundingA = byCode("2105") || byCode("5605");
         if (!bankA) throw new Error(`Bank account not found for code: ${bankCode}`);
@@ -1744,8 +1749,8 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       // else's. This is the only client-funds entry that recognises revenue.
       const postClientFundsEarned = ({ date, deal, gross, vatRate = 5, netCents = null, memo = "", commit = true }) => {
         if (!deal || !deal.id) throw new Error("deal is required to recognise commission revenue");
-        const revenueCodeMap = { "Off-Plan": "4000", Secondary: "4010", Rental: "4020" };
-        if (!revenueCodeMap[deal.type]) throw new Error(`Invalid deal type: ${deal.type}. Must be Off-Plan, Secondary, or Rental`);
+        const revenueCodeMap = { "Off-Plan": "4000", Secondary: "4010", Rental: "4020", Renewal: "4020" };
+        if (!revenueCodeMap[deal.type]) throw new Error(`Invalid deal type: ${deal.type}. Must be ${DEAL_TYPES.join(", ")}`);
         const cfA  = byCode(CLIENT_FUNDS_CODE);
         const revA = byCode(revenueCodeMap[deal.type]);
         const roundingA = byCode("2105") || byCode("5605");
@@ -2103,7 +2108,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       label: { fontSize: 12, fontWeight: 600, color: "#344054", marginBottom: 4, display: "block" },
       th: { textAlign: "left", padding: "10px 14px", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.07em", color: "#667085", background: "#F9FAFB", borderBottom: "1px solid #EAECF0", whiteSpace: "nowrap" },
       td: { padding: "11px 14px", borderBottom: "1px solid #F2F4F7", color: "#344054", verticalAlign: "middle" },
-      badge(c) { const m = { success: { bg: "#ECFDF3", cl: "#027A48" }, danger: { bg: "#FEF3F2", cl: "#B42318" }, warning: { bg: "#FFFAEB", cl: "#B54708" }, info: { bg: "#EFF8FF", cl: "#175CD3" }, gold: { bg: "#FBF4E0", cl: GOLD_D }, neutral: { bg: "#F2F4F7", cl: "#344054" } }; const b = m[c] || m.neutral; return { display: "inline-flex", alignItems: "center", padding: "2px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: b.bg, color: b.cl, whiteSpace: "nowrap" }; },
+      badge(c) { const m = { success: { bg: "#ECFDF3", cl: "#027A48" }, danger: { bg: "#FEF3F2", cl: "#B42318" }, warning: { bg: "#FFFAEB", cl: "#B54708" }, info: { bg: "#EFF8FF", cl: "#175CD3" }, gold: { bg: "#FBF4E0", cl: GOLD_D }, purple: { bg: "#F4F3FF", cl: "#5925DC" }, neutral: { bg: "#F2F4F7", cl: "#344054" } }; const b = m[c] || m.neutral; return { display: "inline-flex", alignItems: "center", padding: "2px 9px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: b.bg, color: b.cl, whiteSpace: "nowrap" }; },
       btn(v = "primary", sm = false) { const p = sm ? "5px 12px" : "9px 18px"; const fs = sm ? 12 : 13; const map = { primary: { background: GOLD, color: "#fff", border: "none", boxShadow: "0 1px 2px rgba(0,0,0,.10)" }, secondary: { background: "#fff", color: "#344054", border: "1.5px solid #D0D5DD", boxShadow: "0 1px 2px rgba(16,24,40,.05)" }, danger: { background: "#D92D20", color: "#fff", border: "none" }, success: { background: "#039855", color: "#fff", border: "none" }, ghost: { background: "transparent", color: "#667085", border: "none" } }; return { ...map[v] || map.primary, padding: p, borderRadius: 8, fontSize: fs, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", transition: "opacity .15s, transform .1s" }; },
       modal: { position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, backdropFilter: "blur(4px)" },
       mbox(w = 620) { return { background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(16,24,40,.22), 0 0 0 1px rgba(16,24,40,.04)", width: "100%", maxWidth: w, maxHeight: "92vh", display: "flex", flexDirection: "column", overflow: "hidden" }; },

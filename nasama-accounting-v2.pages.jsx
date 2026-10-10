@@ -974,7 +974,7 @@ function ManualPage() {
             <ul style={{ paddingLeft: 20, fontSize: 13, lineHeight: 1.5 }}>
               <li><strong>4000 Developer Commission:</strong> Fees from off-plan property sales.</li>
               <li><strong>4010 Seller Commission:</strong> Fees from secondary market sales.</li>
-              <li><strong>4020 Rental Commission:</strong> Fees from rental property transactions.</li>
+              <li><strong>4020 Rental Commission:</strong> Fees from rental property transactions and tenancy renewals.</li>
             </ul>
           </div>
           <div style={{ gridColumn: "span 2" }}>
@@ -1022,7 +1022,7 @@ function DealsReportDoc({ deals, periodLabel, settings }) {
   const collected = rows.filter(d => d.stage === "Commission Collected");
   const collectedEC = collected.reduce((s, d) => s + rowCommission(d), 0);
   const pendingEC = Math.max(0, totalEC - collectedEC);
-  const byType = ["Off-Plan", "Secondary", "Rental"].map(t => {
+  const byType = DEAL_TYPES.map(t => {
     const g = rows.filter(d => d.type === t);
     return { t, n: g.length, tv: g.reduce((s, d) => s + (d.transaction_value || 0), 0), ec: g.reduce((s, d) => s + rowCommission(d), 0) };
   }).filter(x => x.n > 0);
@@ -1217,8 +1217,8 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
     .filter(Boolean)
     .sort((a, b) => a.ri.daysLeft - b.ri.daysLeft), [normalizedDeals]);
   const renewalById = useMemo(() => new Map(renewalRows.map(x => [x.deal.id, x.ri])), [renewalRows]);
-  // Backfill nudge: a rental with no tenancy_end can never appear on the radar.
-  const rentalsMissingDates = useMemo(() => (normalizedDeals || []).filter(d => d.type === "Rental" && d.stage !== "Cancelled" && !d.tenancy_end), [normalizedDeals]);
+  // Backfill nudge: a rental/renewal with no tenancy_end can never appear on the radar.
+  const rentalsMissingDates = useMemo(() => (normalizedDeals || []).filter(d => isTenancyType(d.type) && d.stage !== "Cancelled" && !d.tenancy_end), [normalizedDeals]);
   // Approval modal — the email is only ever a pre-filled draft the user reviews;
   // "send" happens in their own mail client, never from the app.
   const [renew, setRenew] = useState(null); // { deal, to, subject, body, snoozeUntil, createNext }
@@ -1255,7 +1255,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
       // tenancy year, linked both ways, with collection state reset.
       const start = old.tenancy_end ? isoAddDays(old.tenancy_end, 1) : todayStr();
       const nd = {
-        ...old, id: uid(), created_at: todayStr(), stage: "Lead",
+        ...old, id: uid(), type: "Renewal", created_at: todayStr(), stage: "Lead",
         tenancy_start: start, tenancy_end: defaultTenancyEnd(start),
         renewal_status: "", renewal_snooze_until: "", renewal_reminders: [],
         renewed_from_deal_id: old.id, renewed_to_deal_id: "",
@@ -1534,7 +1534,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
           {sortedDeals.map(d => <tr key={d.id} style={{ cursor: hasPermission(userRole, 'sales.edit') ? "pointer" : "default" }} onClick={() => { if (hasPermission(userRole, 'sales.edit')) { setEdit(d); setShow(true); } }}>
             <td style={C.td}>{d.created_at ? fmtDate(d.created_at) : "--"}</td>
             <td style={C.td}><div style={{ fontWeight: 500 }}>{d.property_name || "—"}</div><div style={{ fontSize: 11, color: "#9CA3AF" }}>{d.unit_no && `Unit ${d.unit_no}`}</div></td>
-            <td style={C.td}><span style={C.badge(d.type === "Off-Plan" ? "info" : d.type === "Secondary" ? "gold" : "success")}>{d.type}</span></td>
+            <td style={C.td}><span style={C.badge(DEAL_TYPE_BADGE[d.type])}>{d.type}</span></td>
             <td style={C.td}>
               <span style={C.badge(d.stage?.includes("Collected") ? "success" : d.stage?.includes("Earned") ? "gold" : "neutral")}>{d.stage}</span>
               {(() => {
@@ -1543,8 +1543,8 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
                   const ts = RENEWAL_TIER_STYLE[ri.tier] || RENEWAL_TIER_STYLE.later;
                   return <div style={{ marginTop: 4 }}><span style={{ fontSize: 10, fontWeight: 700, color: ts.color, background: ts.bg, border: `1px solid ${ts.bd}`, borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>🔔 {ri.daysLeft < 0 ? `expired ${-ri.daysLeft}d ago` : `renews in ${ri.daysLeft}d`}{ri.status === "reminder_sent" ? " · ✉ reminded" : ""}</span></div>;
                 }
-                if (d.type === "Rental" && d.renewal_status === "renewed") return <div style={{ marginTop: 4 }}><span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>↻ Renewed</span></div>;
-                if (d.type === "Rental" && d.renewal_status === "not_renewed") return <div style={{ marginTop: 4 }}><span style={{ fontSize: 10, fontWeight: 700, color: "#6B7280", background: "#F3F4F6", border: "1px solid #E5E7EB", borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>Not renewed</span></div>;
+                if (isTenancyType(d.type) && d.renewal_status === "renewed") return <div style={{ marginTop: 4 }}><span style={{ fontSize: 10, fontWeight: 700, color: "#059669", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>↻ Renewed</span></div>;
+                if (isTenancyType(d.type) && d.renewal_status === "not_renewed") return <div style={{ marginTop: 4 }}><span style={{ fontSize: 10, fontWeight: 700, color: "#6B7280", background: "#F3F4F6", border: "1px solid #E5E7EB", borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>Not renewed</span></div>;
                 return null;
               })()}
             </td>
@@ -2091,7 +2091,7 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
               <div>
                 <div style={{ fontSize: 17, fontWeight: 800, color: NAVY }}>{deal.property_name || "—"}{deal.unit_no ? <span style={{ color: "#9CA3AF", fontWeight: 600 }}> · Unit {deal.unit_no}</span> : null}</div>
                 <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-                  <span style={C.badge(deal.type === "Off-Plan" ? "info" : isSecondary ? "gold" : "success")}>{deal.type}</span>
+                  <span style={C.badge(DEAL_TYPE_BADGE[deal.type])}>{deal.type}</span>
                   <span style={C.badge(deal.stage?.includes("Collected") ? "success" : deal.stage?.includes("Earned") ? "gold" : "neutral")}>{deal.stage}</span>
                   {deal.vat_applicable && <span style={C.badge("neutral")}>VAT 5%</span>}
                 </div>
@@ -2113,7 +2113,7 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
 
           {sec("Deal economics", <div>
             {kv("Transaction value", fmtAED(deal.transaction_value || 0))}
-            {deal.type === "Rental" && (deal.tenancy_start || deal.tenancy_end) && kv("Tenancy period", `${deal.tenancy_start ? fmtDate(deal.tenancy_start) : "—"} → ${deal.tenancy_end ? fmtDate(deal.tenancy_end) : "—"}`)}
+            {isTenancyType(deal.type) && (deal.tenancy_start || deal.tenancy_end) && kv("Tenancy period", `${deal.tenancy_start ? fmtDate(deal.tenancy_start) : "—"} → ${deal.tenancy_end ? fmtDate(deal.tenancy_end) : "—"}`)}
             {kv(isSecondary ? "Buyer commission %" : "Commission %", deal.commission_pct ? deal.commission_pct + "%" : "—")}
             {isSecondary && kv("Seller commission %", deal.seller_commission_pct ? deal.seller_commission_pct + "%" : "—")}
             {isSecondary && kv("Seller commission", fmtAED(deal.seller_commission || 0))}
@@ -2536,12 +2536,12 @@ function DealForm({ initial, onSave, onCancel, customers, brokers, developers, i
           </div>
         </div>
         <div><label style={C.label}>Date Created</label><Inp type="date" value={d.created_at} onChange={e => up("created_at", e.target.value)} /></div>
-        {d.type === "Rental" && <div><label style={C.label}>Tenancy Start</label>
+        {isTenancyType(d.type) && <div><label style={C.label}>Tenancy Start</label>
           {/* Filling the start auto-derives end = start + 1yr − 1 day, but only
               when end is still blank — a hand-set end date is never overwritten. */}
           <Inp type="date" value={d.tenancy_start || ""} onChange={e => { const v = e.target.value; setD(p => ({ ...p, tenancy_start: v, tenancy_end: p.tenancy_end || defaultTenancyEnd(v) })); }} />
         </div>}
-        {d.type === "Rental" && <div><label style={C.label}>Tenancy End</label>
+        {isTenancyType(d.type) && <div><label style={C.label}>Tenancy End</label>
           <Inp type="date" value={d.tenancy_end || ""} onChange={e => up("tenancy_end", e.target.value)} />
           <div style={{ marginTop: 5, fontSize: 10.5, color: "#9CA3AF" }}>Renewal reminders start {RENEWAL_WINDOW_DAYS} days before this date.</div>
         </div>}
@@ -4500,7 +4500,7 @@ function VATPage({ accounts, txns, ledger, settings }) {
 // ╚══════════════════════════════════════════════════╝
 function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) {
   const STAGE_COLOR = { "Lead": "#94A3B8", "EOI": "#60A5FA", "Booking Form Signed": "#818CF8", "First Payment Paid": "#A78BFA", "MOU Signed": "#F59E0B", "SPA Signed": "#F97316", "Handover": "#FB923C", "Commission Earned": "#34D399", "Commission Collected": "#059669", "Cancelled": "#EF4444", "Booked": "#818CF8" };
-  const TYPE_COLOR = { "Off-Plan": "#2563EB", "Secondary": "#D97706", "Rental": "#059669" };
+  const TYPE_COLOR = { "Off-Plan": "#2563EB", "Secondary": "#D97706", "Rental": "#059669", "Renewal": "#7C3AED" };
 
   // ── Period filter ────────────────────────────────
   // Historical closed deals span several years; let the decision-maker scope every
@@ -4539,12 +4539,12 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
   const maxStageCount = Math.max(1, ...byStage.map(r => r.count));
 
   // ── By Type ─────────────────────────────────────
-  const byType = ["Off-Plan", "Secondary", "Rental"].map(type => {
+  const byType = DEAL_TYPES.map(type => {
     const ds = deals.filter(d => d.type === type);
     return { type, count: ds.length, value: ds.reduce((s, d) => s + (d.transaction_value || 0), 0), commission: ds.reduce((s, d) => s + (d.expected_commission_net || 0), 0) };
   }).filter(r => r.count > 0);
   const maxTypeCount = Math.max(1, ...byType.map(r => r.count));
-  // Deals created per month, split by type (Off-Plan / Secondary / Rental), last 12 months.
+  // Deals created per month, split by type (Off-Plan / Secondary / Rental / Renewal), last 12 months.
   // Each month also carries the total transaction value + commission of the very same
   // deals the bar counts, so the figure printed above a bar always matches its height.
   const dealsPerMonth = (() => {
@@ -4563,8 +4563,8 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
       const k = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
       const b = byMonth[k] || { types: {}, value: 0, commission: 0 };
       const t = b.types;
-      const offplan = t["Off-Plan"] || 0, secondary = t["Secondary"] || 0, rental = t["Rental"] || 0;
-      out.push({ label: dt.toLocaleDateString("en-GB", { month: "short", year: "2-digit" }), offplan, secondary, rental, count: offplan + secondary + rental, value: b.value, commission: b.commission });
+      const offplan = t["Off-Plan"] || 0, secondary = t["Secondary"] || 0, rental = t["Rental"] || 0, renewal = t["Renewal"] || 0;
+      out.push({ label: dt.toLocaleDateString("en-GB", { month: "short", year: "2-digit" }), offplan, secondary, rental, renewal, count: offplan + secondary + rental + renewal, value: b.value, commission: b.commission });
     };
     if (perfYear !== "all" && /^\d{4}$/.test(perfYear)) {
       // A specific sale year is selected: show Jan–Dec of that year.
@@ -4816,12 +4816,12 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
             [2])
         )}
 
-        {sectionCard("Deal Type Breakdown", "Splits by Off-Plan, Secondary, Rental",
+        {sectionCard("Deal Type Breakdown", "Splits by Off-Plan, Secondary, Rental, Renewal",
           <div>
             {byType.map(row => (
               <div key={row.type} style={{ marginBottom: 20 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                  <span style={{ ...C.badge(row.type === "Off-Plan" ? "info" : row.type === "Secondary" ? "gold" : "success") }}>{row.type}</span>
+                  <span style={{ ...C.badge(DEAL_TYPE_BADGE[row.type]) }}>{row.type}</span>
                   <span style={{ fontSize: 13, fontWeight: 700, color: TYPE_COLOR[row.type] }}>{row.count} deals</span>
                 </div>
                 <div style={{ height: 10, borderRadius: 999, background: "#F3F4F6", overflow: "hidden", marginBottom: 6 }}>
@@ -4847,7 +4847,7 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
       {sectionCard("Deals per Month", `Deals created per month — all stages included · ${dealsPerMonthTotal} deals worth ${fmtAED(dealsPerMonthValue)} ${perfYear === "all" ? "in the last 12 months" : `in ${perfYear}`}`,
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "0 6px 10px", fontSize: 10.5, color: "#6B7280", flexWrap: "wrap" }}>
-            {["Off-Plan", "Secondary", "Rental"].map(t => <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: TYPE_COLOR[t] }} />{t}</span>)}
+            {DEAL_TYPES.map(t => <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: TYPE_COLOR[t] }} />{t}</span>)}
             <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6 }}>
               <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: .3, color: "#8A6D1F", background: "linear-gradient(180deg,#FFFBEF,#FCF3DC)", border: "1px solid #EFE0B4", borderRadius: 999, padding: "2px 7px" }}>AED</span>
               deal value above each bar · {fmtAED(dealsPerMonthValue)} total
@@ -4856,8 +4856,8 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", height: 200, gap: 10, padding: "4px 6px 0", borderBottom: "2px solid #EEF0F3" }}>
             {dealsPerMonth.map((m, i) => {
               const h = m.count > 0 ? Math.max(8, (m.count / maxDealsPerMonth) * 100) : 0;
-              const segs = [["Rental", m.rental], ["Secondary", m.secondary], ["Off-Plan", m.offplan]];
-              const tip = `${m.label}: ${m.count} deal${m.count === 1 ? "" : "s"} — Off-Plan ${m.offplan}, Secondary ${m.secondary}, Rental ${m.rental}\nDeal value ${fmtAED(m.value)} · Commission ${fmtAED(m.commission)}`;
+              const segs = [["Renewal", m.renewal], ["Rental", m.rental], ["Secondary", m.secondary], ["Off-Plan", m.offplan]];
+              const tip = `${m.label}: ${m.count} deal${m.count === 1 ? "" : "s"} — Off-Plan ${m.offplan}, Secondary ${m.secondary}, Rental ${m.rental}, Renewal ${m.renewal}\nDeal value ${fmtAED(m.value)} · Commission ${fmtAED(m.commission)}`;
               return <div key={i} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", height: "100%" }}>
                 <div title={m.count > 0 ? tip : undefined} style={{ height: 38, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", gap: 2, maxWidth: "100%" }}>
                   {m.count > 0
@@ -4879,9 +4879,9 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
         </div>,
         <button style={C.btn("ghost", true)} onClick={() => setPage("deals")}>View Deals →</button>,
         () => xlsxExport("Deals per Month", `nasama-deals-per-month-${todayStr()}.xlsx`,
-          [["Month", "Off-Plan", "Secondary", "Rental", "Total", "Deal Value (AED)", "Commission (AED)"],
-            ...dealsPerMonth.map(m => [m.label, m.offplan, m.secondary, m.rental, m.count, xAED(m.value), xAED(m.commission)])],
-          [5, 6])
+          [["Month", "Off-Plan", "Secondary", "Rental", "Renewal", "Total", "Deal Value (AED)", "Commission (AED)"],
+            ...dealsPerMonth.map(m => [m.label, m.offplan, m.secondary, m.rental, m.renewal, m.count, xAED(m.value), xAED(m.commission)])],
+          [6, 7])
       )}
 
       {/* ── Broker Performance Bar Chart ── */}
@@ -6563,7 +6563,7 @@ function AuditingDealsPage({ dealStageChanges, userRole }) {
                     <td style={C.td}>{ch.client_name || "—"}</td>
                     <td style={C.td}>{ch.broker_name || "—"}</td>
                     <td style={C.td}>
-                      <span style={C.badge(ch.deal_type === "Off-Plan" ? "info" : ch.deal_type === "Secondary" ? "warning" : "success")}>{ch.deal_type || "—"}</span>
+                      <span style={C.badge(ch.deal_type === "Off-Plan" ? "info" : ch.deal_type === "Secondary" ? "warning" : ch.deal_type === "Renewal" ? "purple" : "success")}>{ch.deal_type || "—"}</span>
                     </td>
                     <td style={C.td}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>

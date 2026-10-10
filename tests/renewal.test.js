@@ -6,7 +6,7 @@
 //
 //  Pins down the canonical renewal rules the app relies on (mirrors the
 //  helpers in nasama-accounting-v2.core.jsx — keep both in sync):
-//    • Only Rental deals with a valid tenancy_end are tracked; Cancelled never.
+//    • Only Rental / Renewal deals with a valid tenancy_end are tracked; Cancelled never.
 //    • Window = 90 days before tenancy_end. Tiers: expired | ≤30 | ≤60 | ≤90.
 //    • "renewed" / "not_renewed" resolve a deal off the radar; a snooze hides
 //      it until the snooze date; "reminder_sent" keeps it on the radar.
@@ -30,8 +30,10 @@ const isoAddDays = (iso, n) => { const dt = new Date(iso + "T12:00:00"); dt.setD
 const isoAddYears = (iso, n) => { const dt = new Date(iso + "T12:00:00"); dt.setFullYear(dt.getFullYear() + n); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`; };
 const isoDaysBetween = (fromIso, toIso) => Math.round((new Date(toIso + "T12:00:00").getTime() - new Date(fromIso + "T12:00:00").getTime()) / 86400000);
 const defaultTenancyEnd = (startIso) => startIso ? isoAddDays(isoAddYears(startIso, 1), -1) : "";
+const TENANCY_DEAL_TYPES = ["Rental", "Renewal"];
+const isTenancyType = t => TENANCY_DEAL_TYPES.includes(t);
 const renewalInfo = (deal, today) => {
-  if (!deal || deal.type !== "Rental" || deal.stage === "Cancelled") return null;
+  if (!deal || !isTenancyType(deal.type) || deal.stage === "Cancelled") return null;
   const end = deal.tenancy_end || "";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return null;
   const daysLeft = isoDaysBetween(today, end);
@@ -60,6 +62,9 @@ eq(defaultTenancyEnd(""), "", "no start → no derived end");
 // ── 2. Who is on the radar at all ────────────────────────────────────────────
 console.log("radar eligibility");
 eq(renewalInfo({ type: "Off-Plan", stage: "Lead", tenancy_end: "2026-10-01" }, TODAY), null, "Off-Plan is never tracked");
+eq(renewalInfo({ type: "Secondary", stage: "Lead", tenancy_end: "2026-10-01" }, TODAY), null, "Secondary is never tracked");
+ok(renewalInfo(rental("2026-10-01", { type: "Renewal" }), TODAY) !== null, "a Renewal deal is tracked like a Rental — it renews again");
+eq(renewalInfo(rental("2026-10-01", { type: "Renewal", stage: "Cancelled" }), TODAY), null, "Cancelled renewal is never tracked");
 eq(renewalInfo(rental("2026-10-01", { stage: "Cancelled" }), TODAY), null, "Cancelled rental is never tracked");
 eq(renewalInfo(rental(""), TODAY), null, "no tenancy_end → nothing to track");
 eq(renewalInfo(rental("soon"), TODAY), null, "malformed tenancy_end → nothing to track");
