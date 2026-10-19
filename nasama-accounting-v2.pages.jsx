@@ -5851,7 +5851,7 @@ The books are locked through ${fmtDate(savedLock)}. ` +
   const BACKUP_COLS = [
     "accounts", "transactions", "deals", "customers", "vendors", "brokers", "developers",
     "planned_expenses", "invoices", "meta",
-    "authorized_users", "security_roles", "company_branches", "approval_policies",
+    "authorized_users", "google_logins", "security_roles", "company_branches", "approval_policies",
     "deal_stage_changes", "deleted_deals_archive", "audit_logs",
   ];
 
@@ -5983,7 +5983,9 @@ The books are locked through ${fmtDate(savedLock)}. ` +
 
     <div style={{ ...C.card, padding: "12px 22px", maxWidth: 600, marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
       <div style={{ fontSize: 13 }}><strong>Signed in as</strong> {userEmail}</div>
-      <button style={C.btn("secondary", true)} onClick={() => setShowPw(true)}>🔑 Change my password</button>
+      {(auth.currentUser?.providerData || []).some(p => p.providerId === "password")
+        ? <button style={C.btn("secondary", true)} onClick={() => setShowPw(true)}>🔑 Change my password</button>
+        : <span style={{ fontSize: 12, color: "#6B7280" }}>Signed in with Google — no app password to change.</span>}
       {showPw && <ChangePasswordModal username={userEmail} onDone={() => setShowPw(false)} onClose={() => setShowPw(false)} />}
     </div>
 
@@ -6203,7 +6205,7 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
   const branchMap = branches.reduce((acc, branch) => { acc[branch.id] = branch; return acc; }, {});
   const selectedPreviewRole = roles.find(r => r.id === previewRoleId) || DEFAULT_SECURITY_ROLE_TEMPLATES.find(r => r.id === previewRoleId) || null;
 
-  const emptyUserForm = () => ({ id: "", email: "", role: "secretary", roleId: "secretary", companyId: defaultCompanyId, branchIdsText: "main", paymentApprovalLimit: "", journalApprovalLimit: "", active: true });
+  const emptyUserForm = () => ({ id: "", email: "", googleEmail: "", role: "secretary", roleId: "secretary", companyId: defaultCompanyId, branchIdsText: "main", paymentApprovalLimit: "", journalApprovalLimit: "", active: true });
   const emptyRoleForm = () => ({ id: "", name: "", description: "", legacyRole: "secretary", permissions: {} });
   const emptyBranchForm = () => ({ id: "", name: "", companyId: defaultCompanyId, active: true });
   const emptyPolicyForm = () => ({ id: "", module: "expenses", roleId: "accountant", branchId: "main", companyId: defaultCompanyId, approvalLimit: "", sequence: "1", active: true });
@@ -6295,12 +6297,22 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
   };
 
   const saveUser = async () => {
-    if (!userForm?.email) { toast("Enter user email", "warning"); return; }
+    if (!userForm?.email) { toast("Enter the username", "warning"); return; }
     const email = normalizeUserEmail(userForm.email);
     const selectedRole = roleMap[userForm.roleId] || DEFAULT_SECURITY_ROLE_TEMPLATES.find(r => r.id === userForm.roleId);
+    // Google account (optional): google_logins/{address} → username lets the
+    // person sign in with that Google account. One address links to one user.
+    const googleEmail = googleKeyFor(userForm.googleEmail || "");
+    if (googleEmail && !isValidEmailAddress(googleEmail)) { toast("The Google account must be a full address, e.g. name@gmail.com", "warning"); return; }
+    const prevGoogle = googleKeyFor((users.find(u => u.id === email) || {}).googleEmail || "");
     try {
+      if (googleEmail && googleEmail !== prevGoogle) {
+        const taken = await db.collection('google_logins').doc(googleEmail).get();
+        if (taken.exists && normalizeUserEmail(taken.data().username) !== email) { toast(`${googleEmail} is already linked to ${taken.data().username}`, "warning"); return; }
+      }
       const userPayload = {
         email,
+        googleEmail: googleEmail || firebase.firestore.FieldValue.delete(),
         role: userForm.role || selectedRole?.legacyRole || "secretary",
         roleId: userForm.roleId || userForm.role || "secretary",
         companyId: userForm.companyId || defaultCompanyId,
@@ -6318,6 +6330,11 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
         userPayload.addedAt = new Date().toISOString();
       }
       await db.collection('authorized_users').doc(email).set(userPayload, { merge: true });
+      if (googleEmail !== prevGoogle) {
+        if (prevGoogle) { try { await db.collection('google_logins').doc(prevGoogle).delete(); } catch (e) { console.warn("unlink", e); } }
+        if (googleEmail) await db.collection('google_logins').doc(googleEmail).set({ username: email, linkedAt: new Date().toISOString(), linkedBy: userEmail });
+        logAudit(googleEmail ? "user_google_linked" : "user_google_unlinked", { email, googleEmail: googleEmail || prevGoogle }, userRole, userEmail);
+      }
       logAudit(userForm.id ? "user_updated" : "user_added", { email, roleId: userPayload.roleId, active: userPayload.active }, userRole, userEmail);
       toast(userForm.id ? "User updated" : "User added", "success");
       setShowUser(false); setUserForm(null);
@@ -6407,7 +6424,7 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
     {tab === "users" && <div style={{ display: "grid", gridTemplateColumns: "minmax(0,2fr) minmax(280px,1fr)", gap: 16 }}>
       <div style={C.card}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead><tr><th style={C.th}>Email</th><th style={C.th}>Access Role</th><th style={C.th}>Branches</th><th style={C.th}>Status</th><th style={C.th}>Login</th><th style={C.th}>Action</th></tr></thead>
+          <thead><tr><th style={C.th}>Username</th><th style={C.th}>Access Role</th><th style={C.th}>Branches</th><th style={C.th}>Status</th><th style={C.th}>Login</th><th style={C.th}>Action</th></tr></thead>
           <tbody>
             {users.length === 0 && <tr><td style={C.td} colSpan={6}>No users found yet.</td></tr>}
             {users.map(u => <tr key={u.id}>
@@ -6418,12 +6435,13 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
               <td style={C.td}>{u.loginCreated
                 ? <span style={C.badge("success")} title={u.loginCreatedAt ? `Created ${fmtDate(String(u.loginCreatedAt).slice(0, 10))}` : ""}>{u.mustChangePassword ? "Temp password" : "Login created"}</span>
                 : <span style={C.badge("warning")}>No login yet</span>}
+                {u.googleEmail && <div style={{ fontSize: 10.5, color: "#1D4ED8", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }} title="Can sign in with this Google account"><GoogleMark size={11} /> {u.googleEmail}</div>}
                 {u.accessCode && <div style={{ fontSize: 10.5, color: "#B45309", marginTop: 3 }}>legacy code on record</div>}</td>
               <td style={C.td}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {!u.loginCreated && <button style={{ ...C.btn("secondary", true), color: "#1D4ED8" }} disabled={inviting === u.id} title="Create the Firebase login with a temporary password you tell the person" onClick={() => setLoginFor({ username: u.id, pw: "", pw2: "" })}>{inviting === u.id ? "…" : "Create login"}</button>}
                   {u.loginCreated && <button style={C.btn("secondary", true)} title="To reset a forgotten password: delete this user in the Firebase console (Authentication › Users), then Create login again here" onClick={() => toast(`Reset for ${u.id}: in the Firebase console open Authentication › Users, delete ${authEmailFor(u.id)}, then click Create login here with a new temporary password.`, "info")}>Reset…</button>}
-                  <button style={C.btn("secondary", true)} onClick={() => { setUserForm({ id: u.id, email: u.email || "", role: u.role || "secretary", roleId: u.roleId || u.role || "secretary", companyId: u.companyId || defaultCompanyId, branchIdsText: (u.branchIds || []).join(", ") || "main", paymentApprovalLimit: u.approvalLimits?.payments ?? "", journalApprovalLimit: u.approvalLimits?.journalEntries ?? "", active: u.active !== false }); setShowUser(true); }}>Edit / Reset Code</button>
+                  <button style={C.btn("secondary", true)} onClick={() => { setUserForm({ id: u.id, email: u.email || "", googleEmail: u.googleEmail || "", role: u.role || "secretary", roleId: u.roleId || u.role || "secretary", companyId: u.companyId || defaultCompanyId, branchIdsText: (u.branchIds || []).join(", ") || "main", paymentApprovalLimit: u.approvalLimits?.payments ?? "", journalApprovalLimit: u.approvalLimits?.journalEntries ?? "", active: u.active !== false }); setShowUser(true); }}>Edit</button>
                 </div>
               </td>
             </tr>)}
@@ -6432,7 +6450,7 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
       </div>
       <div style={{ ...C.card, padding: 16 }}>
         <div style={{ fontWeight: 700, marginBottom: 10 }}>Role Preview</div>
-        <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 12 }}>Usernames are not mailboxes, so nothing is emailed. “Create login” makes the Firebase login with a temporary password you tell the person; they must change it at first sign-in. A forgotten password is reset by deleting the login in the Firebase console (Authentication › Users) and creating it again here. Posting limits are read at sign-in — after changing them the person signs out and in.</div>
+        <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 12 }}>Usernames are not mailboxes, so nothing is emailed. “Create login” makes the Firebase login with a temporary password you tell the person; they must change it at first sign-in. A forgotten password is reset by deleting the login in the Firebase console (Authentication › Users) and creating it again here. <strong>Google:</strong> Edit a user and enter their Google address — they can then press “Continue with Google” on the login page (no password needed). Posting limits are read at sign-in — after changing them the person signs out and in.</div>
         {users.some(u => u.accessCode) && <button style={{ ...C.btn("secondary", true), color: "#DC2626", marginBottom: 12 }} onClick={clearLegacyCodes}>Remove legacy access codes ({users.filter(u => u.accessCode).length})</button>}
         <label style={C.label}>Template / Role</label>
         <Sel value={previewRoleId} onChange={e => setPreviewRoleId(e.target.value)}>
@@ -6507,7 +6525,8 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
         <div style={C.mhdr}><span style={{ fontWeight: 700 }}>{userForm.id ? "Edit User" : "Add User"}</span><button onClick={() => { setShowUser(false); setUserForm(null); }} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>x</button></div>
         <div style={C.mbdy}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div><label style={C.label}>Email</label><Inp value={userForm.email} onChange={e => setUserForm(p => ({ ...p, email: e.target.value }))} /></div>
+            <div><label style={C.label}>Username</label><Inp value={userForm.email} onChange={e => setUserForm(p => ({ ...p, email: e.target.value }))} disabled={!!userForm.id} /></div>
+            <div><label style={C.label}>Google account (optional)</label><Inp value={userForm.googleEmail || ""} onChange={e => setUserForm(p => ({ ...p, googleEmail: e.target.value }))} placeholder="name@gmail.com — lets them use “Continue with Google”" /></div>
             <div><label style={C.label}>Company ID</label><Inp value={userForm.companyId} onChange={e => setUserForm(p => ({ ...p, companyId: e.target.value }))} /></div>
             <div><label style={C.label}>Legacy App Role</label><Sel value={userForm.role} onChange={e => setUserForm(p => ({ ...p, role: e.target.value }))}><option value="admin">Admin</option><option value="accountant">Accountant</option><option value="secretary">Secretary</option><option value="sales">Sales</option></Sel></div>
             <div><label style={C.label}>Custom Role Template</label><Sel value={userForm.roleId} onChange={e => { const selected = roleMap[e.target.value] || DEFAULT_SECURITY_ROLE_TEMPLATES.find(r => r.id === e.target.value); setUserForm(p => ({ ...p, roleId: e.target.value, role: selected?.legacyRole || p.role })); }}>{[...DEFAULT_SECURITY_ROLE_TEMPLATES.filter(t => !roleMap[t.id]), ...roles].map(role => <option key={role.id} value={role.id}>{role.name}</option>)}</Sel></div>
@@ -6519,7 +6538,7 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
               <label htmlFor="security-user-invite" style={{ fontSize: 13, color: "#374151", cursor: "pointer" }}>Create the Firebase login right after saving (you choose a temporary password)</label>
             </div>}
           </div>
-          <div style={{ marginTop: 10, fontSize: 12, color: "#6B7280" }}>The username can be any short name (it does not have to be a real email). The person signs in with it and the password you give them, then sets their own.</div>
+          <div style={{ marginTop: 10, fontSize: 12, color: "#6B7280" }}>The username can be any short name (it does not have to be a real email). The person signs in with it and the password you give them, then sets their own — or, if you enter their Google account, with “Continue with Google”. Both ways lead to the same user.</div>
           <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8 }}>
             <input id="security-user-active" type="checkbox" checked={userForm.active !== false} onChange={e => setUserForm(p => ({ ...p, active: e.target.checked }))} />
             <label htmlFor="security-user-active" style={{ fontSize: 13, color: "#374151", cursor: "pointer" }}>User is active</label>
@@ -6594,11 +6613,16 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
 }
 
 function AuthGate({ children }) {
-  // ── Login = Firebase Auth email/password behind a USERNAME. Usernames are
-  // not real mailboxes, so nothing here sends or verifies email: an admin
-  // creates each login with a temporary password (User Management), and the
-  // Firebase user id is mapped to the username in auth_users/{uid} — the rules
-  // accept only mapped logins, so a self-registered account gets nothing.
+  // ── Login = Firebase Auth behind a USERNAME, two ways in:
+  //   • username + password — usernames are not real mailboxes, so nothing
+  //     here sends or verifies email: an admin creates each login with a
+  //     temporary password (User Management) and auth_users/{uid} maps the
+  //     Firebase user to the username;
+  //   • Google account — an admin links the person's Google address to their
+  //     username (google_logins/{address}); the Google sign-in then resolves
+  //     to that username.
+  // The rules accept only mapped logins, so a self-registered account or an
+  // unlinked Google account gets nothing.
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState(null);
@@ -6634,25 +6658,37 @@ function AuthGate({ children }) {
              approvalLimits: sessionUser?.approvalLimits || {} };
   };
 
-  const finish = (username, data, uid) => {
+  const finish = (username, data, uid, provider = "password") => {
     claimLocalCache(username);
-    setUser({ email: username, uid });
+    setUser({ email: username, uid, provider });
     setUserRole(data.role || "secretary");
-    setMustChange(!!data.mustChangePassword);
+    // A temporary password only concerns password logins; a Google sign-in has none.
+    setMustChange(provider === "password" && !!data.mustChangePassword);
     setMode("signin"); setLoginPass(""); setLoginPass2(""); setError("");
-    if (typeof logAudit === "function") logAudit("login", { username }, data.role || "", username).catch(() => {});
+    if (typeof logAudit === "function") logAudit("login", { username, provider }, data.role || "", username).catch(() => {});
   };
 
-  // A Firebase session becomes an app session only through auth_users → authorized_users.
+  // A Firebase session becomes an app session only through a mapping an admin
+  // wrote: auth_users/{uid} (password) or google_logins/{address} (Google) →
+  // authorized_users/{username}.
   const adoptSession = async (fbUser) => {
     if (!fbUser) return false;
     // A browser can still hold an ANONYMOUS session from the old access-code login.
     if (fbUser.isAnonymous || !fbUser.email) { try { await auth.signOut(); } catch { } return false; }
+    // The provider of THIS session, exactly as the database rules see it.
+    let provider = "password";
+    try { provider = (await fbUser.getIdTokenResult()).signInProvider || "password"; } catch { }
     let username = "";
     try {
-      const map = await db.collection('auth_users').doc(fbUser.uid).get();
-      username = map.exists ? normalizeUserEmail(map.data().username) : "";
-    } catch (err) { throw new Error(explainAuthError(err)); }
+      if (provider === "google.com") {
+        const map = await db.collection('google_logins').doc(googleKeyFor(fbUser.email)).get();
+        username = map.exists ? normalizeUserEmail(map.data().username) : "";
+        if (!username) throw new Error(`The Google account ${fbUser.email} is not linked to a user. Ask an admin to link it in User Management (Edit user → Google account).`);
+      } else {
+        const map = await db.collection('auth_users').doc(fbUser.uid).get();
+        username = map.exists ? normalizeUserEmail(map.data().username) : "";
+      }
+    } catch (err) { throw new Error(err && err.code ? explainAuthError(err) : err.message); }
     if (!username) throw new Error("This login is not linked to a user. Ask an admin to create your login in User Management.");
     const doc = await db.collection('authorized_users').doc(username).get();
     if (!doc.exists) throw new Error("This username is no longer authorised.");
@@ -6661,7 +6697,7 @@ function AuthGate({ children }) {
     const access = await resolveUserAccess({ username, ...data });
     ACTIVE_USER_ACCESS = access;
     setUserAccess(access);
-    finish(username, data, fbUser.uid);
+    finish(username, data, fbUser.uid, provider);
     return true;
   };
 
@@ -6703,6 +6739,14 @@ function AuthGate({ children }) {
     const username = normalizeUserEmail(loginName);
     if (!username || !loginPass) throw new Error("Enter your username and password.");
     await auth.signInWithEmailAndPassword(authEmailFor(username), loginPass);   // onAuthStateChanged → adoptSession
+  });
+  // Google: the person picks their Google account in a pop-up; adoptSession then
+  // resolves the address through google_logins (linked by an admin). Nothing is
+  // created here — an unlinked Google account is simply signed out again.
+  const handleGoogle = () => run(async () => {
+    const prov = new firebase.auth.GoogleAuthProvider();
+    prov.setCustomParameters({ prompt: "select_account" });
+    await auth.signInWithPopup(prov);   // onAuthStateChanged → adoptSession
   });
   // FIRST ADMIN ONLY: before the locked-down rules are deployed, the admin
   // creates their own login here and links it. Once the rules are live this
@@ -6772,6 +6816,13 @@ function AuthGate({ children }) {
         <button style={{ ...C.btn(), width: "100%", justifyContent: "center", padding: "12px 0", marginTop: 4 }} disabled={authBusy} onClick={mode === "bootstrap" ? handleBootstrap : handleLogin}>
           {authBusy ? "Please wait…" : mode === "bootstrap" ? "Create admin login" : "Sign In"}
         </button>
+        {mode === "signin" && <>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "14px 0 10px", color: "#9CA3AF", fontSize: 12 }}><div style={{ flex: 1, height: 1, background: "#E5E7EB" }} />or<div style={{ flex: 1, height: 1, background: "#E5E7EB" }} /></div>
+          <button type="button" disabled={authBusy} onClick={handleGoogle} title="Sign in with the Google account an admin linked to your username"
+            style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, padding: "11px 0", background: "#fff", border: "1px solid #D1D5DB", borderRadius: 8, fontSize: 14, fontWeight: 600, color: "#374151", cursor: authBusy ? "default" : "pointer" }}>
+            <GoogleMark /> Continue with Google
+          </button>
+        </>}
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14, gap: 8, flexWrap: "wrap", fontSize: 12.5, color: "#6B7280" }}>
           {mode === "signin"
             ? <><span>Forgot your password? Ask an admin to reset it.</span>{link("First admin setup", () => { setError(""); setMode("bootstrap"); })}</>

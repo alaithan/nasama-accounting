@@ -10,6 +10,7 @@ Plan rows 1.1–1.8 of `implementation-plan-2026-10-18.md`. Built on branch `rev
 |---|---|
 | 1.1 Close the database | `firestore.rules` rewritten: a request is accepted only from a Firebase **email/password** sign-in (never anonymous) whose user id is mapped to a username in `auth_users/{uid}` — a mapping only an admin can write — and whose `authorized_users` record is active. `authorized_users`, `auth_users`, `security_roles`, `approval_policies`, `company_branches`, `settings` are admin-only to write. `audit_logs` and `deal_stage_changes` are append-only. The `sales` role is read-only. Everything else needs an authorised, non-sales user. |
 | 1.2 No plaintext codes | Access codes are gone. Sign-in is **username + password** (behind the scenes a username that is not a valid email gets a synthetic login id such as `ahmed@login.nasama.local`). **User Management → Create login** makes the Firebase login with a temporary password the admin types; the person is forced to set their own at first sign-in. **Remove legacy access codes** deletes the codes still stored on user records. Everyone has **Settings → Change my password**. A forgotten password: the admin deletes the login in the Firebase console and clicks Create login again. |
+| 1.2b Google sign-in | **Continue with Google** on the login page. An admin links a person's Google address to their username (User Management → Edit → *Google account*); that writes `google_logins/{address}` → username. The rules accept a Google sign-in only when its (verified) address has such a mapping, so an unknown Google account gets nothing. A Google session has no app password (Settings shows that instead of *Change my password*); the temporary-password rule only applies to password logins. Both ways lead to the same user record, role and limits. |
 | 1.3 Settings / backup / restore | Save settings is admin-only. Backup and restore are admin-only; backups never include access codes; restore only writes the collections the app exports, never the audit log, never a collection merely named in the file. |
 | 1.4 Audit trail | Every ledger write and delete is logged (`txn_create` / `txn_update` with the changed fields / `txn_batch` / `txn_delete` with the full deleted entry), plus login/logout, user changes, logins created, password changes, backups. The rules make `audit_logs` create-only — nobody can edit or delete a log entry. |
 | 1.5 Local cache | Wiped on sign-out, and when a different person signs in on the same machine. Old anonymous sessions left by the previous version are discarded. |
@@ -19,11 +20,11 @@ Plan rows 1.1–1.8 of `implementation-plan-2026-10-18.md`. Built on branch `rev
 
 ## Rollout — do this in order (about 20 minutes, by an admin)
 1. **Backup first:** current live app → Settings → Download Backup.
-2. **Firebase console → Authentication → Sign-in method:** enable **Email/Password**. Leave Anonymous enabled for now.
+2. **Firebase console → Authentication → Sign-in method:** enable **Email/Password**. To offer *Continue with Google*, also enable **Google** (it asks for a project support email — any real address of yours). Leave Anonymous enabled for now.
 3. **Authentication → Settings → Authorized domains:** every domain the app is served from must be listed (`localhost` for testing, the GitHub Pages host, the Hostinger domain).
 4. **Run or deploy the new app code.** Do **not** deploy the rules yet.
 5. **Create your own admin login:** login page → *First admin setup* → your admin username + a password → *Create admin login*. This works only while the old rules are live, and only for a username whose record is admin.
-6. **User Management → Create login** for every other user: type a temporary password, tell it to the person. At their first sign-in they are asked to choose their own. Then click **Remove legacy access codes**.
+6. **User Management → Create login** for every other user: type a temporary password, tell it to the person. At their first sign-in they are asked to choose their own. Then click **Remove legacy access codes**. For anyone who prefers Google: **Edit** the user, enter their Google address in *Google account*, Save — they press *Continue with Google* on the login page (a password login is optional for them).
 7. Once everyone has signed in at least once: **deploy the rules** — `firebase deploy --only firestore:rules` from the repo (project `nasama-accuntant`). From now on only admin-created logins work.
 8. **Authentication → Sign-in method:** disable **Anonymous**.
 9. Check: open the site in a private window without signing in — nothing loads; a wrong password is refused; a username you never created a login for cannot get in.
@@ -51,6 +52,7 @@ gcloud scheduler jobs create http nasama-weekly-backup --location=me-central1 \
 The service account needs the *Cloud Datastore Import Export Admin* role and write access to the bucket. Restore with `gcloud firestore import gs://…/weekly/<folder>`.
 
 ## Known limits
+- Google sign-in opens a pop-up window; if the browser blocks it the page says so — allow pop-ups for the site. One Google address can be linked to one username.
 - Posting limits and role are read at sign-in; after changing a user's limits they sign out and in.
 - Settings (incl. depreciation lives, VAT period cycle, invoicing basis) are admin-only to save under the new rules; accountants can still read them.
 - The rules were written by hand and could not be run against the Firestore emulator here — step 9 is the test.

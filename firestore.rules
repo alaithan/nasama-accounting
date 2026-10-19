@@ -4,16 +4,29 @@ service cloud.firestore {
 
     // ── Who may touch the data ──────────────────────────────────────────
     // Usernames in this system are NOT real mailboxes, so nothing here relies
-    // on email. A request is accepted only when:
-    //   1. it comes from a Firebase Auth email/password sign-in (never anonymous),
-    //   2. auth_users/{uid} maps that Firebase user to a username — only an
-    //      admin can write that mapping, so a self-registered account is useless,
-    //   3. authorized_users/{username} exists and is not switched off.
-    function signedIn() {
-      return request.auth != null
-        && request.auth.token.firebase.sign_in_provider == 'password';
+    // on email being deliverable. A request is accepted only when:
+    //   1. it comes from a Firebase Auth sign-in that is either
+    //        a. username + password (never anonymous), mapped to a username in
+    //           auth_users/{uid}, or
+    //        b. a Google account with a verified address, mapped to a username in
+    //           google_logins/{address} —
+    //      both mappings can only be written by an admin, so a self-registered
+    //      account (or any Google account) is useless until an admin links it,
+    //   2. authorized_users/{username} exists and is not switched off.
+    function provider() { return request.auth.token.firebase.sign_in_provider; }
+    function isPasswordLogin() { return provider() == 'password'; }
+    function isGoogleLogin() {
+      return provider() == 'google.com' && request.auth.token.email_verified == true;
     }
-    function mapPath() { return /databases/$(database)/documents/auth_users/$(request.auth.uid); }
+    function signedIn() {
+      return request.auth != null && (isPasswordLogin() || isGoogleLogin());
+    }
+    function googleKey() { return request.auth.token.email.lower(); }
+    function mapPath() {
+      return isGoogleLogin()
+        ? /databases/$(database)/documents/google_logins/$(googleKey())
+        : /databases/$(database)/documents/auth_users/$(request.auth.uid);
+    }
     function username() { return get(mapPath()).data.username; }
     function userPath() { return /databases/$(database)/documents/authorized_users/$(username()); }
     function userData() { return get(userPath()).data; }
@@ -32,6 +45,11 @@ service cloud.firestore {
     // ── Login ↔ user mapping and the user records ───────────────────────
     match /auth_users/{uid} {
       allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if isAdmin();
+    }
+    // Google address → username. A Google sign-in may read only its own entry.
+    match /google_logins/{address} {
+      allow read: if request.auth != null && isGoogleLogin() && googleKey() == address;
       allow write: if isAdmin();
     }
     match /authorized_users/{name} {
