@@ -6714,19 +6714,23 @@ function AuthGate({ children }) {
     if (loginPass !== loginPass2) throw new Error("The two passwords do not match.");
     adopting.current = true;   // we finish the linking ourselves
     try {
-      let cred;
-      try { cred = await auth.createUserWithEmailAndPassword(authEmailFor(username), loginPass); }
+      let cred, created = false;
+      try { cred = await auth.createUserWithEmailAndPassword(authEmailFor(username), loginPass); created = true; }
       catch (e) { if (e.code !== "auth/email-already-in-use") throw e; cred = await auth.signInWithEmailAndPassword(authEmailFor(username), loginPass); }
       const uid = cred.user.uid;
+      // The record must exist under EXACTLY the username used before (the old
+      // login's "Email" box). If it does not, remove the login just created so
+      // no orphan account is left behind.
+      const failAuth = async (msg) => { if (created) { try { await cred.user.delete(); } catch { } } try { await auth.signOut(); } catch { } throw new Error(msg); };
       const ref = db.collection('authorized_users').doc(username);
       const doc = await ref.get();
       let data = doc.exists ? doc.data() : null;
       if (!data) {
         const any = await db.collection('authorized_users').limit(1).get();
-        if (!any.empty) throw new Error("That username is not an authorised admin.");
+        if (!any.empty) await failAuth(`No user record named “${username}”. Type the username exactly as you used to sign in before (the old “Email” box) — for example the admin's email-like name.`);
         data = { email: username, role: 'admin', roleId: 'admin', branchIds: ['main'], active: true, addedAt: new Date().toISOString(), addedBy: 'first-login' };
       }
-      if (!(data.roleId === 'admin' || data.role === 'admin')) throw new Error("Only an admin can set up their own login here — ask an admin to create yours.");
+      if (!(data.roleId === 'admin' || data.role === 'admin')) await failAuth("Only an admin can set up their own login here — ask an admin to create yours.");
       const now = new Date().toISOString();
       await db.collection('auth_users').doc(uid).set({ username, createdAt: now, createdBy: username });
       await ref.set({ ...data, uid, authEmail: authEmailFor(username), loginCreated: true, mustChangePassword: false, updatedAt: now }, { merge: true });
