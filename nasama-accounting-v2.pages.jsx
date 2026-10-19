@@ -5688,6 +5688,7 @@ function BudgetSetupModal({ accounts, txns, year, quarter, existing, actualsByAc
 }
 
 function SettingsPage({ settings, setSettings, userRole, userEmail, accounts, txns, saveTxn, persistTxn, postWithApproval, deleteTxn }) {
+  const [showPw, setShowPw] = useState(false);
   // ── Year-end close (Stage 6.4) ──
   const [closeYear, setCloseYear] = useState(() => String(new Date().getFullYear() - 1));
   const [closeBusy, guardClose] = useSubmitGuard();
@@ -5980,6 +5981,12 @@ The books are locked through ${fmtDate(savedLock)}. ` +
       </button>
     </div>}
 
+    <div style={{ ...C.card, padding: "12px 22px", maxWidth: 600, marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <div style={{ fontSize: 13 }}><strong>Signed in as</strong> {userEmail}</div>
+      <button style={C.btn("secondary", true)} onClick={() => setShowPw(true)}>🔑 Change my password</button>
+      {showPw && <ChangePasswordModal username={userEmail} onDone={() => setShowPw(false)} onClose={() => setShowPw(false)} />}
+    </div>
+
     <div style={{ ...C.card, padding: 22, maxWidth: 600 }}>
       {/* ── Company Settings ── */}
       <div style={C.fg}>
@@ -6242,26 +6249,33 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
     </div>;
   }
 
-  // Create (or re-send) a user's login: a Firebase Auth account made through a
-  // SECONDARY app instance (so the admin's own session is untouched), then a
-  // password-reset email through which the person sets their own password.
-  // The throw-away initial password is never shown to anyone.
+  // Create a user's login: a Firebase Auth account made through a SECONDARY app
+  // instance (so the admin's own session is untouched) with a temporary password
+  // the admin types and tells the person; auth_users/{uid} links it to the
+  // username; the person must change the password at first sign-in. Usernames
+  // are not mailboxes, so nothing is emailed.
   const [inviting, setInviting] = useState("");
-  const inviteUser = async (email) => {
-    if (!email) return;
-    setInviting(email);
+  const [loginFor, setLoginFor] = useState(null);       // { username, pw, pw2 }
+  const createLogin = async () => {
+    const username = normalizeUserEmail(loginFor && loginFor.username);
+    const pw = (loginFor && loginFor.pw) || "";
+    if (!username) return;
+    if (pw.length < 8) { toast("Temporary password: at least 8 characters", "warning"); return; }
+    if (pw !== (loginFor.pw2 || "")) { toast("The two passwords do not match", "warning"); return; }
+    setInviting(username);
     try {
-      const name = "nasama-invite";
+      const name = "nasama-admin-create";
       const app2 = (firebase.apps || []).find(x => x.name === name) || firebase.initializeApp(firebase.app().options, name);
       const auth2 = app2.auth();
-      let created = false;
-      try { await auth2.createUserWithEmailAndPassword(email, randomPassword()); created = true; }
-      catch (e) { if (e.code !== "auth/email-already-in-use") throw e; }
+      const cred = await auth2.createUserWithEmailAndPassword(authEmailFor(username), pw);
+      const uid = cred.user.uid;
       try { await auth2.signOut(); } catch { }
-      await auth.sendPasswordResetEmail(email);
-      await db.collection('authorized_users').doc(email).set({ inviteSentAt: new Date().toISOString(), inviteSentBy: userEmail, loginCreated: true }, { merge: true });
-      logAudit(created ? "user_login_created" : "user_invite_resent", { email }, userRole, userEmail);
-      toast(created ? `Login created — ${email} has been emailed a link to set their password` : `Password link re-sent to ${email}`, "success");
+      const now = new Date().toISOString();
+      await db.collection('auth_users').doc(uid).set({ username, createdAt: now, createdBy: userEmail });
+      await db.collection('authorized_users').doc(username).set({ uid, authEmail: authEmailFor(username), loginCreated: true, loginCreatedAt: now, loginCreatedBy: userEmail, mustChangePassword: true }, { merge: true });
+      logAudit("user_login_created", { username }, userRole, userEmail);
+      toast(`Login created for ${username} — tell them the temporary password; they must change it at first sign-in`, "success");
+      setLoginFor(null);
     } catch (e) { toast(explainAuthError(e), "error"); }
     finally { setInviting(""); }
   };
@@ -6307,7 +6321,7 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
       logAudit(userForm.id ? "user_updated" : "user_added", { email, roleId: userPayload.roleId, active: userPayload.active }, userRole, userEmail);
       toast(userForm.id ? "User updated" : "User added", "success");
       setShowUser(false); setUserForm(null);
-      if (!userForm.id && userForm.sendInvite !== false) await inviteUser(email);
+      if (!userForm.id && userForm.sendInvite !== false) setLoginFor({ username: email, pw: "", pw2: "" });
     } catch (err) { toast(err.message, "error"); }
   };
 
@@ -6402,12 +6416,13 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
               <td style={C.td}>{(u.branchIds || []).length ? (u.branchIds || []).map(id => branchMap[id]?.name || id).join(", ") : "All"}</td>
               <td style={C.td}><span style={C.badge(u.active === false ? "neutral" : "success")}>{u.active === false ? "Inactive" : "Active"}</span></td>
               <td style={C.td}>{u.loginCreated
-                ? <span style={C.badge("success")} title={u.inviteSentAt ? `Invite sent ${fmtDate(String(u.inviteSentAt).slice(0, 10))}` : ""}>Login created</span>
+                ? <span style={C.badge("success")} title={u.loginCreatedAt ? `Created ${fmtDate(String(u.loginCreatedAt).slice(0, 10))}` : ""}>{u.mustChangePassword ? "Temp password" : "Login created"}</span>
                 : <span style={C.badge("warning")}>No login yet</span>}
                 {u.accessCode && <div style={{ fontSize: 10.5, color: "#B45309", marginTop: 3 }}>legacy code on record</div>}</td>
               <td style={C.td}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button style={{ ...C.btn("secondary", true), color: "#1D4ED8" }} disabled={inviting === u.id} title={u.loginCreated ? "Email a new password-setup link" : "Create the login and email a password-setup link"} onClick={() => inviteUser(u.id)}>{inviting === u.id ? "…" : u.loginCreated ? "Re-send link" : "Send invite"}</button>
+                  {!u.loginCreated && <button style={{ ...C.btn("secondary", true), color: "#1D4ED8" }} disabled={inviting === u.id} title="Create the Firebase login with a temporary password you tell the person" onClick={() => setLoginFor({ username: u.id, pw: "", pw2: "" })}>{inviting === u.id ? "…" : "Create login"}</button>}
+                  {u.loginCreated && <button style={C.btn("secondary", true)} title="To reset a forgotten password: delete this user in the Firebase console (Authentication › Users), then Create login again here" onClick={() => toast(`Reset for ${u.id}: in the Firebase console open Authentication › Users, delete ${authEmailFor(u.id)}, then click Create login here with a new temporary password.`, "info")}>Reset…</button>}
                   <button style={C.btn("secondary", true)} onClick={() => { setUserForm({ id: u.id, email: u.email || "", role: u.role || "secretary", roleId: u.roleId || u.role || "secretary", companyId: u.companyId || defaultCompanyId, branchIdsText: (u.branchIds || []).join(", ") || "main", paymentApprovalLimit: u.approvalLimits?.payments ?? "", journalApprovalLimit: u.approvalLimits?.journalEntries ?? "", active: u.active !== false }); setShowUser(true); }}>Edit / Reset Code</button>
                 </div>
               </td>
@@ -6417,7 +6432,7 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
       </div>
       <div style={{ ...C.card, padding: 16 }}>
         <div style={{ fontWeight: 700, marginBottom: 10 }}>Role Preview</div>
-        <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 12 }}>Logins are Firebase email + password with a verified email address. “Send invite” creates the login and emails a link to set the password; “Re-send link” does the same for someone who forgot it. Posting limits are read at sign-in — after changing them the person signs out and in.</div>
+        <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 12 }}>Usernames are not mailboxes, so nothing is emailed. “Create login” makes the Firebase login with a temporary password you tell the person; they must change it at first sign-in. A forgotten password is reset by deleting the login in the Firebase console (Authentication › Users) and creating it again here. Posting limits are read at sign-in — after changing them the person signs out and in.</div>
         {users.some(u => u.accessCode) && <button style={{ ...C.btn("secondary", true), color: "#DC2626", marginBottom: 12 }} onClick={clearLegacyCodes}>Remove legacy access codes ({users.filter(u => u.accessCode).length})</button>}
         <label style={C.label}>Template / Role</label>
         <Sel value={previewRoleId} onChange={e => setPreviewRoleId(e.target.value)}>
@@ -6473,6 +6488,20 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
       </table>
     </div>}
 
+    {loginFor && <div style={{ ...C.modal, zIndex: 1250 }} onClick={() => setLoginFor(null)}>
+      <div style={C.mbox(420)} onClick={e => e.stopPropagation()}>
+        <div style={C.mhdr}><span style={{ fontWeight: 700 }}>Create login — {loginFor.username}</span><button onClick={() => setLoginFor(null)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
+        <div style={C.mbdy}>
+          <div style={{ fontSize: 12.5, color: "#6B7280", marginBottom: 12, lineHeight: 1.5 }}>Choose a temporary password and tell it to the person directly. They will be asked to replace it the first time they sign in. Login id: <code>{authEmailFor(loginFor.username)}</code></div>
+          <div style={C.fg}>
+            <div><label style={C.label}>Temporary password</label><input type="password" style={C.input} value={loginFor.pw} onChange={e => setLoginFor(p => ({ ...p, pw: e.target.value }))} /></div>
+            <div><label style={C.label}>Repeat it</label><input type="password" style={C.input} value={loginFor.pw2} onChange={e => setLoginFor(p => ({ ...p, pw2: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") createLogin(); }} /></div>
+          </div>
+        </div>
+        <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setLoginFor(null)}>Cancel</button><button style={C.btn()} disabled={!!inviting} onClick={createLogin}>{inviting ? "Creating…" : "Create login"}</button></div>
+      </div>
+    </div>}
+
     {showUser && userForm && <div style={C.modal} onClick={() => { setShowUser(false); setUserForm(null); }}>
       <div style={C.mbox(720)} onClick={e => e.stopPropagation()}>
         <div style={C.mhdr}><span style={{ fontWeight: 700 }}>{userForm.id ? "Edit User" : "Add User"}</span><button onClick={() => { setShowUser(false); setUserForm(null); }} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>x</button></div>
@@ -6487,10 +6516,10 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
             <div><label style={C.label}>Journal Approval Limit</label><Inp type="number" value={userForm.journalApprovalLimit} onChange={e => setUserForm(p => ({ ...p, journalApprovalLimit: e.target.value }))} /></div>
             {!userForm.id && <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8 }}>
               <input id="security-user-invite" type="checkbox" checked={userForm.sendInvite !== false} onChange={e => setUserForm(p => ({ ...p, sendInvite: e.target.checked }))} />
-              <label htmlFor="security-user-invite" style={{ fontSize: 13, color: "#374151", cursor: "pointer" }}>Create the login now and email a password-setup link</label>
+              <label htmlFor="security-user-invite" style={{ fontSize: 13, color: "#374151", cursor: "pointer" }}>Create the Firebase login right after saving (you choose a temporary password)</label>
             </div>}
           </div>
-          <div style={{ marginTop: 10, fontSize: 12, color: "#6B7280" }}>The person signs in with their email and a password they set themselves through the emailed link. Their email must be verified before anything can be read.</div>
+          <div style={{ marginTop: 10, fontSize: 12, color: "#6B7280" }}>The username can be any short name (it does not have to be a real email). The person signs in with it and the password you give them, then sets their own.</div>
           <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8 }}>
             <input id="security-user-active" type="checkbox" checked={userForm.active !== false} onChange={e => setUserForm(p => ({ ...p, active: e.target.checked }))} />
             <label htmlFor="security-user-active" style={{ fontSize: 13, color: "#374151", cursor: "pointer" }}>User is active</label>
@@ -6565,21 +6594,23 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
 }
 
 function AuthGate({ children }) {
-  // ── Login = Firebase Auth email + password, verified email, and a record in
-  // authorized_users (which decides the role). No anonymous sessions, no access
-  // codes in the database. Firebase keeps the session across reloads.
+  // ── Login = Firebase Auth email/password behind a USERNAME. Usernames are
+  // not real mailboxes, so nothing here sends or verifies email: an admin
+  // creates each login with a temporary password (User Management), and the
+  // Firebase user id is mapped to the username in auth_users/{uid} — the rules
+  // accept only mapped logins, so a self-registered account gets nothing.
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState(null);
   const [userAccess, setUserAccess] = useState(null);
-  const [mode, setMode] = useState("signin");            // signin | setup | reset | verify
-  const [loginEmail, setLoginEmail] = useState("");
+  const [mode, setMode] = useState("signin");            // signin | bootstrap
+  const [loginName, setLoginName] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginPass2, setLoginPass2] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
-  const [pendingUser, setPendingUser] = useState(null);  // signed in, email not verified yet
+  const [mustChange, setMustChange] = useState(false);
   const adopting = useRef(false);
 
   const resolveUserAccess = async (sessionUser) => {
@@ -6598,65 +6629,52 @@ function AuthGate({ children }) {
       ? sanitizeRolePermissions(getDefaultSecurityTemplate("admin")?.permissions || {})
       : sanitizeRolePermissions(sessionUser?.permissions || template?.permissions || {});
     // approvalLimits (AED, per user) drive the approval workflow: blank = no limit.
-    // They are read here, at login — change them, and the user signs in again.
-    return { email: normalizeUserEmail(sessionUser?.email), roleId, legacyRole, permissions, templateName: template?.name || roleId,
+    // They are read here, at sign-in — change them, and the user signs in again.
+    return { email: normalizeUserEmail(sessionUser?.email || sessionUser?.username), roleId, legacyRole, permissions, templateName: template?.name || roleId,
              approvalLimits: sessionUser?.approvalLimits || {} };
   };
 
-  // A Firebase session becomes an app session only through authorized_users.
+  const finish = (username, data, uid) => {
+    claimLocalCache(username);
+    setUser({ email: username, uid });
+    setUserRole(data.role || "secretary");
+    setMustChange(!!data.mustChangePassword);
+    setMode("signin"); setLoginPass(""); setLoginPass2(""); setError("");
+    if (typeof logAudit === "function") logAudit("login", { username }, data.role || "", username).catch(() => {});
+  };
+
+  // A Firebase session becomes an app session only through auth_users → authorized_users.
   const adoptSession = async (fbUser) => {
     if (!fbUser) return false;
-    // A browser can still hold an ANONYMOUS session from the old access-code
-    // login (no email, never verifiable). Discard it and show the sign-in page.
-    if (fbUser.isAnonymous || !fbUser.email) {
-      try { await auth.signOut(); } catch { }
-      setPendingUser(null); setMode("signin");
-      return false;
-    }
-    const email = normalizeUserEmail(fbUser.email);
-    if (!fbUser.emailVerified) { setPendingUser(fbUser); setLoginEmail(fbUser.email || ""); setMode("verify"); return false; }
-    let data = null;
+    // A browser can still hold an ANONYMOUS session from the old access-code login.
+    if (fbUser.isAnonymous || !fbUser.email) { try { await auth.signOut(); } catch { } return false; }
+    let username = "";
     try {
-      const doc = await db.collection('authorized_users').doc(email).get();
-      if (doc.exists) data = doc.data() || {};
-    } catch (err) {
-      throw new Error(explainAuthError(err));
-    }
-    if (!data) {
-      // Empty database (first ever login) → this verified user becomes the admin.
-      // Under the production rules a non-authorised user cannot run this query,
-      // so it only ever succeeds on a fresh installation.
-      let empty = false;
-      try { empty = (await db.collection('authorized_users').limit(1).get()).empty; } catch { }
-      if (!empty) throw new Error("This email is not authorised. Ask an admin to add you in User Management.");
-      data = { email, role: 'admin', roleId: 'admin', branchIds: ['main'], active: true, addedAt: new Date().toISOString(), addedBy: 'first-login' };
-      await db.collection('authorized_users').doc(email).set(data, { merge: true });
-    }
+      const map = await db.collection('auth_users').doc(fbUser.uid).get();
+      username = map.exists ? normalizeUserEmail(map.data().username) : "";
+    } catch (err) { throw new Error(explainAuthError(err)); }
+    if (!username) throw new Error("This login is not linked to a user. Ask an admin to create your login in User Management.");
+    const doc = await db.collection('authorized_users').doc(username).get();
+    if (!doc.exists) throw new Error("This username is no longer authorised.");
+    const data = doc.data() || {};
     if (data.active === false) throw new Error("This user is inactive.");
-    const access = await resolveUserAccess({ email, ...data });
+    const access = await resolveUserAccess({ username, ...data });
     ACTIVE_USER_ACCESS = access;
-    claimLocalCache(email);
-    setUser({ email, uid: fbUser.uid });
-    setUserRole(data.role || access.legacyRole || "secretary");
     setUserAccess(access);
-    setPendingUser(null);
-    setMode("signin");
-    setLoginPass(""); setLoginPass2(""); setError("");
-    if (typeof logAudit === "function") logAudit("login", { email }, data.role || "", email).catch(() => {});
+    finish(username, data, fbUser.uid);
     return true;
   };
 
   const signOut = async () => {
-    try { if (user) await logAudit("logout", { email: user.email }, userRole, user.email); } catch { }
+    try { if (user) await logAudit("logout", { username: user.email }, userRole, user.email); } catch { }
     try { await auth.signOut(); } catch { }
     ACTIVE_USER_ACCESS = null;
     clearLocalCache();
     try { localStorage.removeItem(LS_CACHE_OWNER); } catch { }
-    setUser(null); setUserRole(null); setUserAccess(null); setPendingUser(null);
+    setUser(null); setUserRole(null); setUserAccess(null); setMustChange(false);
     setLoginPass(""); setLoginPass2(""); setError(""); setNotice(""); setMode("signin");
   };
 
-  // Firebase restores the session itself; every change passes through adoptSession.
   useEffect(() => {
     if (typeof auth === 'undefined' || !auth || !auth.onAuthStateChanged) { setLoading(false); return; }
     const unsub = auth.onAuthStateChanged(async fbUser => {
@@ -6682,41 +6700,40 @@ function AuthGate({ children }) {
     try { await fn(); } catch (err) { setError(explainAuthError(err)); } finally { setAuthBusy(false); }
   };
   const handleLogin = () => run(async () => {
-    const email = normalizeUserEmail(loginEmail);
-    if (!email || !loginPass) throw new Error("Enter your email and password.");
-    await auth.signInWithEmailAndPassword(email, loginPass);   // onAuthStateChanged → adoptSession
+    const username = normalizeUserEmail(loginName);
+    if (!username || !loginPass) throw new Error("Enter your username and password.");
+    await auth.signInWithEmailAndPassword(authEmailFor(username), loginPass);   // onAuthStateChanged → adoptSession
   });
-  // First-time setup: the person already exists in authorized_users (added by an
-  // admin) but has no login yet. The account is only usable once the email is
-  // verified AND an admin has authorised it, so this cannot grant access by itself.
-  const handleSetup = () => run(async () => {
-    const email = normalizeUserEmail(loginEmail);
-    if (!email) throw new Error("Enter your email.");
+  // FIRST ADMIN ONLY: before the locked-down rules are deployed, the admin
+  // creates their own login here and links it. Once the rules are live this
+  // path is refused (only an admin can write auth_users), which is the point.
+  const handleBootstrap = () => run(async () => {
+    const username = normalizeUserEmail(loginName);
+    if (!username) throw new Error("Enter your admin username.");
     if ((loginPass || "").length < 8) throw new Error("Choose a password of at least 8 characters.");
     if (loginPass !== loginPass2) throw new Error("The two passwords do not match.");
-    const cred = await auth.createUserWithEmailAndPassword(email, loginPass);
-    await cred.user.sendEmailVerification();
-    setPendingUser(cred.user); setMode("verify");
-  });
-  const handleReset = () => run(async () => {
-    const email = normalizeUserEmail(loginEmail);
-    if (!email) throw new Error("Enter your email.");
-    await auth.sendPasswordResetEmail(email);
-    setNotice(`A password-reset link has been emailed to ${email}. It also verifies the address.`);
-    setMode("signin");
-  });
-  const handleResendVerify = () => run(async () => {
-    const u = pendingUser || auth.currentUser;
-    if (!u) throw new Error("Sign in first.");
-    await u.sendEmailVerification();
-    setNotice(`Verification link sent to ${u.email}.`);
-  });
-  const handleVerified = () => run(async () => {
-    const u = pendingUser || auth.currentUser;
-    if (!u) throw new Error("Sign in first.");
-    await u.reload();
-    if (!u.emailVerified) throw new Error("Not verified yet — open the link in the email, then try again.");
-    await adoptSession(auth.currentUser);
+    adopting.current = true;   // we finish the linking ourselves
+    try {
+      let cred;
+      try { cred = await auth.createUserWithEmailAndPassword(authEmailFor(username), loginPass); }
+      catch (e) { if (e.code !== "auth/email-already-in-use") throw e; cred = await auth.signInWithEmailAndPassword(authEmailFor(username), loginPass); }
+      const uid = cred.user.uid;
+      const ref = db.collection('authorized_users').doc(username);
+      const doc = await ref.get();
+      let data = doc.exists ? doc.data() : null;
+      if (!data) {
+        const any = await db.collection('authorized_users').limit(1).get();
+        if (!any.empty) throw new Error("That username is not an authorised admin.");
+        data = { email: username, role: 'admin', roleId: 'admin', branchIds: ['main'], active: true, addedAt: new Date().toISOString(), addedBy: 'first-login' };
+      }
+      if (!(data.roleId === 'admin' || data.role === 'admin')) throw new Error("Only an admin can set up their own login here — ask an admin to create yours.");
+      const now = new Date().toISOString();
+      await db.collection('auth_users').doc(uid).set({ username, createdAt: now, createdBy: username });
+      await ref.set({ ...data, uid, authEmail: authEmailFor(username), loginCreated: true, mustChangePassword: false, updatedAt: now }, { merge: true });
+      const access = await resolveUserAccess({ username, ...data });
+      ACTIVE_USER_ACCESS = access; setUserAccess(access);
+      finish(username, { ...data, mustChangePassword: false }, uid);
+    } finally { adopting.current = false; }
   });
 
   if (loading) return <div style={{ position: "fixed", inset: 0, background: NAVY, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20 }}>
@@ -6726,43 +6743,34 @@ function AuthGate({ children }) {
 
   if (!user) {
     const link = (label, onClick) => <button type="button" onClick={onClick} style={{ background: "none", border: "none", color: "#1D4ED8", cursor: "pointer", fontSize: 12.5, padding: 0 }}>{label}</button>;
-    const onEnter = e => { if (e.key === "Enter") (mode === "setup" ? handleSetup : mode === "reset" ? handleReset : handleLogin)(); };
+    const onEnter = e => { if (e.key === "Enter") (mode === "bootstrap" ? handleBootstrap : handleLogin)(); };
     return <div style={{ position: "fixed", inset: 0, background: `linear-gradient(135deg, ${NAVY} 0%, #2D2D45 100%)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ background: "#fff", borderRadius: 16, padding: 40, width: "100%", maxWidth: 420, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
         <div style={{ textAlign: "center", marginBottom: 24 }}><Logo size={48} /><div style={{ fontWeight: 700, fontSize: 18, color: NAVY, marginTop: 8 }}>Nasama Properties</div><div style={{ fontSize: 13, color: "#6B7280" }}>Accounting System</div></div>
         {error && <div style={C.err}>{error}</div>}
         {notice && <div style={{ ...C.err, background: "#ECFDF5", color: "#047857", border: "1px solid #A7F3D0" }}>{notice}</div>}
-
-        {mode === "verify" ? <>
-          <div style={{ fontSize: 14, fontWeight: 700, color: NAVY, marginBottom: 8 }}>Verify your email</div>
-          <div style={{ fontSize: 13, color: "#374151", lineHeight: 1.6, marginBottom: 16 }}>
-            We sent a verification link to <strong>{(pendingUser && pendingUser.email) || loginEmail}</strong>. Open it, then come back and press the button below. Nothing can be read until the address is verified.
-          </div>
-          <button style={{ ...C.btn(), width: "100%", justifyContent: "center", padding: "12px 0" }} disabled={authBusy} onClick={handleVerified}>{authBusy ? "Checking…" : "I've verified — continue"}</button>
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14 }}>
-            {link("Resend the link", handleResendVerify)}
-            {link("Use another account", signOut)}
-          </div>
-        </> : <>
-          <div style={{ marginBottom: 12 }}><label style={C.label}>Email</label><Inp value={loginEmail} onChange={e => setLoginEmail(e.target.value)} placeholder="your@email.com" /></div>
-          {mode !== "reset" && <div style={{ marginBottom: 12 }}><label style={C.label}>{mode === "setup" ? "Choose a password" : "Password"}</label><input type="password" style={C.input} value={loginPass} onChange={e => setLoginPass(e.target.value)} placeholder="••••••••" onKeyDown={onEnter} /></div>}
-          {mode === "setup" && <div style={{ marginBottom: 12 }}><label style={C.label}>Repeat the password</label><input type="password" style={C.input} value={loginPass2} onChange={e => setLoginPass2(e.target.value)} placeholder="••••••••" onKeyDown={onEnter} /></div>}
-          {mode === "setup" && <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 12, lineHeight: 1.5 }}>For people an admin has already added in User Management. You will receive a verification email; access starts once it is confirmed.</div>}
-          {mode === "reset" && <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 12, lineHeight: 1.5 }}>We will email a link to set a new password.</div>}
-          <button style={{ ...C.btn(), width: "100%", justifyContent: "center", padding: "12px 0", marginTop: 4 }} disabled={authBusy}
-            onClick={mode === "setup" ? handleSetup : mode === "reset" ? handleReset : handleLogin}>
-            {authBusy ? "Please wait…" : mode === "setup" ? "Create my login" : mode === "reset" ? "Send reset link" : "Sign In"}
-          </button>
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14, gap: 8, flexWrap: "wrap" }}>
-            {mode === "signin" ? <>{link("Forgot password?", () => { setError(""); setMode("reset"); })}{link("First time here? Set your password", () => { setError(""); setMode("setup"); })}</>
-              : link("← Back to sign in", () => { setError(""); setMode("signin"); })}
-          </div>
+        <div style={{ marginBottom: 12 }}><label style={C.label}>Username</label><Inp value={loginName} onChange={e => setLoginName(e.target.value)} placeholder="your username" /></div>
+        <div style={{ marginBottom: 12 }}><label style={C.label}>{mode === "bootstrap" ? "Choose a password" : "Password"}</label><input type="password" style={C.input} value={loginPass} onChange={e => setLoginPass(e.target.value)} placeholder="••••••••" onKeyDown={onEnter} /></div>
+        {mode === "bootstrap" && <>
+          <div style={{ marginBottom: 12 }}><label style={C.label}>Repeat the password</label><input type="password" style={C.input} value={loginPass2} onChange={e => setLoginPass2(e.target.value)} placeholder="••••••••" onKeyDown={onEnter} /></div>
+          <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 12, lineHeight: 1.5 }}>For the first admin only, before the database rules are locked down. Everyone else gets their login from an admin in User Management.</div>
         </>}
+        <button style={{ ...C.btn(), width: "100%", justifyContent: "center", padding: "12px 0", marginTop: 4 }} disabled={authBusy} onClick={mode === "bootstrap" ? handleBootstrap : handleLogin}>
+          {authBusy ? "Please wait…" : mode === "bootstrap" ? "Create admin login" : "Sign In"}
+        </button>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14, gap: 8, flexWrap: "wrap", fontSize: 12.5, color: "#6B7280" }}>
+          {mode === "signin"
+            ? <><span>Forgot your password? Ask an admin to reset it.</span>{link("First admin setup", () => { setError(""); setMode("bootstrap"); })}</>
+            : link("← Back to sign in", () => { setError(""); setMode("signin"); })}
+        </div>
       </div>
     </div>;
   }
 
-  return React.Children.map(children, child => React.cloneElement(child, { userRole, userAccess, userEmail: user.email, signOut }));
+  return <>
+    {mustChange && <ChangePasswordModal forced username={user.email} onDone={() => setMustChange(false)} />}
+    {React.Children.map(children, child => React.cloneElement(child, { userRole, userAccess, userEmail: user.email, signOut }))}
+  </>;
 }
 
 // ╔══════════════════════════════════════════════════╗

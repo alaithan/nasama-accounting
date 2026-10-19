@@ -1392,26 +1392,36 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       (window.crypto || {}).getRandomValues ? window.crypto.getRandomValues(a) : a.forEach((_, i) => { a[i] = Math.floor(Math.random() * 256); });
       return "Nz" + Array.from(a, b => "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[b % 62]).join("") + "!7";
     };
+    // Usernames are not real mailboxes. Firebase Auth still needs an email-
+    // shaped identifier, so a username that is not a valid address gets a
+    // synthetic one (never mailed). The mapping is one-way and deterministic.
+    const AUTH_EMAIL_DOMAIN = "login.nasama.local";
+    const authEmailFor = (username) => {
+      const u = normalizeUserEmail(username);
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(u)) return u;
+      return u.replace(/@/g, ".at.").replace(/[^a-z0-9._-]+/g, ".").replace(/^\.+|\.+$/g, "") + "@" + AUTH_EMAIL_DOMAIN;
+    };
     /** Why a Firebase Auth / Firestore error happened, in the user's words. */
     const explainAuthError = (err) => {
       const code = (err && err.code) || "";
       const host = window.location.hostname || "this site";
       const map = {
         "auth/invalid-email": "That email address is not valid.",
-        "auth/user-not-found": "No login exists for that email yet. Use “First time here? Set your password”, or ask an admin to send you an invite.",
-        "auth/wrong-password": "Email or password is incorrect.",
-        "auth/invalid-credential": "Email or password is incorrect.",
-        "auth/invalid-login-credentials": "Email or password is incorrect.",
+        "auth/user-not-found": "No login exists for that username yet. Ask an admin to create it in User Management.",
+        "auth/wrong-password": "Username or password is incorrect.",
+        "auth/invalid-credential": "Username or password is incorrect.",
+        "auth/invalid-login-credentials": "Username or password is incorrect.",
         "auth/too-many-requests": "Too many attempts — wait a few minutes or reset your password.",
         "auth/user-disabled": "This login has been disabled by an admin.",
-        "auth/email-already-in-use": "A login already exists for that email. Sign in, or use “Forgot password”.",
+        "auth/email-already-in-use": "A login already exists for that username. To reset its password an admin deletes it in the Firebase console (Authentication › Users) and creates it again here.",
         "auth/weak-password": "Choose a longer password (at least 8 characters).",
         "auth/network-request-failed": "No connection to Firebase — check your internet.",
         "auth/unauthorized-domain": `Firebase Authentication does not trust ${host} yet. Add it under Firebase Authentication › Settings › Authorized domains.`,
         "auth/operation-not-allowed": "Email/password sign-in is switched off. Enable it under Firebase Authentication › Sign-in method.",
       };
       if (map[code]) return map[code];
-      if (code === "permission-denied" || /insufficient permissions/i.test((err && err.message) || "")) return "Your login is not authorised for this data. Make sure your email is verified and an admin has added you in User Management.";
+      if (code === "permission-denied" || /insufficient permissions/i.test((err && err.message) || "")) return "Your login is not authorised for this data. Ask an admin to create your login in User Management.";
+      if (code === "auth/requires-recent-login") return "Sign out and sign in again, then retry.";
       return (err && err.message) || "Could not reach Firebase.";
     };
     // useState that remembers its value in localStorage, so a section's filter /
@@ -3451,6 +3461,49 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
                 </tbody></table>}
           </div>
           <div style={C.mftr}><button style={C.btn("secondary")} onClick={onClose}>Close</button></div>
+        </div>
+      </div>;
+    }
+
+    // ── CHANGE PASSWORD ───────────────────────────────
+    // Re-authenticates with the current password (Firebase requires a recent
+    // sign-in), sets the new one, and clears the "must change" flag an admin
+    // set when creating the login. `forced` hides Cancel.
+    function ChangePasswordModal({ forced = false, username, onDone, onClose }) {
+      const [cur, setCur] = useState(""); const [next, setNext] = useState(""); const [next2, setNext2] = useState("");
+      const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+      const submit = async () => {
+        setErr("");
+        if ((next || "").length < 8) { setErr("Choose a password of at least 8 characters."); return; }
+        if (next !== next2) { setErr("The two passwords do not match."); return; }
+        if (next === cur) { setErr("The new password must differ from the current one."); return; }
+        setBusy(true);
+        try {
+          const u = auth.currentUser;
+          if (!u) throw new Error("Not signed in.");
+          const cred = firebase.auth.EmailAuthProvider.credential(u.email, cur);
+          await u.reauthenticateWithCredential(cred);
+          await u.updatePassword(next);
+          if (username) { try { await db.collection("authorized_users").doc(username).set({ mustChangePassword: false, passwordChangedAt: new Date().toISOString() }, { merge: true }); } catch (e) { console.warn("flag", e); } }
+          if (typeof logAudit === "function") logAudit("password_changed", { username }, "", username).catch(() => {});
+          toast("Password changed", "success");
+          onDone && onDone();
+        } catch (e) { setErr(explainAuthError(e)); }
+        finally { setBusy(false); }
+      };
+      return <div style={{ ...C.modal, zIndex: 1400 }} onClick={forced ? undefined : onClose}>
+        <div style={C.mbox(420)} onClick={e => e.stopPropagation()}>
+          <div style={C.mhdr}><span style={{ fontWeight: 700 }}>{forced ? "Set your own password" : "Change password"}</span>{!forced && <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>}</div>
+          <div style={C.mbdy}>
+            {forced && <div style={{ fontSize: 12.5, color: "#6B7280", marginBottom: 12, lineHeight: 1.5 }}>Your login was created with a temporary password. Choose your own before continuing.</div>}
+            {err && <div style={C.err}>{err}</div>}
+            <div style={C.fg}>
+              <div style={{ gridColumn: "1 / -1" }}><label style={C.label}>{forced ? "Temporary password" : "Current password"}</label><input type="password" style={C.input} value={cur} onChange={e => setCur(e.target.value)} /></div>
+              <div><label style={C.label}>New password</label><input type="password" style={C.input} value={next} onChange={e => setNext(e.target.value)} /></div>
+              <div><label style={C.label}>Repeat it</label><input type="password" style={C.input} value={next2} onChange={e => setNext2(e.target.value)} onKeyDown={e => { if (e.key === "Enter") submit(); }} /></div>
+            </div>
+          </div>
+          <div style={C.mftr}>{!forced && <button style={C.btn("secondary")} onClick={onClose}>Cancel</button>}<button style={C.btn()} disabled={busy} onClick={submit}>{busy ? "Saving…" : "Save password"}</button></div>
         </div>
       </div>;
     }

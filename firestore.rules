@@ -3,22 +3,22 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // ── Who may touch the data ──────────────────────────────────────────
-    // Every request must come from a real Firebase Auth user (email/password)
-    // whose email is verified, who has a record in authorized_users, and who
-    // is not switched off. Anonymous sessions are refused outright — the old
-    // rule accepted ANY signed-in session, including anonymous ones anyone
-    // could create from the open internet.
+    // Usernames in this system are NOT real mailboxes, so nothing here relies
+    // on email. A request is accepted only when:
+    //   1. it comes from a Firebase Auth email/password sign-in (never anonymous),
+    //   2. auth_users/{uid} maps that Firebase user to a username — only an
+    //      admin can write that mapping, so a self-registered account is useless,
+    //   3. authorized_users/{username} exists and is not switched off.
     function signedIn() {
       return request.auth != null
-        && request.auth.token.firebase.sign_in_provider != 'anonymous'
-        && request.auth.token.email_verified == true;
+        && request.auth.token.firebase.sign_in_provider == 'password';
     }
-    function userPath() {
-      return /databases/$(database)/documents/authorized_users/$(request.auth.token.email.lower());
-    }
+    function mapPath() { return /databases/$(database)/documents/auth_users/$(request.auth.uid); }
+    function username() { return get(mapPath()).data.username; }
+    function userPath() { return /databases/$(database)/documents/authorized_users/$(username()); }
     function userData() { return get(userPath()).data; }
     function isAuthorized() {
-      return signedIn() && exists(userPath()) && userData().active != false;
+      return signedIn() && exists(mapPath()) && exists(userPath()) && userData().active != false;
     }
     function roleId() {
       return userData().roleId != null ? userData().roleId : userData().role;
@@ -29,11 +29,21 @@ service cloud.firestore {
     // The "sales" role is read-only (it sees the pipeline and performance).
     function canWrite() { return isAuthorized() && roleId() != 'sales'; }
 
-    // ── Admin-only configuration ────────────────────────────────────────
-    match /authorized_users/{email} {
-      allow read: if isAuthorized() && (request.auth.token.email.lower() == email || isAdmin());
+    // ── Login ↔ user mapping and the user records ───────────────────────
+    match /auth_users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
       allow write: if isAdmin();
     }
+    match /authorized_users/{name} {
+      allow read: if isAuthorized() && (username() == name || isAdmin());
+      // A user may only flip their own "must change password" flag.
+      allow update: if isAdmin()
+        || (isAuthorized() && username() == name
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['mustChangePassword', 'passwordChangedAt']));
+      allow create, delete: if isAdmin();
+    }
+
+    // ── Admin-only configuration ────────────────────────────────────────
     match /security_roles/{id}    { allow read: if isAuthorized(); allow write: if isAdmin(); }
     match /approval_policies/{id} { allow read: if isAuthorized(); allow write: if isAdmin(); }
     match /company_branches/{id}  { allow read: if isAuthorized(); allow write: if isAdmin(); }
