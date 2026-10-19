@@ -6494,8 +6494,8 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
         <div style={C.mbdy}>
           <div style={{ fontSize: 12.5, color: "#6B7280", marginBottom: 12, lineHeight: 1.5 }}>Choose a temporary password and tell it to the person directly. They will be asked to replace it the first time they sign in. Login id: <code>{authEmailFor(loginFor.username)}</code></div>
           <div style={C.fg}>
-            <div><label style={C.label}>Temporary password</label><input type="password" style={C.input} value={loginFor.pw} onChange={e => setLoginFor(p => ({ ...p, pw: e.target.value }))} /></div>
-            <div><label style={C.label}>Repeat it</label><input type="password" style={C.input} value={loginFor.pw2} onChange={e => setLoginFor(p => ({ ...p, pw2: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") createLogin(); }} /></div>
+            <div><label style={C.label}>Temporary password</label><PasswordInput value={loginFor.pw} onChange={e => setLoginFor(p => ({ ...p, pw: e.target.value }))} /></div>
+            <div><label style={C.label}>Repeat it</label><PasswordInput value={loginFor.pw2} onChange={e => setLoginFor(p => ({ ...p, pw2: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") createLogin(); }} /></div>
           </div>
         </div>
         <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setLoginFor(null)}>Cancel</button><button style={C.btn()} disabled={!!inviting} onClick={createLogin}>{inviting ? "Creating…" : "Create login"}</button></div>
@@ -6754,9 +6754,9 @@ function AuthGate({ children }) {
         {error && <div style={C.err}>{error}</div>}
         {notice && <div style={{ ...C.err, background: "#ECFDF5", color: "#047857", border: "1px solid #A7F3D0" }}>{notice}</div>}
         <div style={{ marginBottom: 12 }}><label style={C.label}>Username</label><Inp value={loginName} onChange={e => setLoginName(e.target.value)} placeholder="your username" /></div>
-        <div style={{ marginBottom: 12 }}><label style={C.label}>{mode === "bootstrap" ? "Choose a password" : "Password"}</label><input type="password" style={C.input} value={loginPass} onChange={e => setLoginPass(e.target.value)} placeholder="••••••••" onKeyDown={onEnter} /></div>
+        <div style={{ marginBottom: 12 }}><label style={C.label}>{mode === "bootstrap" ? "Choose a password" : "Password"}</label><PasswordInput value={loginPass} onChange={e => setLoginPass(e.target.value)} onKeyDown={onEnter} /></div>
         {mode === "bootstrap" && <>
-          <div style={{ marginBottom: 12 }}><label style={C.label}>Repeat the password</label><input type="password" style={C.input} value={loginPass2} onChange={e => setLoginPass2(e.target.value)} placeholder="••••••••" onKeyDown={onEnter} /></div>
+          <div style={{ marginBottom: 12 }}><label style={C.label}>Repeat the password</label><PasswordInput value={loginPass2} onChange={e => setLoginPass2(e.target.value)} onKeyDown={onEnter} /></div>
           <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 12, lineHeight: 1.5 }}>For the first admin only, before the database rules are locked down. Everyone else gets their login from an admin in User Management.</div>
         </>}
         <button style={{ ...C.btn(), width: "100%", justifyContent: "center", padding: "12px 0", marginTop: 4 }} disabled={authBusy} onClick={mode === "bootstrap" ? handleBootstrap : handleLogin}>

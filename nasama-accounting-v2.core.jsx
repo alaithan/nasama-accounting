@@ -3465,6 +3465,20 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       </div>;
     }
 
+    // ── PASSWORD FIELD with a show/hide eye ──────────
+    function PasswordInput({ value, onChange, onKeyDown, placeholder = "••••••••", autoFocus = false }) {
+      const [show, setShow] = useState(false);
+      return <div style={{ position: "relative" }}>
+        <input type={show ? "text" : "password"} style={{ ...C.input, paddingRight: 40 }} value={value} onChange={onChange} onKeyDown={onKeyDown} placeholder={placeholder} autoFocus={autoFocus} autoComplete="off" />
+        <button type="button" tabIndex={-1} title={show ? "Hide password" : "Show password"} onClick={() => setShow(s => !s)}
+          style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#6B7280", padding: 4, display: "flex" }}>
+          {show
+            ? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0112 20C5 20 1 12 1 12a21.8 21.8 0 015.06-6.06"/><path d="M9.9 4.24A10.94 10.94 0 0112 4c7 0 11 8 11 8a21.8 21.8 0 01-3.17 4.19"/><path d="M14.12 14.12A3 3 0 019.88 9.88"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>}
+        </button>
+      </div>;
+    }
+
     // ── CHANGE PASSWORD ───────────────────────────────
     // Re-authenticates with the current password (Firebase requires a recent
     // sign-in), sets the new one, and clears the "must change" flag an admin
@@ -3498,9 +3512,9 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
             {forced && <div style={{ fontSize: 12.5, color: "#6B7280", marginBottom: 12, lineHeight: 1.5 }}>Your login was created with a temporary password. Choose your own before continuing.</div>}
             {err && <div style={C.err}>{err}</div>}
             <div style={C.fg}>
-              <div style={{ gridColumn: "1 / -1" }}><label style={C.label}>{forced ? "Temporary password" : "Current password"}</label><input type="password" style={C.input} value={cur} onChange={e => setCur(e.target.value)} /></div>
-              <div><label style={C.label}>New password</label><input type="password" style={C.input} value={next} onChange={e => setNext(e.target.value)} /></div>
-              <div><label style={C.label}>Repeat it</label><input type="password" style={C.input} value={next2} onChange={e => setNext2(e.target.value)} onKeyDown={e => { if (e.key === "Enter") submit(); }} /></div>
+              <div style={{ gridColumn: "1 / -1" }}><label style={C.label}>{forced ? "Temporary password" : "Current password"}</label><PasswordInput value={cur} onChange={e => setCur(e.target.value)} /></div>
+              <div><label style={C.label}>New password</label><PasswordInput value={next} onChange={e => setNext(e.target.value)} /></div>
+              <div><label style={C.label}>Repeat it</label><PasswordInput value={next2} onChange={e => setNext2(e.target.value)} onKeyDown={e => { if (e.key === "Enter") submit(); }} /></div>
             </div>
           </div>
           <div style={C.mftr}>{!forced && <button style={C.btn("secondary")} onClick={onClose}>Cancel</button>}<button style={C.btn()} disabled={busy} onClick={submit}>{busy ? "Saving…" : "Save password"}</button></div>
