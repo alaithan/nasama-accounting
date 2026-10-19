@@ -6265,21 +6265,31 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
     if (pw.length < 8) { toast("Temporary password: at least 8 characters", "warning"); return; }
     if (pw !== (loginFor.pw2 || "")) { toast("The two passwords do not match", "warning"); return; }
     setInviting(username);
+    // Each step is given a deadline so a stalled network call fails with a
+    // message instead of "Creating…" forever; if the Firebase login was made
+    // but could not be linked, it is deleted again so the next attempt is clean.
+    const step = (label, promise, ms = 25000) => Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error(`Timed out while ${label}. Check the connection and the browser console (F12), then try again.`)), ms))]);
+    let cred = null, auth2 = null;
     try {
       const name = "nasama-admin-create";
       const app2 = (firebase.apps || []).find(x => x.name === name) || firebase.initializeApp(firebase.app().options, name);
-      const auth2 = app2.auth();
-      const cred = await auth2.createUserWithEmailAndPassword(authEmailFor(username), pw);
+      auth2 = app2.auth();
+      cred = await step("creating the Firebase login", auth2.createUserWithEmailAndPassword(authEmailFor(username), pw));
       const uid = cred.user.uid;
-      try { await auth2.signOut(); } catch { }
       const now = new Date().toISOString();
-      await db.collection('auth_users').doc(uid).set({ username, createdAt: now, createdBy: userEmail });
-      await db.collection('authorized_users').doc(username).set({ uid, authEmail: authEmailFor(username), loginCreated: true, loginCreatedAt: now, loginCreatedBy: userEmail, mustChangePassword: true }, { merge: true });
+      await step("linking the login to the username", db.collection('auth_users').doc(uid).set({ username, createdAt: now, createdBy: userEmail }));
+      await step("updating the user record", db.collection('authorized_users').doc(username).set({ uid, authEmail: authEmailFor(username), loginCreated: true, loginCreatedAt: now, loginCreatedBy: userEmail, mustChangePassword: true }, { merge: true }));
+      cred = null;   // linked — keep it
       logAudit("user_login_created", { username }, userRole, userEmail);
       toast(`Login created for ${username} — tell them the temporary password; they must change it at first sign-in`, "success");
       setLoginFor(null);
-    } catch (e) { toast(explainAuthError(e), "error"); }
-    finally { setInviting(""); }
+    } catch (e) {
+      console.error("Create login failed:", e);
+      // Login made but not linked: remove it, otherwise the next attempt says "already exists".
+      if (cred && cred.user) { try { await step("removing the half-made login", cred.user.delete(), 10000); } catch (e2) { console.warn("cleanup", e2); } }
+      toast(explainAuthError(e), "error");
+    }
+    finally { if (auth2) { try { await auth2.signOut(); } catch { } } setInviting(""); }
   };
   // One-off clean-up after moving to password logins: access codes must not stay
   // in the database (they were stored in clear text).
