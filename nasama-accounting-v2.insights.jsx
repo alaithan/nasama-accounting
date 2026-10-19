@@ -31,7 +31,7 @@ function insInvoiceMeta(invoices, txns, accounts) {
   const reversed = reversedTxnIds(txns);
   const rcs = new Map();
   insLive(txns).forEach(t => {
-    if (!t.invoice_id || isInReversedPair(t, reversed)) return;
+    if (!t.invoice_id || isInvoiceOwnedTxn(t) || isInReversedPair(t, reversed)) return;
     if (!rcs.has(t.invoice_id)) rcs.set(t.invoice_id, []);
     rcs.get(t.invoice_id).push(t);
   });
@@ -41,7 +41,7 @@ function insInvoiceMeta(invoices, txns, accounts) {
     const total = Math.round((inv.totals?.incl || 0) * 100);
     const paid = list.reduce((s, t) => s + Math.round(srReceivedAED(t, accounts) * 100), 0);
     const lastReceipt = list.map(t => t.date || "").sort().pop() || "";
-    m.set(inv.id, { inv, total, paid, due: Math.max(0, total - paid), receipts: list, lastReceipt, dueDate: inv.dueDate || invAddDays(inv.invoiceDate, 30) });
+    m.set(inv.id, { inv, total, paid, due: Math.max(0, total - paid), receipts: list, lastReceipt, dueDate: invDueDateOf(inv) });
   });
   return m;
 }
@@ -82,9 +82,11 @@ function insBrokerPayables({ deals, txns, accounts, employees }) {
     const paid = paidTxn > 0 ? paidTxn : (!d.broker_accrued ? (d.broker_paid_amount || 0) : 0);
     const accrued = accruedByDeal.get(d.id) || 0;
     const owed = Math.max(0, dueOnCash - paid);
-    return { deal: d, broker: d.broker_name || d.broker_id, pct, assumed, expected, dueOnCash, collectedRatio, paid, accrued, owed };
-  }).filter(r => r && r.owed > 0).sort((a, b) => b.owed - a.owed);
+    const prepaid = Math.max(0, paid - dueOnCash);    // paid ahead of collection — nets off future shares
+    return { deal: d, broker: d.broker_name || d.broker_id, pct, assumed, expected, dueOnCash, collectedRatio, paid, accrued, owed, prepaid };
+  }).filter(r => r && (r.owed > 0 || r.prepaid > 0)).sort((a, b) => b.owed - a.owed);
 }
+const insBrokerOwedRows = args => insBrokerPayables(args).filter(r => r.owed > 0);
 
 // ── VAT quarters (UAE tax periods) ──
 // settings.vatQuarterStartMonth: 1 (Jan–Mar …), 2 (Feb–Apr …) or 3 (Mar–May …).
@@ -109,6 +111,7 @@ function insVatReturn({ txns, accounts, from, to }) {
   const r = { from, to, stdSupplies: 0, outputVat: 0, zeroExempt: 0, stdExpenses: 0, inputVat: 0, settled: 0, settlements: [] };
   insLive(txns).forEach(t => {
     const d = t.date || "";
+    if (typeof isClosingTxn === "function" && isClosingTxn(t)) return;   // not a supply
     if (isVATSettlementTxn(t, accounts)) {
       if (d > to && d <= isoAddDays(to, 120)) { r.settled += (t.lines || []).reduce((s, l) => outA && l.accountId === outA.id ? s + (l.debit || 0) - (l.credit || 0) : s, 0) - (t.lines || []).reduce((s, l) => inA && l.accountId === inA.id ? s + (l.credit || 0) - (l.debit || 0) : s, 0); r.settlements.push(t); }
       return;
@@ -146,10 +149,17 @@ function insCashForecast({ asOf, openingCash, deals, txns, accounts, invoices, p
     items.push({ week: w, date, kind, label, amountC, overdue: !!date && date < start, ...extra });
     if (kind === "in") W[w].inflow += amountC; else W[w].outflow += amountC;
   };
+  // A broker already paid ahead of collection has that much of the future
+  // shares covered — net it off the first future shares of that deal.
+  const payables = insBrokerPayables({ deals, txns, accounts, employees });
+  const prepaidLeft = new Map(payables.filter(r => r.prepaid > 0).map(r => [r.deal.id, r.prepaid]));
   const brokerCut = (deal, grossC) => {
     if (!deal || !deal.broker_id) return 0;
     const net = deal.vat_applicable ? Math.round(grossC / 1.05) : grossC;
-    return Math.round(net * insBrokerShareOf(deal, employees).pct / 100);
+    let cut = Math.round(net * insBrokerShareOf(deal, employees).pct / 100);
+    const pre = prepaidLeft.get(deal.id) || 0;
+    if (pre > 0) { const use = Math.min(pre, cut); prepaidLeft.set(deal.id, pre - use); cut -= use; }
+    return cut;
   };
   // Inflows: installment schedules first (they are the most specific) …
   const scheduled = new Set();
@@ -165,14 +175,14 @@ function insCashForecast({ asOf, openingCash, deals, txns, accounts, invoices, p
   const meta = insInvoiceMeta(invoices, txns, accounts);
   meta.forEach(m => {
     if (m.due <= 50) return;
-    const lineDeals = [...new Set((m.inv.lineItems || []).map(li => li.dealId).filter(Boolean))];
+    const lineDeals = [...new Set((m.inv.lineItems || []).map(li => li.dealId).filter(Boolean).concat(m.inv.dealId || m.inv.deal_id || []))];
     if (lineDeals.length && lineDeals.every(id => scheduled.has(id))) return;
     add(m.dueDate, "in", `Inv #${m.inv.invoiceNumber} — ${(m.inv.invoicedTo && m.inv.invoicedTo.companyName) || ""}`, m.due, { source: "invoice" });
     const deal = lineDeals.length === 1 ? (deals || []).find(x => x.id === lineDeals[0]) : null;
     if (deal && !scheduled.has(deal.id)) add(m.dueDate, "out", `Broker share — ${deal.broker_name || ""} · ${deal.property_name || ""}`.trim(), brokerCut(deal, m.due), { source: "broker" });
   });
   // Brokers already owed on cash collected → now.
-  insBrokerPayables({ deals, txns, accounts, employees }).forEach(r => add(start, "out", `Broker owed — ${r.broker} · ${r.deal.property_name || ""}`, r.owed, { source: "broker" }));
+  payables.filter(r => r.owed > 0).forEach(r => add(start, "out", `Broker owed — ${r.broker} · ${r.deal.property_name || ""}`, r.owed, { source: "broker" }));
   // Planned expenses, recurring ones repeated through the horizon.
   (plannedExpenses || []).filter(p => p && p.nextDueDate && !["Paid", "Cancelled", "Skipped"].includes(p.status)).forEach(p => {
     const gross = Math.round((p.amountExpected || 0) * (p.vatApplicable && !p.amountIncludesVat ? 1 + (p.vatRate || 5) / 100 : 1));
@@ -271,7 +281,10 @@ function insEarnedVsCollected({ txns, accounts, invoices, asOf, months = 12 }) {
     const s = series.get(insMonthKey(t.date));
     if (!s) return;
     (t.lines || []).forEach(l => { const a = byId.get(l.accountId); if (a && a.type === "Revenue") s.earned += (l.credit || 0) - (l.debit || 0); });
-    if (t.txnType === "SR" && !isInReversedPair(t, reversed)) s.collected += txnCashNet(t, byId);
+    // Commission cash in: Sale Receipts and deal-linked bank imports alike (as
+    // dealCollection counts them), reversed pairs and client money excluded.
+    const cashIn = txnCashNet(t, byId);
+    if (cashIn > 0 && (t.txnType === "SR" || t.deal_id) && !isInReversedPair(t, reversed) && !isClientFundsTxn(t)) s.collected += cashIn;
   });
   const meta = insInvoiceMeta(invoices, txns, accounts);
   const devs = new Map();
@@ -292,7 +305,8 @@ function insBudgetVsActual({ budgets, accounts, txns, year, asOf }) {
   const byId = insAcctMap(accounts);
   const byCode = new Map((accounts || []).map(a => [a.code, a]));
   const curYear = Number(String(asOf).slice(0, 4)), curMonth = Number(String(asOf).slice(5, 7));
-  const monthsElapsed = year < curYear ? 12 : year > curYear ? 0 : curMonth;
+  const dim = new Date(curYear, curMonth, 0).getDate();
+  const monthsElapsed = year < curYear ? 12 : year > curYear ? 0 : (curMonth - 1) + Number(String(asOf).slice(8, 10)) / dim;
   const elapsedFrac = q => Math.max(0, Math.min(1, (monthsElapsed - (q - 1) * 3) / 3));
   const rows = new Map();
   const row = code => { if (!rows.has(code)) { const a = byCode.get(code); rows.set(code, { code, account: a, type: a ? a.type : "", budgetYear: 0, budgetYTD: 0, budgetRest: 0, actualYTD: 0 }); } return rows.get(code); };
@@ -314,7 +328,7 @@ function insBudgetVsActual({ budgets, accounts, txns, year, asOf }) {
     ...r, variance: r.actualYTD - r.budgetYTD,
     // Full year: actual to date + the budget for the rest of the year; where
     // there is no budget, the run-rate so far.
-    projection: r.budgetYear ? r.actualYTD + r.budgetRest : (monthsElapsed ? Math.round(r.actualYTD / monthsElapsed * 12) : 0),
+    projection: r.budgetYear ? r.actualYTD + r.budgetRest : (monthsElapsed > 0 ? Math.round(r.actualYTD / monthsElapsed * 12) : 0),
   })).sort((a, b) => a.type.localeCompare(b.type) * -1 || a.code.localeCompare(b.code));
   const sum = (type, k) => list.filter(r => r.type === type).reduce((s, r) => s + r[k], 0);
   const tot = k => ({ revenue: sum("Revenue", k), expense: sum("Expense", k), ni: sum("Revenue", k) - sum("Expense", k) });
@@ -368,7 +382,7 @@ function insAlerts({ asOf, kpis, deals, txns, accounts, invoices, employees, set
       .filter(r => r.dueCents > 0 && r.dueDate && insDays(r.dueDate, asOf) > 60).forEach(r => { instOver += r.dueCents; instCount++; });
   });
   if (instCount) push("warning", `${instCount} instalment(s) overdue more than 60 days`, `${fmtAED(instOver)} still to collect on payment plans.`, "deals");
-  const owed = insBrokerPayables({ deals, txns, accounts, employees });
+  const owed = insBrokerOwedRows({ deals, txns, accounts, employees });
   if (owed.length) push("info", `Brokers owed ${fmtAED(owed.reduce((s, r) => s + r.owed, 0))} on cash already collected`, `${owed.length} deal(s): ${owed.slice(0, 3).map(r => r.broker).join(", ")}${owed.length > 3 ? "…" : ""}`, "deals");
   const stale = (deals || []).filter(d => d.stage === "Commission Earned" && dealCollection(d, txns, accounts).collectedCents === 0 &&
     insDays(String(d.updated_at || d.created_at || asOf).slice(0, 10), asOf) > 30);
@@ -403,7 +417,7 @@ function InsightsPage({ accounts, txns, deals, ledger, settings, setSettings, pl
 
   const forecast = useMemo(() => tab === "forecast" ? insCashForecast({ asOf, openingCash: kpis.availableCash, deals, txns, accounts, invoices, plannedExpenses, employees, settings }) : null, [tab, kpis.availableCash, deals, txns, accounts, invoices, plannedExpenses, employees, settings]);
   const aging = useMemo(() => tab === "aging" ? insReceivablesAging({ invoices, txns, accounts, asOf }) : null, [tab, invoices, txns, accounts]);
-  const payables = useMemo(() => tab === "brokers" ? insBrokerPayables({ deals, txns, accounts, employees }) : null, [tab, deals, txns, accounts, employees]);
+  const payables = useMemo(() => tab === "brokers" ? insBrokerOwedRows({ deals, txns, accounts, employees }) : null, [tab, deals, txns, accounts, employees]);
   const be = useMemo(() => (tab === "breakeven" || tab === "scenarios") ? insBreakEven({ deals, txns, accounts, fixedOverheadC: kpis.avgMonthlyFixedOverhead, asOf }) : null, [tab, deals, txns, accounts, kpis.avgMonthlyFixedOverhead]);
   const quarters = useMemo(() => insVatQuarterList(vatStart, asOf, 6), [vatStart]);
   const vat = useMemo(() => tab === "vat" && quarters[vatIdx] ? insVatReturn({ txns, accounts, ...quarters[vatIdx] }) : null, [tab, txns, accounts, quarters, vatIdx]);
@@ -568,7 +582,7 @@ function InsightsPage({ accounts, txns, deals, ledger, settings, setSettings, pl
     {tab === "budget" && bva && <div style={card}>
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
         <Sel value={String(budgetYear)} onChange={e => setBudgetYear(parseInt(e.target.value, 10))}>{[0, 1, 2].map(i => new Date().getFullYear() - i).map(y => <option key={y} value={y}>{y}</option>)}</Sel>
-        <span style={{ fontSize: 12, color: "#6B7280" }}>{bva.monthsElapsed} of 12 months elapsed{!bva.hasRevenueBudget ? " · no revenue targets set (add them in Budget)" : ""}</span>
+        <span style={{ fontSize: 12, color: "#6B7280" }}>{bva.monthsElapsed.toFixed(1)} of 12 months elapsed{!bva.hasRevenueBudget ? " · no revenue targets set (add them in Budget)" : ""}</span>
       </div>
       {tiles(["revenue", "expense", "ni"].map(k => tile(k === "ni" ? "Net income" : k === "revenue" ? "Revenue" : "Expenses",
         money(bva.actualYTD[k]), `budget YTD ${money(bva.budgetYTD[k])} · full-year projection ${money(bva.projection[k])}`, k === "expense" ? "#DC2626" : "#059669")))}

@@ -97,7 +97,7 @@ function reconPdfLinesToRows(textLines) {
   (textLines || []).forEach(t => {
     const nums = t.match(numRe);
     if (!nums || !nums.length) return;
-    if (openingRe.test(t) && out.length === 0) { openingBal = reconParseAmount(nums[nums.length - 1]); return; }
+    if (openingRe.test(t)) { if (openingBal == null) openingBal = reconParseAmount(nums[nums.length - 1]); return; }
     const dm = t.match(dateRe);
     if (!dm) return;
     let amount = nums[0], balance = "";
@@ -114,7 +114,9 @@ function reconPdfLinesToRows(textLines) {
 function reconSignPdfRows(rows, openingBal) {
   const explicit = a => /^\s*-|^\s*\(|\b(?:CR|DR)\b/i.test(String(a || ""));
   const iso = r => reconNormDate(r.Date, "dmy");
-  const asc = rows.length < 2 || iso(rows[0]) <= iso(rows[rows.length - 1]);
+  const firstBal = rows.length ? reconParseAmount(rows[0].Balance) : null, lastBal = rows.length ? reconParseAmount(rows[rows.length - 1].Balance) : null;
+  const asc = rows.length < 2 || (iso(rows[0]) !== iso(rows[rows.length - 1]) ? iso(rows[0]) < iso(rows[rows.length - 1])
+    : (openingBal != null && firstBal != null && lastBal != null ? Math.abs(firstBal - openingBal) <= Math.abs(lastBal - openingBal) : true));
   const ordered = asc ? rows.slice() : rows.slice().reverse();
   let prev = openingBal;
   const signed = ordered.map(r => {
@@ -469,7 +471,9 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, userR
   // Amounts that already matched — flag a likely duplicate when the same value also sits in Outstanding.
   const matchedAmounts = new Set([...result.matched, ...result.near].map(m => m.book.amountC));
   const bankFeesAcct = (accounts || []).find(a => a.code === "5600") || (accounts || []).find(a => a.type === "Expense" && /bank\s*(fee|charge)/i.test(a.name || ""));
-  const pairOptions = (line) => outstanding
+  // Any unmatched book entry up to the statement end — including older items
+  // that only cleared now (outside the auto-match date window).
+  const pairOptions = (line) => result.bookOnly.filter(b => !b.reconciled && (!period.to || b.date <= period.to))
     .filter(b => Math.sign(b.amountC) === Math.sign(line.amountC))
     .sort((a, b) => Math.abs(a.amountC - line.amountC) - Math.abs(b.amountC - line.amountC))
     .slice(0, 25);
@@ -498,7 +502,9 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, userR
       const ops = [{ ref, data: session }].concat(matchedBookIds.map(id => ({ ref: db.collection("transactions").doc(id), data: stamp, merge: true })));
       for (let i = 0; i < ops.length; i += 450) {
         const b = db.batch();
-        ops.slice(i, i + 450).forEach(o => o.merge ? b.set(o.ref, o.data, { merge: true }) : b.set(o.ref, o.data));
+        // update(), not set-merge: if an entry was deleted meanwhile the batch
+        // fails instead of creating a stub transaction document.
+        ops.slice(i, i + 450).forEach(o => o.merge ? b.update(o.ref, o.data) : b.set(o.ref, o.data));
         await b.commit();
       }
       if (typeof logAudit === "function") logAudit("bank_reconciliation_saved", { id: ref.id, account: acct.code, to: period.to, matched: matchedBookIds.length, unexplainedC }, userRole, userEmail);
@@ -521,7 +527,7 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, userR
         .concat([{ ref: db.collection("bank_reconciliations").doc(last.id), data: { status: "void", voidedAt: new Date().toISOString(), voidedBy: userEmail || "" } }]);
       for (let i = 0; i < ops.length; i += 450) {
         const b = db.batch();
-        ops.slice(i, i + 450).forEach(o => b.set(o.ref, o.data, { merge: true }));
+        ops.slice(i, i + 450).forEach(o => b.update(o.ref, o.data));
         await b.commit();
       }
       if (typeof logAudit === "function") logAudit("bank_reconciliation_undone", { id: last.id, account: acct.code, to: last.to }, userRole, userEmail);

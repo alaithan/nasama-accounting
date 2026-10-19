@@ -68,6 +68,17 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     };
     /** True when this invoice booked its receivable at issue (so receipts must clear AR, not book revenue). */
     const invoiceIsAccrual = (inv) => !!(inv && inv.arTxnId);
+    /** The invoice's own ledger entries (issue IN, credit note CN) — never a receipt against it. */
+    const isInvoiceOwnedTxn = (t) => !!t && (t.txnType === "IN" || t.txnType === "CN");
+    /** True when a deal already has cash-basis revenue (a live Sale Receipt crediting a revenue account). */
+    const dealHasCashBasisRevenue = (deal, txns, accounts) => {
+      if (!deal) return false;
+      const revIds = new Set((accounts || []).filter(a => a.type === "Revenue").map(a => a.id));
+      const reversed = reversedTxnIds(txns);
+      return (txns || []).some(t => !t.isVoid && t.txnType === "SR" && !isInReversedPair(t, reversed) &&
+        (t.deal_id === deal.id || (t.lines || []).some(l => l.deal_id === deal.id)) &&
+        (t.lines || []).some(l => revIds.has(l.accountId) && (l.credit || 0) > 0));
+    };
 
     // ── ACCRUALS ──────────────────────────────────────
     // An accrual (AC) recognises an expense before the cash goes out:
@@ -564,7 +575,9 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       if (!t || t.isVoid || t.reversesTxnId) return null;          // reversals undo, they are not new spending
       if (txnTagList(t).includes("opening-balance")) return null;
       if (t.txnType === "PV" || t.txnType === "BP") return "payments";
-      if (t.txnType === "JV") return "journal";
+      if (t.txnType === "CF" && clientFundsMovement(t) === "paid") return "payments";   // a refund is cash leaving the bank
+      if (t.txnType === "JV" || t.txnType === "AC") return "journal";                   // an accrual is a journal commitment
+      // Bank transfers (BT) move money between our own accounts and are not limited.
       return null;
     };
     /** Gross value of an entry (or several): total debits, in cents. */
@@ -587,11 +600,14 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
      * the amount are checked; voiding, re-linking or re-labelling is not.
      */
     const assertWithinPostingLimit = ({ prev = null, next, access }) => {
-      if (!next || next.approval_request_id) return;
+      if (!next) return;
       const scope = approvalScopeOfTxn(next);
       if (!scope) return;
       const amount = approvalAmountCents(next);
       if (prev && amount <= approvalAmountCents(prev)) return;
+      // An approved request is exempt only when it is first posted. Editing the
+      // posted entry upwards afterwards is new spending and is checked again.
+      if (!prev && next.approval_request_id) return;
       if (amount > postingLimitCents(access, scope)) {
         throw new Error(`${APPROVAL_SCOPES[scope].label} of ${fmtAED(amount)} is above your posting limit of ${fmtAED(postingLimitCents(access, scope))} — it needs approval. Submit it from the posting screen so it goes to an approver.`);
       }
@@ -721,6 +737,8 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     const PROVISIONAL_REF_RE = new RegExp(`^(${SEQ_REF_PREFIXES.join("|")})-[0-9A-Z]{7,10}(-[A-Z0-9]{1,3})?$`);
     /** Prefix when `ref` is a provisional clock ref that should be numbered, else "". */
     const provisionalRefPrefix = (ref) => { const m = PROVISIONAL_REF_RE.exec(String(ref || "")); return m ? m[1] : ""; };
+    // Imported bank lines keep the bank's own reference (it is the import de-dup key).
+    const txnKeepsRef = (t) => !!t && (t.txnType === "BK" || txnTagList(t).includes("bank-import") || !!t.ref_locked);
     /**
      * Allocate sequential refs. `txns` = NEW entries being saved; `counters` =
      * the stored { "PV-2026": 41, … }. Returns { refs: Map(id → new ref),
@@ -729,7 +747,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     const planSequentialRefs = (txns, counters) => {
       const next = {}; const refs = new Map();
       (txns || []).forEach(t => {
-        const prefix = t && provisionalRefPrefix(t.ref);
+        const prefix = t && !txnKeepsRef(t) && provisionalRefPrefix(t.ref);
         if (!prefix) return;
         const year = /^\d{4}/.test(String(t.date || "")) ? String(t.date).slice(0, 4) : String(new Date().getFullYear());
         const key = `${prefix}-${year}`;
@@ -780,7 +798,11 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     const isDepreciableAsset = a => isFixedAssetAcct(a) && a.code !== "1590" && !/accumulated|depreciation/i.test(a.name || "");
     const computeDepreciation = ({ accounts, txns, config, month }) => {
       const end = monthEnd(month);
-      const live = liveTxns(txns).filter(t => (t.date || "") <= end);
+      // Reversed pairs are dropped using the WHOLE ledger: a January charge
+      // reversed in February is gone from January's view too.
+      const all = liveTxns(txns);
+      const reversedDep = reversedTxnIds(all);
+      const live = all.filter(t => (t.date || "") <= end && !isInReversedPair(t, reversedDep));
       const acc = acctByCode(accounts, "1590");
       const tag = `dep-${month}`;
       const postedIds = new Set(live.filter(t => txnTagList(t).includes(tag)).flatMap(t => (t.lines || []).map(l => l.asset_account_id)).filter(Boolean));
@@ -817,18 +839,32 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       l.accountId === accountId && l.employee_id === employeeId ? ss + sign * ((l.credit || 0) - (l.debit || 0)) : ss, 0), 0);
     const employeeActiveIn = (e, month) => {
       const start = `${month}-01`, end = monthEnd(month);
-      return !!e && !e.archived && (!e.join_date || e.join_date <= end) && (!e.leave_date || e.leave_date >= start);
+      return !!e && (!e.join_date || e.join_date <= end) && (!e.leave_date || e.leave_date >= start) && (!e.archived || !!e.leave_date);
+    };
+    // Days of the month the person was employed ÷ days in the month: a joiner on
+    // the 30th earns one day's salary that month, not the whole month.
+    const employeeMonthFraction = (e, month) => {
+      const start = `${month}-01`, end = monthEnd(month);
+      const from = e.join_date && e.join_date > start ? e.join_date : start;
+      const to = e.leave_date && e.leave_date < end ? e.leave_date : end;
+      const dim = Number(end.slice(8, 10));
+      const days = Number(to.slice(8, 10)) - Number(from.slice(8, 10)) + 1;
+      return Math.max(0, Math.min(1, days / dim));
     };
     const buildSalaryAccrualTxn = ({ accounts, employees, txns, month }) => {
       const exp = acctByCode(accounts, "5010"), pay = acctByCode(accounts, "2240");
       if (!exp || !pay) throw new Error("Salary accounts (5010 / 2240) not found");
       const tag = `payroll-${month}`;
-      const done = new Set(liveTxns(txns).filter(t => txnTagList(t).includes(tag)).flatMap(t => (t.lines || []).map(l => l.employee_id)).filter(Boolean));
+      const reversedPay = reversedTxnIds(liveTxns(txns));
+      const done = new Set(liveTxns(txns).filter(t => txnTagList(t).includes(tag) && !isInReversedPair(t, reversedPay)).flatMap(t => (t.lines || []).map(l => l.employee_id)).filter(Boolean));
       const lines = [];
       (employees || []).filter(e => (e.base_salary || 0) > 0 && employeeActiveIn(e, month) && !done.has(e.id)).forEach(e => {
-        const memo = `Salary ${month} — ${e.name || e.id}`;
-        lines.push(s6Line(exp.id, e.base_salary, 0, memo, { employee_id: e.id }));
-        lines.push(s6Line(pay.id, 0, e.base_salary, memo, { employee_id: e.id }));
+        const frac = employeeMonthFraction(e, month);
+        const amount = Math.round(e.base_salary * frac);
+        if (amount <= 0) return;
+        const memo = `Salary ${month} — ${e.name || e.id}${frac < 1 ? ` (${Math.round(frac * 100)}% of month)` : ""}`;
+        lines.push(s6Line(exp.id, amount, 0, memo, { employee_id: e.id }));
+        lines.push(s6Line(pay.id, 0, amount, memo, { employee_id: e.id }));
       });
       if (!lines.length) throw new Error(`Salaries for ${month} are already accrued (or no active employee has a base salary)`);
       return s6Txn({ date: monthEnd(month), description: `Salary accrual — ${month}`, ref: `JV-${Date.now().toString(36).toUpperCase()}`, tags: `payroll-accrual ${tag}`, lines });
@@ -878,19 +914,25 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     };
     const computeEosbProvision = ({ accounts, employees, txns, asOf }) => {
       const prov = acctByCode(accounts, "2250");
-      return (employees || []).filter(e => (e.base_salary || 0) > 0 && e.join_date && !e.archived).map(e => {
-        const end = e.leave_date && e.leave_date < asOf ? e.leave_date : asOf;
+      const upTo = liveTxns(txns).filter(t => (t.date || "") <= asOf);
+      return (employees || []).filter(e => (e.base_salary || 0) > 0 && e.join_date).map(e => {
+        const left = !!e.leave_date && e.leave_date <= asOf;
+        const end = left ? e.leave_date : asOf;
         const g = computeGratuity({ basicMonthlyC: e.base_salary, joinDate: e.join_date, asOf: end });
-        const held = prov ? employeeBalance(liveTxns(txns).filter(t => (t.date || "") <= asOf), prov.id, e.id) : 0;
-        return { employee: e, ...g, held, adjustment: g.amountC - held };
-      });
+        const held = prov ? employeeBalance(upTo, prov.id, e.id) : 0;
+        // Art. 51(1): nothing is payable to someone who leaves inside the first
+        // year, so a leaver's provision is released; an active person under a
+        // year keeps accruing (it vests on the anniversary).
+        const target = left && !g.vested ? 0 : g.amountC;
+        return { employee: e, ...g, left, held, target, adjustment: target - held };
+      }).filter(r => !r.employee.archived || r.held !== 0);
     };
     const buildEosbTxn = ({ accounts, rows, asOf }) => {
       const exp = acctByCode(accounts, "5302"), prov = acctByCode(accounts, "2250");
       if (!exp || !prov) throw new Error("End-of-service accounts (5302 / 2250) not found");
       const lines = [];
       rows.filter(r => r.adjustment !== 0).forEach(r => {
-        const memo = `End-of-service provision to ${asOf} — ${r.employee.name || r.employee.id}`;
+        const memo = `End-of-service provision to ${asOf} — ${r.employee.name || r.employee.id}${r.left && !r.vested ? " (left under one year — released)" : ""}`;
         if (r.adjustment > 0) { lines.push(s6Line(exp.id, r.adjustment, 0, memo, { employee_id: r.employee.id })); lines.push(s6Line(prov.id, 0, r.adjustment, memo, { employee_id: r.employee.id })); }
         else { lines.push(s6Line(prov.id, -r.adjustment, 0, memo, { employee_id: r.employee.id })); lines.push(s6Line(exp.id, 0, -r.adjustment, memo, { employee_id: r.employee.id })); }
       });
@@ -994,8 +1036,11 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     // settings.lockedThrough (YYYY-MM-DD) closes every date on or before it.
     // Inside a closed period nothing may be posted, edited or deleted; the only
     // way to correct a closed month is a reversal dated in an open period.
-    // Enforced at the Firestore helper (firebase.js → window.__periodLockGuard)
-    // so every module is covered, not just the pages that remember to check.
+    // Enforced in App (persistTxn / persistTxnBatch / deleteTxn / the diff
+    // writer) and at the Firestore helpers (firebase.js → window.__periodLockGuard).
+    // Code that writes transactions through its own db.runTransaction / batch
+    // (invoice issue, reconciliation stamps, backup restore) must call
+    // assertPeriodOpen itself — see each site.
     const normalizeLockDate = v => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : "");
     const periodLockDate = settings => normalizeLockDate(settings && settings.lockedThrough);
     const isDateLocked = (date, settings) => {
@@ -2601,6 +2646,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
           const payable = byCode("2210");
           const acc = (txns || []).find(t => t.id === settleAccrualTxnId);
           if (!payable || !acc) throw new Error("The broker accrual being settled was not found");
+          if (accrualStatus(acc, txns) !== "unpaid") throw new Error(`That broker accrual is ${accrualStatus(acc, txns) || "not an accrual"} — nothing to settle`);
           if ((amtC > 0) === (mgrC > 0)) throw new Error("Settle one leg (broker or manager) per payment");
           accrued = (acc.lines || []).reduce((s, l) => l.accountId === payable.id ? s + (l.credit || 0) - (l.debit || 0) : s, 0);
           if (accrued <= 0) throw new Error("The accrual carries nothing to settle");
@@ -2686,7 +2732,11 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         const lines = (original.lines || []).map(l => ({
           id: uid(), accountId: l.accountId, debit: l.credit || 0, credit: l.debit || 0,
           memo: `Reversal: ${original.ref || txnId}`, deal_id: l.deal_id, broker_id: l.broker_id, developer_id: l.developer_id,
-          ...(l.manager_id !== undefined ? { manager_id: l.manager_id } : {})
+          ...(l.manager_id !== undefined ? { manager_id: l.manager_id } : {}),
+          // Sub-ledger tags (employee / asset class) must ride along, or the
+          // reversal never unwinds the per-person / per-asset balances.
+          ...(l.employee_id !== undefined ? { employee_id: l.employee_id } : {}),
+          ...(l.asset_account_id !== undefined ? { asset_account_id: l.asset_account_id } : {})
         }));
         // Carry the original's links so the contra entry lands on the same deal,
         // client, invoice and planned expense in every per-party view.
@@ -3431,7 +3481,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       const currentYear = now.getFullYear();
       const currentMonthKey = `${currentYear}-${String(now.getMonth() + 1).padStart(2, "0")}`;
       const accountById = new Map(accounts.map(a => [a.id, a]));
-      const banks = accounts.filter(a => a.isBank || a.code === "1001");
+      const banks = accounts.filter(isMoneyAccount);   // same cash definition as the Cash Flow statement
       const cash = banks.reduce((s, a) => s + accountBalance(a, ledger), 0);
       // Client money is commingled in the company's own bank account, so `cash`
       // includes dirhams owed to someone else. Every spending decision — runway,
@@ -3515,7 +3565,10 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         const cat = cashFlowCategory(t, accountById);
         const cashBucket = cashMap.get(monthKey);
         if (cashBucket && cat && cat !== "transfer" && cat !== "clientFunds") {
-          lines.forEach(l => { if (isMoneyAccount(accountById.get(l.accountId))) { cashBucket.inflow += (l.debit || 0); cashBucket.outflow += (l.credit || 0); } });
+          // Net of the entry's money legs: a bank→cash transfer that also carries a
+          // bank fee moved 500 out, not 100,000 in and 100,500 out.
+          const net = txnCashNet(t, accountById);
+          if (net > 0) cashBucket.inflow += net; else cashBucket.outflow += -net;
         }
         if (cat === "operating") {
           const operatingNet = txnCashNet(t, accountById);

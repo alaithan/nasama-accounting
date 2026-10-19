@@ -18,7 +18,7 @@ const X = new Function(...NAMES, compile("nasama-accounting-v2.core.jsx") + `
   ; return { createJournalEngine, buildLedger, accountBalance, withStage6Accounts, computeDepreciation, buildDepreciationTxn,
              buildSalaryAccrualTxn, buildStaffAdvanceTxn, buildSalaryPaymentTxn, employeeBalance, computeGratuity,
              computeEosbProvision, buildEosbTxn, buildYearEndCloseTxn, isClosingTxn, withoutClosing, computeEquityStatement,
-             accrualStatus, fxToAed, fxTxnFields, fxLabel };`)
+             accrualStatus, fxToAed, fxTxnFields, fxLabel, employeeMonthFraction };`)
   .apply(null, NAMES.map(n => n === "React" ? REACT_STUB : n === "console" ? console : () => undefined));
 
 let passed = 0, failed = 0;
@@ -185,6 +185,41 @@ section("6.6 foreign currency");
   eq(f.fx_currency, "USD", "currency stamped on the entry");
   eq(X.fxLabel(f), "USD 10,000.00 @ 3.6725", "list label");
   eq(Object.keys(X.fxTxnFields(null)).length, 0, "AED entries carry no fx fields");
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+section("review fixes: pro-rata salaries · reversals unwind · leavers · loss year");
+{
+  const emps = [{ id: "j", name: "Joiner", base_salary: 900000, join_date: "2026-03-30" }, { id: "l", name: "Leaver", base_salary: 3100000, join_date: "2020-01-01", leave_date: "2026-03-10", archived: true }];
+  eq(X.employeeMonthFraction(emps[0], "2026-03"), 2 / 31, "joined on the 30th -> 2 of 31 days");
+  const acc = X.buildSalaryAccrualTxn({ accounts: ALL, employees: emps, txns: [], month: "2026-03" });
+  eq(acc.lines.find(l => l.employee_id === "j" && l.debit).debit, Math.round(900000 * 2 / 31), "joiner accrues 2 days, not the month");
+  eq(acc.lines.find(l => l.employee_id === "l" && l.debit).debit, 1000000, "archived leaver still gets their final 10 days");
+  const E = X.createJournalEngine({ accounts: ALL, txns: [acc], saveTxn: () => {} });
+  const rev = E.reverseTransaction(acc.id, "2026-04-02", "R", false);
+  ok(rev.lines.every(l => l.employee_id), "reversal lines keep employee_id");
+  eq(X.employeeBalance([acc, rev], "a2240", "j"), 0, "nothing owed after the reversal");
+  ok(!!X.buildSalaryAccrualTxn({ accounts: ALL, employees: emps, txns: [acc, rev], month: "2026-03" }), "March can be accrued again after its reversal");
+  const buy = T("2026-01-05", [["aPC", 3600000, 0], ["aBank", 0, 3600000]]);
+  const cfg = { aPC: { lifeMonths: 36, residualPct: 0, startMonth: "2026-01" } };
+  const d1 = X.buildDepreciationTxn({ accounts: ALL, rows: X.computeDepreciation({ accounts: ALL, txns: [buy], config: cfg, month: "2026-01" }), month: "2026-01" });
+  const dRev = X.createJournalEngine({ accounts: ALL, txns: [buy, d1], saveTxn: () => {} }).reverseTransaction(d1.id, "2026-02-01", "R", false);
+  const again = X.computeDepreciation({ accounts: ALL, txns: [buy, d1, dRev], config: cfg, month: "2026-01" }).find(r => r.account.id === "aPC");
+  eq(again.accumulated, 0, "reversed depreciation unwinds accumulated");
+  eq(again.amount, 100000, "...and January can be posted again");
+  const short = [{ id: "s", name: "Short", base_salary: 1000000, join_date: "2026-01-01", leave_date: "2026-06-30" }];
+  const first = X.computeEosbProvision({ accounts: ALL, employees: short, txns: [], asOf: "2026-03-31" });
+  ok(first[0].adjustment > 0, "while employed under a year the provision accrues");
+  const booked = X.buildEosbTxn({ accounts: ALL, rows: first, asOf: "2026-03-31" });
+  const after = X.computeEosbProvision({ accounts: ALL, employees: [{ ...short[0], archived: true }], txns: [booked], asOf: "2026-07-31" });
+  eq(after.length, 1, "an archived leaver with a balance is still listed");
+  eq(after[0].target, 0, "...owed nothing (left under one year)");
+  eq(after[0].adjustment, -first[0].adjustment, "...so the provision is released in full");
+  const loss = [T("2025-03-01", [["a5100", 2000000, 0], ["aBank", 0, 2000000]]), T("2025-04-01", [["aBank", 500000, 0], ["a4000", 0, 500000]])];
+  const { txn: c, profit } = X.buildYearEndCloseTxn({ accounts: ALL, txns: loss, year: 2025 });
+  eq(profit, -1500000, "loss of 15,000");
+  ok(balanced(c), "loss close balances");
+  eq(bal("3002", [...loss, c]), -1500000, "retained earnings carry the loss (debit)");
 }
 
 console.log(`\n${failed ? "✗ FAIL" : "✓ PASS"} — stage 6: ${passed} passed, ${failed} failed`);

@@ -165,7 +165,8 @@ function computePeriodKpis(ft, accounts) {
     // Same categories as the Cash Flow statement: client deposits/refunds,
     // capital, loans, fixed assets and transfers are not operating cash.
     if (cashFlowCategory(t, accountById) === "operating") {
-      lines.forEach(l => { if (isMoneyAccount(accountById.get(l.accountId))) { opCashIn += (l.debit || 0); opCashOut += (l.credit || 0); } });
+      const net = txnCashNet(t, accountById);
+      if (net > 0) opCashIn += net; else opCashOut += -net;
     }
   }
   const vat = ft.filter(t => !isVATSettlementTxn(t, accounts)).reduce((sum, t) => {
@@ -195,7 +196,7 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
   const [dateFilter, setDateFilter] = usePersistedDateFilter("dash_period");
   const inRange = t => (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to);
   const recentTxns = [...txns].filter(t => !t.isVoid && inRange(t)).sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 8);
-  const cashAccounts = accounts.filter(a => a.isBank || a.code === "1001");
+  const cashAccounts = accounts.filter(isMoneyAccount);
   const maxCashFlow = Math.max(1, ...kpis.cashFlowSeries.map(item => Math.max(item.inflow, item.outflow, Math.abs(item.net))));
   const maxPerformance = Math.max(1, ...kpis.monthlyPerformance.map(item => Math.max(item.revenue, item.expense, Math.abs(item.net))));
   // Monthly income (net revenue) for the last 6 months vs the same month a year
@@ -204,7 +205,7 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     const acctById = new Map((accounts || []).map(a => [a.id, a]));
     const byMonth = {};
     (txns || []).forEach(t => {
-      if (t.isVoid || !t.date) return;
+      if (t.isVoid || !t.date || isClosingTxn(t)) return;   // the year-end close is not December's revenue
       const key = String(t.date).slice(0, 7);
       let rev = 0;
       (t.lines || []).forEach(l => { const a = acctById.get(l.accountId); if (a && a.type === "Revenue") rev += (l.credit || 0) - (l.debit || 0); });
@@ -1780,6 +1781,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
         if (!brokerAmt || brokerAmt <= 0) { toast("Enter a valid amount", "error"); return; }
         if (managerAmt > 0 && !bpForm.managerId) { toast("Select a manager for the top-up, or clear the manager amount", "error"); return; }
         if (journal.openBrokerAccrual(bpDeal.id, "broker")) { toast("This deal already has an unpaid broker accrual — pay it with Confirm & Post", "warning"); return; }
+        if (managerAmt > 0 && journal.openBrokerAccrual(bpDeal.id, "manager")) { toast("This deal already has an unpaid manager accrual — pay it with Confirm & Post", "warning"); return; }
         setBpSaving(true);
         try {
           // Book the cost now, owed in Accrued Expenses (2210): the P&L carries the
@@ -1801,6 +1803,19 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
         } finally {
           setBpSaving(false);
         }
+      };
+      // Historical deals whose broker was paid before the books existed: mark
+      // the deal only (no ledger entry) — the old "Record (No Bank)" behaviour.
+      const handleMarkPaidOutsideBooks = () => {
+        if (!isAdminSubject(userRole)) { toast("Only an admin can mark a broker as paid outside the books", "error"); return; }
+        if (!brokerAmt || brokerAmt <= 0) { toast("Enter a valid amount", "error"); return; }
+        if (!window.confirm(`Mark ${bpDeal.broker_name || "the broker"} as paid ${fmtAED(toCents(brokerAmt))} OUTSIDE the books?\n\nNo ledger entry is made — use this only for deals settled before the system existed.`)) return;
+        const updated = { ...bpDeal, broker_paid_amount: toCents(brokerAmt), broker_paid_date: bpForm.date, broker_paid_outside_books: true,
+          ...(managerAmt > 0 ? { manager_id: bpForm.managerId, manager_name: managerName, manager_paid_amount: toCents(managerAmt), manager_paid_date: bpForm.date } : {}) };
+        setDeals(prev => prev.map(d => d.id === bpDeal.id ? updated : d));
+        logAudit("broker_marked_paid_outside_books", { dealId: bpDeal.id, amount: toCents(brokerAmt) }, userRole, userEmail);
+        toast("Marked as paid outside the books (no ledger entry)", "success");
+        closeBp();
       };
       return <div style={C.modal} onClick={closeBp}>
         <div style={C.mbox(520)} onClick={e => e.stopPropagation()}>
@@ -1896,6 +1911,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
             {!bpConfirm ? <>
               <button style={C.btn("secondary")} onClick={closeBp} disabled={bpSaving}>Cancel</button>
               <button style={{ ...C.btn("secondary"), borderColor: "#7C3AED", color: "#7C3AED" }} onClick={handleRecordNoBankPayment} disabled={bpSaving} title="Books the commission as an expense now and owes it in Accrued Expenses (2210) — no bank movement. Pay it later with Confirm & Post, which settles the accrual.">{bpSaving ? "Saving…" : "Accrue (pay later)"}</button>
+              {isAdminSubject(userRole) && <button style={{ ...C.btn("secondary"), fontSize: 12 }} onClick={handleMarkPaidOutsideBooks} disabled={bpSaving} title="Historical deal: the broker was paid before the books existed. Marks the deal only — no ledger entry.">Paid outside books</button>}
               <button style={{ ...C.btn(), background: "#7C3AED", borderColor: "#7C3AED" }} onClick={handleReview} disabled={bpSaving}>Record + Bank →</button>
             </> : <>
               <button style={C.btn("secondary")} onClick={() => setBpConfirm(false)} disabled={bpSaving}>← Back</button>
@@ -2061,7 +2077,8 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
   // Invoices table can flag which invoices have been collected ("✓ Receipted").
   const receiptByInvoiceId = useMemo(() => {
     const m = new Map();
-    (txns || []).forEach(t => { if (t.txnType === "SR" && !t.isVoid && t.invoice_id) m.set(t.invoice_id, t); });
+    const reversed = reversedTxnIds(txns);
+    (txns || []).forEach(t => { if (t.txnType === "SR" && !t.isVoid && t.invoice_id && !isInReversedPair(t, reversed)) m.set(t.invoice_id, t); });
     return m;
   }, [txns]);
   const broker = (brokers || []).find(b => b.id === deal.broker_id);
@@ -2745,6 +2762,30 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
   // The form can also open from the quick-add event or an invoice hand-off, so
   // the permission is checked where the entry is built, not only on the button.
   const canPostReceipt = hasPermission(userRole, 'accounting.create');
+  // Issued accrual invoices (they booked revenue + VAT at issue). A cash-basis
+  // Sale Receipt for one of their deals would book the revenue a second time,
+  // so such a receipt must come through the invoice's "+ Receipt" instead.
+  const [accrualInvoices, setAccrualInvoices] = useState([]);
+  useEffect(() => {
+    const unsub = db.collection("invoices").onSnapshot(
+      snap => setAccrualInvoices(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(inv => inv.status === "issued" && inv.arTxnId)),
+      err => console.error("invoices (receipts)", err));
+    return () => unsub();
+  }, []);
+  const accrualInvoiceFor = dealId => accrualInvoices.find(inv => (inv.lineItems || []).some(li => li.dealId === dealId));
+  // The AR hand-off may come from an invoice line with no deal — allowed.
+  const validateReceipt = () => {
+    if (!canPostReceipt) { toast("Posting a sale receipt needs Accounting · Create permission", "error"); return null; }
+    const deal = deals.find(d => d.id === form.deal_id) || null;
+    if (!deal && !form.ar) { toast("Select a deal first", "warning"); return null; }
+    const gross = parseFloat(form.grossAmount);
+    if (!gross || gross <= 0) { toast("Enter a valid amount", "warning"); return null; }
+    if (!form.ar && deal) {
+      const inv = accrualInvoiceFor(deal.id);
+      if (inv) { toast(`${deal.property_name || "This deal"} is invoiced on tax invoice #${inv.invoiceNumber}, which already booked the revenue and VAT. Record this money from the invoice's "+ Receipt" button so it clears the receivable instead of booking revenue again.`, "error"); return null; }
+    }
+    return { deal, gross };
+  };
   // Against an accrual invoice the revenue and VAT were booked at issue, so the
   // receipt only clears Commission Receivable; otherwise it is the cash-basis
   // Sale Receipt that books revenue + output VAT.
@@ -2752,21 +2793,18 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
     ? journal.postInvoiceReceipt({ date: form.date, deal, gross, bankCode: form.bankCode, invoiceId: form.invoice_id, invoiceNo: form.invoice_no, commit: false })
     : journal.postSaleReceipt({ date: form.date, deal, gross, vatRate: form.vatRate, bankCode: form.bankCode, invoiceId: form.invoice_id, invoiceNo: form.invoice_no, commit: false });
   const handlePreview = () => {
-    if (!canPostReceipt) { toast("Posting a sale receipt needs Accounting · Create permission", "error"); return; }
-    const deal = deals.find(d => d.id === form.deal_id);
-    if (!deal) { toast("Select a deal first", "warning"); return; }
-    const gross = parseFloat(form.grossAmount);
-    if (!gross || gross <= 0) { toast("Enter a valid amount", "warning"); return; }
+    const v = validateReceipt();
+    if (!v) return;
     try {
-      setPreview(buildReceiptTxn(deal, gross));
+      setPreview(buildReceiptTxn(v.deal, v.gross));
     } catch (err) { toast(err.message, "error"); }
   };
 
   const handleConfirm = async () => {
-    if (!canPostReceipt) { toast("Posting a sale receipt needs Accounting · Create permission", "error"); return; }
-    const deal = deals.find(d => d.id === form.deal_id);
+    const v = validateReceipt();
+    if (!v) return;
     try {
-      const txn = { ...buildReceiptTxn(deal, parseFloat(form.grossAmount)), ...fxTxnFields(form.fx) };
+      const txn = { ...buildReceiptTxn(v.deal, v.gross), ...fxTxnFields(form.fx) };
       await persistTxn(txn);
       toast(form.invoice_no ? `Sale receipt posted & linked to Invoice #${form.invoice_no}` : "Sale receipt posted!", "success");
       setShow(false); setPreview(null);
@@ -5963,6 +6001,13 @@ The books are locked through ${fmtDate(savedLock)}. ` +
       if (restorePreview.settings) {
         await db.collection("settings").doc("company").set(restorePreview.settings);
       }
+      // A restore rewrites ledger entries wholesale; inside a closed period that
+      // is exactly what the lock exists to prevent. Clear the lock first.
+      if (periodLockDate(settings) && (restorePreview.collections || {}).transactions) {
+        const lock = periodLockDate(settings);
+        const inLocked = (restorePreview.collections.transactions || []).filter(d => (d.date || "") <= lock).length;
+        if (inLocked) throw new Error(`${inLocked} transaction(s) in the backup fall inside the closed period (through ${fmtDate(lock)}). Clear the period lock, restore, then lock again.`);
+      }
       for (const [col, docs] of Object.entries(restorePreview.collections || {})) {
         for (let i = 0; i < docs.length; i += 400) {
           const batch = db.batch();
@@ -6073,7 +6118,9 @@ The books are locked through ${fmtDate(savedLock)}. ` +
           </Sel>
           {closeTxnFor(closeYear)
             ? <><span style={{ fontSize: 12.5, color: "#047857", fontWeight: 700 }}>✓ Closed — {closeTxnFor(closeYear).ref}</span>
-                {hasPermission(userRole, "canEditSettings") && <button style={C.btn("secondary", true)} onClick={undoClose}>Reopen</button>}</>
+                {hasPermission(userRole, "canEditSettings") && (isDateLocked(`${closeYear}-12-31`, settings)
+                  ? <span style={{ fontSize: 12, color: "#6B7280" }}>🔒 reopen needs the period lock moved before {closeYear}-12-31</span>
+                  : <button style={C.btn("secondary", true)} onClick={undoClose}>Reopen</button>)}</>
             : <>
                 <span style={{ fontSize: 12.5, color: "#6B7280" }}>{closePreview.error ? closePreview.error : `${closePreview.profit >= 0 ? "Profit" : "Loss"} to close: ${fmtAED(Math.abs(closePreview.profit))}`}</span>
                 {hasPermission(userRole, "canEditSettings") && !closePreview.error && <button style={C.btn("secondary", true)} disabled={closeBusy} onClick={() => guardClose(doClose)}>Close {closeYear}</button>}
@@ -7382,7 +7429,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
   // `extra(tx)` lets a caller add reads/writes to the same transaction.
   const writeTxnOps = async (ops, extra = null) => {
     const isNew = o => o.col === 'transactions' && !(txnsRef.current || []).some(t => t.id === o.id);
-    const needsNumber = ops.some(o => isNew(o) && provisionalRefPrefix(o.data && o.data.ref));
+    const needsNumber = ops.some(o => isNew(o) && !txnKeepsRef(o.data) && provisionalRefPrefix(o.data && o.data.ref));
     if (!needsNumber && !extra) {
       await window.fsBatchWrite(ops);
       return ops.filter(o => o.col === 'transactions').map(o => o.data);
@@ -7392,7 +7439,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     await db.runTransaction(async tx => {
       if (extra) await extra(tx);          // reads must come before writes
       const snap = needsNumber ? await tx.get(counterRef) : null;
-      const plan = planSequentialRefs(ops.filter(isNew).map(o => o.data), snap && snap.exists ? snap.data() : {});
+      const plan = planSequentialRefs(ops.filter(isNew).map(o => o.data), snap && snap.exists ? snap.data() : {});   // planSequentialRefs skips imported refs itself
       written = [];
       ops.forEach(o => {
         const data = o.col === 'transactions' && plan.refs.has(o.id) ? { ...o.data, ref: plan.refs.get(o.id) } : o.data;
@@ -7460,8 +7507,10 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       assertWithinPostingLimit({ prev: prevT, next: t, access: accessRef.current });
     });
     const clean = items.map(t => JSON.parse(JSON.stringify(t)));
-    const ops = [...clean.map(t => ({ col: 'transactions', id: t.id, data: t })),
-                 ...otherDocs.map(d => ({ col: d.col, id: d.id, data: JSON.parse(JSON.stringify(d.data)), merge: !!d.merge }))];
+    // Other docs (e.g. accounts the import needs) go FIRST, so when a large set
+    // is chunked every transaction chunk already has the accounts it posts to.
+    const ops = [...otherDocs.map(d => ({ col: d.col, id: d.id, data: JSON.parse(JSON.stringify(d.data)), merge: !!d.merge })),
+                 ...clean.map(t => ({ col: 'transactions', id: t.id, data: t }))];
     const startedAt = new Date().toISOString();
     setWriteMeta(meta => ({ ...meta, transactions: { status: "saving", startedAt, completedAt: meta.transactions?.completedAt || "", error: "" } }));
     showSync();

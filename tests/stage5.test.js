@@ -142,5 +142,20 @@ section("5.3 reconciled entries are locked");
   X.assertNotReconciled({ prev: { ...prev, reconciled_at: "" }, next: { ...prev, isVoid: true, reconciled_at: "" } }); passed++;
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+section("review fixes: opening line anywhere · same-day newest-first");
+{
+  const rows = X.reconPdfLinesToRows([
+    "05/03/2026 COMMISSION 20,000.00 70,000.00",
+    "01/03/2026 SALARY 50,000.00 50,000.00",
+    "Balance brought forward 100,000.00",
+  ]);
+  eq(rows.length, 2, "a brought-forward line at the END of a newest-first PDF is still the opening balance");
+  eq(Number(rows[1].Amount), -50000, "...so the oldest line is signed from it");
+  eq(Number(rows[0].Amount), 20000, "...and the walk continues in date order");
+  const same = X.reconPdfLinesToRows(["Opening balance 0.00", "01/03/2026 B 100.00 200.00", "01/03/2026 A 100.00 100.00"]);
+  eq(Number(same[1].Amount), 100, "single-day statement printed newest-first: balances decide the order (A was +100, not -100)");
+}
+
 console.log(`\n${failed ? "✗ FAIL" : "✓ PASS"} — stage 5: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

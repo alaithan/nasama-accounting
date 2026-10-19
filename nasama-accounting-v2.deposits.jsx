@@ -305,7 +305,7 @@ function DepositsPage({ accounts, txns, deals, customers, ledger, journal, persi
 
   // Every client-funds receipt, newest first — the rows a receipt is issued from.
   const depositTxns = useMemo(() => (txns || [])
-    .filter(t => !t.isVoid && clientFundsMovement(t) === "received")
+    .filter(t => !t.isVoid && !t.reversesTxnId && clientFundsMovement(t) === "received")
     .sort((a, b) => (b.date || "").localeCompare(a.date || "")), [txns]);
   const receiptByTxn = useMemo(() => {
     const m = new Map();

@@ -18,7 +18,8 @@ const X = new Function(...NAMES,
   compile("nasama-accounting-v2.core.jsx") + ";\n" + compile("nasama-accounting-v2.future-expenses.jsx") + ";\n" +
   compile("nasama-accounting-v2.invoices.jsx") + ";\n" + compile("nasama-accounting-v2.insights.jsx") + `
   ; return { insMonday, insVatQuarterOf, insVatQuarterList, insVatReturn, insCashForecast, insReceivablesAging, insBrokerPayables,
-             insBreakEven, insPipelineScenarios, insBudgetVsActual, insExpenseTrend, insAlerts, insEarnedVsCollected, insInvoiceMeta };`)
+             insBreakEven, insPipelineScenarios, insBudgetVsActual, insExpenseTrend, insAlerts, insEarnedVsCollected, insInvoiceMeta,
+             buildYearEndCloseTxn, withStage6Accounts, calculateAppKpis };`)
   .apply(null, NAMES.map(n => n === "React" ? REACT_STUB : n === "console" ? console : () => undefined));
 
 let passed = 0, failed = 0;
@@ -166,6 +167,40 @@ section("7.9 alerts");
   ok(a.some(x => /overdue more than 60 days/.test(x.title)), "60+ day overdue invoice flagged");
   const none = X.insAlerts({ asOf: ASOF, kpis: { runwayMonths: Infinity }, deals: [], txns: [], accounts: ACCOUNTS, invoices: [], employees: [], settings: {} });
   eq(none.length, 0, "a clean book raises nothing");
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+section("review fixes");
+{
+  // VAT return ignores the year-end close
+  const sale = T("2025-11-10", [["aBank", 1050000, 0], ["a4000", 0, 1000000], ["aVAT", 0, 50000]], { txnType: "SR" });
+  const ACC2 = X.withStage6Accounts(ACCOUNTS, ["retained"]).accounts;
+  const close = X.buildYearEndCloseTxn({ accounts: ACC2, txns: [sale], year: 2025 }).txn;
+  const r = X.insVatReturn({ txns: [sale, close], accounts: ACC2, from: "2025-10-01", to: "2025-12-31" });
+  eq(r.zeroExempt, 0, "Box 4/5 no longer shows the closing entry as a negative supply");
+  eq(r.stdSupplies, 1000000, "Box 1 unchanged");
+  // earned vs collected counts deal-linked bank imports
+  const bk = T("2026-10-05", [["aBank", 300000, 0], ["a4000", 0, 300000]], { txnType: "BK", deal_id: "d9" });
+  const e = X.insEarnedVsCollected({ txns: [bk], accounts: ACCOUNTS, invoices: [], asOf: ASOF });
+  eq(e.months.find(m => m.key === "2026-10").collected, 300000, "a bank-import receipt linked to a deal counts as collected");
+  // broker paid ahead of collection nets off future shares in the forecast
+  const deal = { id: "d1", type: "Off-Plan", stage: "SPA Signed", property_name: "Sky", broker_id: "BR1", broker_name: "Ali", vat_applicable: true,
+    expected_commission_net: 10000000, installment_schedule: [{ id: "i1", label: "1st", dueDate: "2026-10-01", amountCents: 5250000 }, { id: "i2", label: "2nd", dueDate: "2026-11-05", amountCents: 5250000 }] };
+  const sr1 = T("2026-10-02", [["aBank", 5250000, 0, { deal_id: "d1" }], ["a4000", 0, 5000000, { deal_id: "d1" }], ["aVAT", 0, 250000, { deal_id: "d1" }]], { txnType: "SR", deal_id: "d1" });
+  const bpFull = T("2026-10-03", [["a5500", 5000000, 0, { deal_id: "d1", broker_id: "BR1" }], ["aBank", 0, 5000000, { deal_id: "d1", broker_id: "BR1" }]], { txnType: "BP", deal_id: "d1" });
+  const employees = [{ id: "e1", broker_id: "BR1", commission_split_pct: 50 }];
+  const f = X.insCashForecast({ asOf: ASOF, openingCash: 0, deals: [deal], txns: [sr1, bpFull], accounts: ACCOUNTS, invoices: [], plannedExpenses: [], employees, settings: {} });
+  eq(f.items.filter(i => i.source === "broker").reduce((s, i) => s + i.amountC, 0), 0, "broker paid in full up front → no phantom broker outflow on instalment 2");
+  // transfer with a fee: net cash, not both legs
+  const now = new Date(); const m = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const ACC3 = [...ACCOUNTS, { id: "aCash", code: "1001", name: "Cash", type: "Asset", isCash: true }];
+  const xfer = T(`${m}-02`, [["aCash", 10000000, 0], ["a5100", 50000, 0], ["aBank", 0, 10050000]], { txnType: "BT" });
+  const k = X.calculateAppKpis({ accounts: ACC3, txns: [xfer], deals: [], ledger: {}, settings: { openingBalanceDate: "2025-01-01" } });
+  const cur = k.cashFlowSeries.find(x => x.key === m);
+  eq(cur.inflow + cur.outflow, 50000, "a transfer carrying a 500 fee moves 500, not 100,000 each way");
+  // budget proration by days
+  const b = X.insBudgetVsActual({ budgets: [], accounts: ACCOUNTS, txns: [], year: 2026, asOf: "2026-10-16" });
+  ok(Math.abs(b.monthsElapsed - 9.5) < 0.02, "16 Oct ≈ 9.5 months elapsed");
 }
 
 console.log(`\n${failed ? "✗ FAIL" : "✓ PASS"} — stage 7: ${passed} passed, ${failed} failed`);

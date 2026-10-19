@@ -320,6 +320,9 @@ function invReceiptPlan(inv, receipts, accounts) {
 
 // Statement of account: open items and 0–30 / 31–60 / 61–90 / 90+ aging by
 // days past DUE date (not yet due counts as "current"). Amounts in AED.
+// Invoices issued before due dates existed fall back to invoice date + 30,
+// exactly as the printed document does.
+function invDueDateOf(inv) { return (inv && inv.dueDate) || invAddDays(inv && inv.invoiceDate, 30); }
 function invAgingBucket(daysOverdue) {
   if (daysOverdue <= 0) return "current";
   if (daysOverdue <= 30) return "d30";
@@ -332,7 +335,8 @@ function invStatement(invoices, metaOf, partyKey, today) {
     .filter(inv => (inv.status === "issued") && invPartyKey(inv) === partyKey)
     .map(inv => {
       const m = metaOf(inv) || {};
-      const daysOverdue = inv.dueDate && inv.dueDate < today ? Math.round((new Date(today + "T12:00:00") - new Date(inv.dueDate + "T12:00:00")) / 86400000) : 0;
+      const due = invDueDateOf(inv);
+      const daysOverdue = due && due < today ? Math.round((new Date(today + "T12:00:00") - new Date(due + "T12:00:00")) / 86400000) : 0;
       return { inv, total: m.total || 0, paid: m.paid || 0, due: Math.max(0, (m.total || 0) - (m.paid || 0)), daysOverdue, bucket: invAgingBucket(daysOverdue) };
     })
     .sort((a, b) => String(a.inv.invoiceDate || "").localeCompare(String(b.inv.invoiceDate || "")));
@@ -1790,6 +1794,17 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
         const existingAr = (accounts || []).find(a => a.code === AR_ACCOUNT_CODE);
         arAccountToCreate = existingAr ? null : AR_ACCOUNT_SEED;
         const acctList = existingAr ? accounts : [...(accounts || []), AR_ACCOUNT_SEED];
+        // "Developer paid first, then asked for the tax invoice": that cash was
+        // already booked as revenue + VAT by a cash-basis Sale Receipt. Booking
+        // it again here would double both. Issue such an invoice on the cash
+        // basis instead (date it before the accrual start, or receipt-link it).
+        const clash = [...new Set((finalInv.lineItems || []).map(li => li.dealId).filter(Boolean))]
+          .map(id => (deals || []).find(d => d.id === id)).filter(Boolean)
+          .filter(d => dealHasCashBasisRevenue(d, txns, accounts));
+        if (clash.length) {
+          toast(`${clash.map(d => d.property_name || d.id).join(", ")}: commission was already received and booked as revenue on the cash basis. An accrual invoice would book the revenue and VAT a second time — issue it dated before the accrual start, or link the existing receipt instead.`, "error");
+          return;
+        }
         invBuildArTxn({ ...finalInv, invoiceNumber: "check" }, { deals, accounts: acctList });
         makeArTxn = doc => invBuildArTxn(doc, { deals, accounts: acctList });
       }
@@ -1886,7 +1901,9 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
     // pays the invoice. Without this the invoice stayed "Paid" after a reversal.
     const reversed = reversedTxnIds(txns);
     (txns || []).forEach(t => {
-      if (!t.isVoid && t.invoice_id && !isInReversedPair(t, reversed)) {
+      // An accrual invoice's own issue entry (IN) and credit note (CN) carry
+      // invoice_id too — they are the invoice, not money received against it.
+      if (!t.isVoid && t.invoice_id && !isInvoiceOwnedTxn(t) && !isInReversedPair(t, reversed)) {
         if (!m.has(t.invoice_id)) m.set(t.invoice_id, []);
         m.get(t.invoice_id).push(t);
       }
@@ -1918,8 +1935,9 @@ function InvoicePage({ accounts, customers, developers, deals, txns, settings, u
                    : rcs.length === 0     ? "unpaid"
                    : due > 0.5            ? "partial"
                    : "paid";
-      const overdueDays = (bucket === "unpaid" || bucket === "partial") && inv.dueDate && inv.dueDate < today
-        ? Math.round((new Date(today + "T12:00:00") - new Date(inv.dueDate + "T12:00:00")) / 86400000) : 0;
+      const dueOn = invDueDateOf(inv);
+      const overdueDays = (bucket === "unpaid" || bucket === "partial") && dueOn && dueOn < today
+        ? Math.round((new Date(today + "T12:00:00") - new Date(dueOn + "T12:00:00")) / 86400000) : 0;
       m.set(inv.id, { rcs, paid, total, due, overpaid, bucket, overdueDays, open: bucket === "unpaid" || bucket === "partial" });
     });
     return m;

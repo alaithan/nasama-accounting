@@ -31,7 +31,7 @@ const CORE = new Function(...CORE_NAMES, compile("nasama-accounting-v2.core.jsx"
              accountUsage, validateAccountSave, validateAccountDelete, ENGINE_ACCOUNT_CODES,
              approvalScopeOfTxn, approvalAmountCents, postingLimitCents, needsApproval,
              assertWithinPostingLimit, approvalDecisionBlocker,
-             provisionalRefPrefix, planSequentialRefs };`)
+             provisionalRefPrefix, planSequentialRefs, txnKeepsRef };`)
   .apply(null, CORE_NAMES.map(n => n === "React" ? REACT_STUB : n === "console" ? console : () => undefined));
 
 // future-expenses.jsx: pure date helpers only (components never run).
@@ -340,6 +340,24 @@ section("2.12 sequential references");
   eq(plan.refs.get("d"), "PV-2025-00001", "the series is per year of the entry date");
   ok(!plan.refs.has("e"), "non-provisional refs are left alone");
   eq(JSON.stringify(plan.counters), JSON.stringify({ "PV-2026": 43, "SR-2026": 1, "PV-2025": 1 }), "only moved counters are written back");
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+section("review fixes: approval edit bypass · imported refs · scopes");
+{
+  const acct = { roleId: "accountant", legacyRole: "accountant", permissions: {}, approvalLimits: { payments: 50000 } };
+  const approved = { ...engine([]).postPayment({ date: "2026-05-01", memo: "x", gross: 60000, expenseCode: "5100", commit: false }), approval_request_id: "r1" };
+  CORE.assertWithinPostingLimit({ prev: null, next: approved, access: acct }); passed++;   // first post of an approved entry
+  const raised = { ...approved, lines: engine([]).postPayment({ date: "2026-05-01", memo: "x", gross: 200000, expenseCode: "5100", commit: false }).lines };
+  throws(() => CORE.assertWithinPostingLimit({ prev: approved, next: raised, access: acct }), "above your posting limit", "editing an approved entry UPWARDS is checked again");
+  CORE.assertWithinPostingLimit({ prev: approved, next: { ...approved, description: "renamed" }, access: acct }); passed++;
+  const bk = { txnType: "BK", ref: "BT-7HG2K9QW1", date: "2026-05-01", tags: "bank-import" };
+  ok(CORE.txnKeepsRef(bk), "an imported bank line keeps the bank reference");
+  eq(CORE.planSequentialRefs([{ id: "b", ...bk }], {}).refs.size, 0, "...and is never renumbered (it is the import de-dup key)");
+  eq(CORE.approvalScopeOfTxn({ txnType: "CF", tags: "client-funds-paid", lines: [] }), "payments", "a client-money refund is cash leaving -> payments scope");
+  eq(CORE.approvalScopeOfTxn({ txnType: "CF", tags: "client-funds-received", lines: [] }), null, "receiving a deposit is not spending");
+  eq(CORE.approvalScopeOfTxn({ txnType: "AC", tags: "accrual", lines: [] }), "journal", "an accrual is a journal commitment");
+  eq(CORE.approvalScopeOfTxn({ txnType: "BT", lines: [] }), null, "a transfer between our own accounts is not limited");
 }
 
 console.log(`\n${failed ? "✗ FAIL" : "✓ PASS"} — stage 2: ${passed} passed, ${failed} failed`);

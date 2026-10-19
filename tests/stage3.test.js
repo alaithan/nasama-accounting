@@ -25,7 +25,7 @@ const X = new Function(...NAMES, compile("nasama-accounting-v2.core.jsx") + ";\n
              invoiceIsCancelled, invoiceUsesAccrual, invoiceIsAccrual, isClientFundsTxn, AR_ACCOUNT_SEED,
              invLineCalc, invTotals, invLineCents, invPctDisplay, invLineForTarget, invValidate, invTrnValid,
              invCustomerTrnLabel, invBuildArTxn, invBuildCreditNoteTxn, invReceiptPlan, invStatement,
-             invAgingBucket, invPartyKey, invDocKind, invNormalizeLine };`)
+             invAgingBucket, invPartyKey, invDocKind, invNormalizeLine, invDueDateOf, isInvoiceOwnedTxn, dealHasCashBasisRevenue };`)
   .apply(null, NAMES.map(n => n === "React" ? REACT_STUB : n === "console" ? console : () => undefined));
 
 let passed = 0, failed = 0;
@@ -218,6 +218,24 @@ section("3.11 statement of account");
   eq(st.aging.d90, 1500, "July invoice (due 31 Jul) is 61–90 days");
   eq(st.aging.current, 0, "the paid invoice adds nothing");
   eq(X.invPartyKey({ invoicedTo: { companyName: " Emaar " } }), "name:emaar", "unlinked party keyed by name");
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+section("review fixes: IN/CN are not receipts · legacy due dates · cash-basis clash");
+{
+  const inv = baseInv();
+  const ar = X.invBuildArTxn(inv, { deals: DEALS, accounts: ACCOUNTS });
+  ok(X.isInvoiceOwnedTxn(ar), "the issue entry is invoice-owned");
+  ok(X.isInvoiceOwnedTxn(X.invBuildCreditNoteTxn(ar, { id: "c", number: "CN-1", date: "2026-05-02" })), "…and so is the credit note");
+  ok(!X.isInvoiceOwnedTxn(engine([ar]).postInvoiceReceipt({ date: "2026-04-10", deal: OFFPLAN, gross: 10, invoiceId: "inv1", invoiceNo: "101", commit: false })), "a receipt is not");
+  eq(X.invDueDateOf({ invoiceDate: "2026-01-10" }), "2026-02-09", "no dueDate → invoice date + 30 (legacy invoices age)");
+  eq(X.invDueDateOf({ invoiceDate: "2026-01-10", dueDate: "2026-03-01" }), "2026-03-01", "explicit due date kept");
+  const sr = engine([]).postSaleReceipt({ date: "2026-05-01", deal: OFFPLAN, gross: 105000, commit: false });
+  ok(X.dealHasCashBasisRevenue(OFFPLAN, [sr], ACCOUNTS), "a cash-basis receipt on the deal is detected (accrual invoice must be refused)");
+  const rev = engine([sr]).reverseTransaction(sr.id, "2026-05-02", "R", false);
+  ok(!X.dealHasCashBasisRevenue(OFFPLAN, [sr, rev], ACCOUNTS), "…not once it is reversed");
+  const arRcpt = engine([ar]).postInvoiceReceipt({ date: "2026-04-10", deal: OFFPLAN, gross: 10, invoiceId: "inv1", invoiceNo: "101", commit: false });
+  ok(!X.dealHasCashBasisRevenue(OFFPLAN, [ar, arRcpt], ACCOUNTS), "an AR receipt books no revenue, so it is not a clash");
 }
 
 console.log(`\n${failed ? "✗ FAIL" : "✓ PASS"} — stage 3: ${passed} passed, ${failed} failed`);
