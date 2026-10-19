@@ -6716,7 +6716,17 @@ function AuthGate({ children }) {
     try {
       let cred, created = false;
       try { cred = await auth.createUserWithEmailAndPassword(authEmailFor(username), loginPass); created = true; }
-      catch (e) { if (e.code !== "auth/email-already-in-use") throw e; cred = await auth.signInWithEmailAndPassword(authEmailFor(username), loginPass); }
+      catch (e) {
+        if (e.code !== "auth/email-already-in-use") throw e;
+        // A login already exists (made by the OLD version, whose password was
+        // the access code, or by an earlier attempt here). Sign in to it.
+        try { cred = await auth.signInWithEmailAndPassword(authEmailFor(username), loginPass); }
+        catch (e2) {
+          if (["auth/wrong-password", "auth/invalid-credential", "auth/invalid-login-credentials"].includes(e2.code))
+            throw new Error(`A login already exists for “${username}” — from the old version of the app, where its password was your old ACCESS CODE. Enter that old code here (in both boxes) to link it, then change the password in Settings afterwards.`);
+          throw e2;
+        }
+      }
       const uid = cred.user.uid;
       // The record must exist under EXACTLY the username used before (the old
       // login's "Email" box). If it does not, remove the login just created so
