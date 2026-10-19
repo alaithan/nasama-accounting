@@ -3398,32 +3398,6 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
     }
   };
 
-  const handleDeleteAllBpToday = async () => {
-    const today = todayStr();
-    // Catch: original BP txns, any REV-BP- reversal (JV or other type), voided BP originals
-    const toDelete = txns.filter(t =>
-      t.date === today && (
-        t.txnType === "BP" ||
-        (t.ref || "").startsWith("REV-BP-") ||
-        (t.ref || "").startsWith("REV-") && (t.description || "").toLowerCase().includes("broker")
-      )
-    );
-    if (!toDelete.length) { toast("No broker payment transactions found for today", "info"); return; }
-    const bpCount  = toDelete.filter(t => t.txnType === "BP").length;
-    const revCount = toDelete.filter(t => t.txnType !== "BP").length;
-    const lines = toDelete.flatMap(t => t.lines || []);
-    const bankAcctIds = new Set(allLiquidAccts.map(a => a.id));
-    const netBankImpact = lines.reduce((s, l) => bankAcctIds.has(l.accountId) ? s + (l.debit || 0) - (l.credit || 0) : s, 0);
-    if (!confirm(`Permanently DELETE all broker payment transactions from today (${today})?\n\n• ${bpCount} BP transaction(s)\n• ${revCount} reversal/JV transaction(s)\nTotal: ${toDelete.length} entries\nNet bank impact being removed: ${fmtAED(Math.abs(netBankImpact))}\n\nThis CANNOT be undone.`)) return;
-    try {
-      await Promise.all(toDelete.map(t => window.fsDeleteDoc('transactions', t.id)));
-      const deletedIds = new Set(toDelete.map(t => t.id));
-      setTxns(prev => prev.filter(t => !deletedIds.has(t.id)));
-      toast(`Deleted ${toDelete.length} broker payment transactions from ${today}`, "success");
-    } catch (err) {
-      toast("Bulk delete failed: " + err.message, "error");
-    }
-  };
 
   // Diagnostic: find unexplained bank movements (REV- entries and voided txns still affecting balance)
   const suspiciousTxns = useMemo(() => {
@@ -3497,66 +3471,10 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
       {hasPermission(userRole, 'canCreateTxns') && <button style={C.btn("secondary")} onClick={() => setShowImport(true)}>Import Bank CSV</button>}
       {hasPermission(userRole, 'accounting.read') && <button style={C.btn("secondary")} onClick={() => setShowReconcile(true)}>🔄 Reconcile</button>}
       {hasPermission(userRole, 'accounting.read') && <button style={C.btn("secondary")} onClick={() => setShowDuplicates(true)}>⚠ Duplicates</button>}
-      {hasPermission(userRole, 'canVoidTxns') && (() => {
-        const today = todayStr();
-        const bpTodayCount = txns.filter(t => t.date === today && (t.txnType === "BP" || (t.ref || "").startsWith("REV-BP-"))).length;
-        return bpTodayCount > 0 ? <button style={{ ...C.btn("danger"), fontSize: 12 }} onClick={handleDeleteAllBpToday}>Delete All BP Today ({bpTodayCount})</button> : null;
-      })()}
       {hasPermission(userRole, 'canCreateTxns') && <button style={C.btn()} onClick={() => setShowTransfer(true)}>Transfer</button>}
     </PageHeader>
     <DateFilterBar dateFilter={dateFilter} setDateFilter={setDateFilter} />
 
-    {/* ══ ALL-TIME BANK RECONCILIATION FINDER ═════════════════════════ */}
-    {(() => {
-      const bankAcctIds = new Set(allLiquidAccts.map(a => a.id));
-      const allBankTxns = txns
-        .filter(t => !t.isVoid)
-        .map(t => {
-          const bankLines = (t.lines || []).filter(l => bankAcctIds.has(l.accountId));
-          if (!bankLines.length) return null;
-          const netIn  = bankLines.reduce((s, l) => s + (l.debit  || 0), 0);
-          const netOut = bankLines.reduce((s, l) => s + (l.credit || 0), 0);
-          return { id: t.id, date: t.date, ref: t.ref, description: t.description, txnType: t.txnType, netIn, netOut, net: netIn - netOut };
-        })
-        .filter(Boolean)
-        .sort((a, b) => b.netIn - a.netIn);
-
-      const revInflows = allBankTxns.filter(t => t.netIn > 0 && (t.ref || "").startsWith("REV-"));
-      const totalSuspect = revInflows.reduce((s, t) => s + t.netIn, 0);
-
-      if (!revInflows.length) return null;
-
-      return <div style={{ ...C.card, marginBottom: 16, borderLeft: "4px solid #DC2626", background: "#FEF2F2" }}>
-        <div style={{ padding: "12px 16px 10px", borderBottom: "1px solid #FECACA" }}>
-          <div style={{ fontWeight: 700, color: "#991B1B", fontSize: 13 }}>Found — Reversal Entries Adding Money to Bank</div>
-          <div style={{ fontSize: 12, color: "#DC2626", marginTop: 2 }}>
-            {revInflows.length} reversal transaction{revInflows.length !== 1 ? "s" : ""} are adding <strong>{fmtAED(totalSuspect)}</strong> to your bank balance. Delete the ones that should not be there.
-          </div>
-        </div>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead><tr>
-            <th style={C.th}>Date</th>
-            <th style={C.th}>Ref</th>
-            <th style={C.th}>Description</th>
-            <th style={{ ...C.th, textAlign: "right" }}>Adding to Bank</th>
-            <th style={C.th}>Action</th>
-          </tr></thead>
-          <tbody>
-            {revInflows.map(t => (
-              <tr key={t.id} style={{ background: "#FFF5F5" }}>
-                <td style={C.td}>{fmtDate(t.date)}</td>
-                <td style={C.td}><span style={{ fontWeight: 700, color: "#7C3AED", fontSize: 12 }}>{t.ref}</span></td>
-                <td style={C.td}>{t.description}</td>
-                <td style={{ ...C.td, textAlign: "right", fontWeight: 700, color: "#059669" }}>+{fmtAED(t.netIn)}</td>
-                <td style={C.td}>
-                  <button style={C.btn("danger", true)} onClick={() => handleDeleteTxn(t.id)}>Delete</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>;
-    })()}
 
     {/* ══ BANK ACCOUNTS SECTION ═══════════════════════════════════════ */}
     <div style={{ marginBottom: 28 }}>
@@ -4541,7 +4459,7 @@ function VATPage({ accounts, txns, ledger, settings }) {
           '</div>' +
           '<div style="margin-top:12px;">' +
             '<div style="font-size:7pt;text-transform:uppercase;letter-spacing:0.2em;font-weight:700;color:' + INK_VAR + ';">Tax Registration Number</div>' +
-            '<div style="font-size:10pt;font-weight:600;margin-top:2px;">TRN: ' + trn + '</div>' +
+            '<div style="font-size:10pt;font-weight:600;margin-top:2px;">TRN: ' + escHtml(trn) + '</div>' +
           '</div>' +
         '</div>' +
         '<div style="text-align:right;">' +
@@ -4613,7 +4531,7 @@ function VATPage({ accounts, txns, ledger, settings }) {
             '<div style="margin-top:24px;padding-top:16px;border-top:1px solid rgba(196,198,204,0.3);text-align:center;">' +
               '<img src="./nasama-stamp.png" alt="Company Stamp" style="width:150px;height:150px;object-fit:contain;display:block;margin:0 auto 8px;-webkit-print-color-adjust:exact;print-color-adjust:exact;" />' +
               '<div style="font-size:7pt;font-weight:700;text-transform:uppercase;color:' + INK + ';">Company Stamp</div>' +
-              '<div style="font-size:7pt;color:' + INK_VAR + ';margin-top:2px;">' + company + '</div>' +
+              '<div style="font-size:7pt;color:' + INK_VAR + ';margin-top:2px;">' + escHtml(company) + '</div>' +
             '</div>' +
           '</div>' +
         '</aside>' +
@@ -4643,7 +4561,7 @@ function VATPage({ accounts, txns, ledger, settings }) {
       // ══ FOOTER ══
       '<footer style="margin-top:24px;padding-top:14px;border-top:1px solid ' + SURF_HI + ';display:flex;justify-content:space-between;align-items:flex-end;">' +
         '<div>' +
-          '<div style="font-size:7.5pt;font-weight:900;text-transform:uppercase;letter-spacing:0.05em;color:' + INK + ';">' + company + ' \u00b7 Accounting System v2</div>' +
+          '<div style="font-size:7.5pt;font-weight:900;text-transform:uppercase;letter-spacing:0.05em;color:' + INK + ';">' + escHtml(company) + ' \u00b7 Accounting System v2</div>' +
           '<div style="display:flex;gap:14px;margin-top:4px;">' +
             '<span style="font-size:7pt;font-weight:600;text-transform:uppercase;color:' + INK_VAR + ';">Confidential</span>' +
             '<span style="font-size:7pt;font-weight:600;text-transform:uppercase;color:' + INK_VAR + ';">UAE VAT 5%</span>' +
@@ -5837,6 +5755,7 @@ function SettingsPage({ settings, setSettings, userRole, userEmail, accounts, tx
   const draftLock = normalizeLockDate(s.lockedThrough);
 
   const save = async () => {
+    if (!canEditOB) { toast("Only an admin can change settings", "error"); return; }
     let nextSettings = normalizeSettings(s);
     // Period lock: only an admin may move it, and moving it BACK (reopening
     // closed months) needs an explicit confirmation. Stamp who/when for audit.
@@ -5935,7 +5854,12 @@ The books are locked through ${fmtDate(savedLock)}. ` +
     "deal_stage_changes", "deleted_deals_archive", "audit_logs",
   ];
 
+  // Restore only ever writes the data collections it exported — never a
+  // collection named by the file, and never the append-only audit log.
+  const RESTORABLE_COLS = new Set(BACKUP_COLS.filter(c => c !== "audit_logs"));
+  const isAdminUser = isAdminSubject(userRole);
   const handleBackup = async () => {
+    if (!isAdminUser) { toast("Only an admin can download a backup", "error"); return; }
     setBackupStatus("loading");
     try {
       const snaps = await Promise.all([
@@ -5950,9 +5874,12 @@ The books are locked through ${fmtDate(savedLock)}. ` +
         settings: snaps[BACKUP_COLS.length].exists ? snaps[BACKUP_COLS.length].data() : {},
         collections: {}
       };
+      // Never export credentials: legacy access codes are dropped from users.
+      const strip = (col, d) => { if (col !== "authorized_users") return d; const { accessCode, accessCodeUpdatedAt, accessCodeUpdatedBy, ...rest } = d; return rest; };
       BACKUP_COLS.forEach((col, i) => {
-        backup.collections[col] = snaps[i].docs.map(d => ({ _id: d.id, ...d.data() }));
+        backup.collections[col] = snaps[i].docs.map(d => strip(col, { _id: d.id, ...d.data() }));
       });
+      logAudit("backup_downloaded", { collections: BACKUP_COLS.length }, userRole, userEmail);
       const json = JSON.stringify(backup, null, 2);
       const blob = new Blob([json], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -5995,6 +5922,7 @@ The books are locked through ${fmtDate(savedLock)}. ` +
 
   const handleRestore = async () => {
     if (!restorePreview) return;
+    if (!isAdminUser) { toast("Only an admin can restore a backup", "error"); return; }
     setRestoreConfirm(false);
     setRestoreStatus("loading");
     try {
@@ -6008,11 +5936,14 @@ The books are locked through ${fmtDate(savedLock)}. ` +
         const inLocked = (restorePreview.collections.transactions || []).filter(d => (d.date || "") <= lock).length;
         if (inLocked) throw new Error(`${inLocked} transaction(s) in the backup fall inside the closed period (through ${fmtDate(lock)}). Clear the period lock, restore, then lock again.`);
       }
+      let skipped = 0;
       for (const [col, docs] of Object.entries(restorePreview.collections || {})) {
+        if (!RESTORABLE_COLS.has(col)) { skipped++; continue; }
         for (let i = 0; i < docs.length; i += 400) {
           const batch = db.batch();
           docs.slice(i, i + 400).forEach(doc => {
-            const { _id, ...data } = doc;
+            const { _id, accessCode, accessCodeUpdatedAt, accessCodeUpdatedBy, ...data } = doc;
+            if (!_id) return;
             batch.set(db.collection(col).doc(_id), data);
           });
           await batch.commit();
@@ -6155,6 +6086,8 @@ The books are locked through ${fmtDate(savedLock)}. ` +
       </div>
       <div style={{ marginTop: 20 }}><button style={C.btn()} onClick={save}>💾 Save Settings</button></div>
 
+      {!isAdminUser && <div style={{ borderTop: "1px solid #E5E7EB", marginTop: 28, paddingTop: 22, fontSize: 12.5, color: "#6B7280" }}>Backup and restore are available to admins.</div>}
+      {isAdminUser && <>
       {/* ── Database Backup ── */}
       <div style={{ borderTop: "1px solid #E5E7EB", marginTop: 28, paddingTop: 22 }}>
         <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4, color: NAVY }}>🗄️ Database Backup</div>
@@ -6201,6 +6134,7 @@ The books are locked through ${fmtDate(savedLock)}. ` +
           </div>
         </div>}
       </div>
+      </>}
 
       {/* ── Architecture Note ── */}
       <div style={{ marginTop: 28, padding: 16, background: "#FEF2F2", borderRadius: 8, border: "1px solid #FECACA" }}>
@@ -6262,7 +6196,7 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
   const branchMap = branches.reduce((acc, branch) => { acc[branch.id] = branch; return acc; }, {});
   const selectedPreviewRole = roles.find(r => r.id === previewRoleId) || DEFAULT_SECURITY_ROLE_TEMPLATES.find(r => r.id === previewRoleId) || null;
 
-  const emptyUserForm = () => ({ id: "", email: "", role: "secretary", roleId: "secretary", companyId: defaultCompanyId, branchIdsText: "main", paymentApprovalLimit: "", journalApprovalLimit: "", active: true, accessCode: "" });
+  const emptyUserForm = () => ({ id: "", email: "", role: "secretary", roleId: "secretary", companyId: defaultCompanyId, branchIdsText: "main", paymentApprovalLimit: "", journalApprovalLimit: "", active: true });
   const emptyRoleForm = () => ({ id: "", name: "", description: "", legacyRole: "secretary", permissions: {} });
   const emptyBranchForm = () => ({ id: "", name: "", companyId: defaultCompanyId, active: true });
   const emptyPolicyForm = () => ({ id: "", module: "expenses", roleId: "accountant", branchId: "main", companyId: defaultCompanyId, approvalLimit: "", sequence: "1", active: true });
@@ -6308,11 +6242,47 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
     </div>;
   }
 
+  // Create (or re-send) a user's login: a Firebase Auth account made through a
+  // SECONDARY app instance (so the admin's own session is untouched), then a
+  // password-reset email through which the person sets their own password.
+  // The throw-away initial password is never shown to anyone.
+  const [inviting, setInviting] = useState("");
+  const inviteUser = async (email) => {
+    if (!email) return;
+    setInviting(email);
+    try {
+      const name = "nasama-invite";
+      const app2 = (firebase.apps || []).find(x => x.name === name) || firebase.initializeApp(firebase.app().options, name);
+      const auth2 = app2.auth();
+      let created = false;
+      try { await auth2.createUserWithEmailAndPassword(email, randomPassword()); created = true; }
+      catch (e) { if (e.code !== "auth/email-already-in-use") throw e; }
+      try { await auth2.signOut(); } catch { }
+      await auth.sendPasswordResetEmail(email);
+      await db.collection('authorized_users').doc(email).set({ inviteSentAt: new Date().toISOString(), inviteSentBy: userEmail, loginCreated: true }, { merge: true });
+      logAudit(created ? "user_login_created" : "user_invite_resent", { email }, userRole, userEmail);
+      toast(created ? `Login created — ${email} has been emailed a link to set their password` : `Password link re-sent to ${email}`, "success");
+    } catch (e) { toast(explainAuthError(e), "error"); }
+    finally { setInviting(""); }
+  };
+  // One-off clean-up after moving to password logins: access codes must not stay
+  // in the database (they were stored in clear text).
+  const clearLegacyCodes = async () => {
+    const withCode = users.filter(u => u.accessCode);
+    if (!withCode.length) { toast("No access codes left in the database", "success"); return; }
+    if (!window.confirm(`Remove the stored access codes of ${withCode.length} user(s)?\n\nLogins now use passwords; the codes are no longer needed and must not stay on record.`)) return;
+    try {
+      const b = db.batch();
+      withCode.forEach(u => b.set(db.collection('authorized_users').doc(u.id), { accessCode: firebase.firestore.FieldValue.delete(), accessCodeUpdatedAt: firebase.firestore.FieldValue.delete(), accessCodeUpdatedBy: firebase.firestore.FieldValue.delete() }, { merge: true }));
+      await b.commit();
+      logAudit("legacy_access_codes_removed", { count: withCode.length }, userRole, userEmail);
+      toast(`Access codes removed for ${withCode.length} user(s)`, "success");
+    } catch (e) { toast(e.message, "error"); }
+  };
+
   const saveUser = async () => {
     if (!userForm?.email) { toast("Enter user email", "warning"); return; }
     const email = normalizeUserEmail(userForm.email);
-    const accessCode = normalizeAccessCode(userForm.accessCode);
-    if (!userForm.id && !accessCode) { toast("Set an access code for the new user", "warning"); return; }
     const selectedRole = roleMap[userForm.roleId] || DEFAULT_SECURITY_ROLE_TEMPLATES.find(r => r.id === userForm.roleId);
     try {
       const userPayload = {
@@ -6328,15 +6298,16 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
         active: userForm.active !== false,
         updatedBy: userEmail,
         updatedAt: new Date().toISOString(),
-        ...(accessCode ? { accessCode, accessCodeUpdatedAt: new Date().toISOString(), accessCodeUpdatedBy: userEmail } : {})
       };
       if (!userForm.id) {
         userPayload.addedBy = userEmail;
         userPayload.addedAt = new Date().toISOString();
       }
       await db.collection('authorized_users').doc(email).set(userPayload, { merge: true });
+      logAudit(userForm.id ? "user_updated" : "user_added", { email, roleId: userPayload.roleId, active: userPayload.active }, userRole, userEmail);
       toast(userForm.id ? "User updated" : "User added", "success");
       setShowUser(false); setUserForm(null);
+      if (!userForm.id && userForm.sendInvite !== false) await inviteUser(email);
     } catch (err) { toast(err.message, "error"); }
   };
 
@@ -6388,7 +6359,7 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
   const tabBtn = (id, label, count) => <button key={id} onClick={() => setTab(id)} style={{ ...C.btn(tab === id ? undefined : "secondary", true), padding: "8px 12px", minWidth: 120 }}>{label} ({count})</button>;
   const summary = [
     { label: "Active Users", value: users.filter(u => u.active !== false).length, tone: "danger" },
-    { label: "Codes Ready", value: users.filter(u => normalizeAccessCode(u.accessCode)).length, tone: "success" },
+    { label: "Logins Created", value: users.filter(u => u.loginCreated).length, tone: "success" },
     { label: "Role Templates", value: roles.length, tone: "info" },
     { label: "Branches", value: branches.filter(b => b.active !== false).length, tone: "warning" },
     { label: "Approval Rules", value: policies.filter(p => p.active !== false).length, tone: "warning" }
@@ -6430,10 +6401,14 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
               <td style={C.td}><div><span style={C.badge(u.role === "admin" ? "danger" : u.role === "accountant" ? "info" : "neutral")}>{u.role || "secretary"}</span></div><div style={{ fontSize: 12, color: "#6B7280", marginTop: 4 }}>{roleMap[u.roleId]?.name || u.roleId || "-"}</div></td>
               <td style={C.td}>{(u.branchIds || []).length ? (u.branchIds || []).map(id => branchMap[id]?.name || id).join(", ") : "All"}</td>
               <td style={C.td}><span style={C.badge(u.active === false ? "neutral" : "success")}>{u.active === false ? "Inactive" : "Active"}</span></td>
-              <td style={C.td}><span style={C.badge(normalizeAccessCode(u.accessCode) ? "success" : "warning")}>{normalizeAccessCode(u.accessCode) ? "Code set" : "Needs code"}</span></td>
+              <td style={C.td}>{u.loginCreated
+                ? <span style={C.badge("success")} title={u.inviteSentAt ? `Invite sent ${fmtDate(String(u.inviteSentAt).slice(0, 10))}` : ""}>Login created</span>
+                : <span style={C.badge("warning")}>No login yet</span>}
+                {u.accessCode && <div style={{ fontSize: 10.5, color: "#B45309", marginTop: 3 }}>legacy code on record</div>}</td>
               <td style={C.td}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button style={C.btn("secondary", true)} onClick={() => { setUserForm({ id: u.id, email: u.email || "", role: u.role || "secretary", roleId: u.roleId || u.role || "secretary", companyId: u.companyId || defaultCompanyId, branchIdsText: (u.branchIds || []).join(", ") || "main", paymentApprovalLimit: u.approvalLimits?.payments ?? "", journalApprovalLimit: u.approvalLimits?.journalEntries ?? "", active: u.active !== false, accessCode: "" }); setShowUser(true); }}>Edit / Reset Code</button>
+                  <button style={{ ...C.btn("secondary", true), color: "#1D4ED8" }} disabled={inviting === u.id} title={u.loginCreated ? "Email a new password-setup link" : "Create the login and email a password-setup link"} onClick={() => inviteUser(u.id)}>{inviting === u.id ? "…" : u.loginCreated ? "Re-send link" : "Send invite"}</button>
+                  <button style={C.btn("secondary", true)} onClick={() => { setUserForm({ id: u.id, email: u.email || "", role: u.role || "secretary", roleId: u.roleId || u.role || "secretary", companyId: u.companyId || defaultCompanyId, branchIdsText: (u.branchIds || []).join(", ") || "main", paymentApprovalLimit: u.approvalLimits?.payments ?? "", journalApprovalLimit: u.approvalLimits?.journalEntries ?? "", active: u.active !== false }); setShowUser(true); }}>Edit / Reset Code</button>
                 </div>
               </td>
             </tr>)}
@@ -6442,7 +6417,8 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
       </div>
       <div style={{ ...C.card, padding: 16 }}>
         <div style={{ fontWeight: 700, marginBottom: 10 }}>Role Preview</div>
-        <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 12 }}>For this small team, login is handled with simple admin-set access codes. If someone forgets theirs, open the user record and set a new one.</div>
+        <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 12 }}>Logins are Firebase email + password with a verified email address. “Send invite” creates the login and emails a link to set the password; “Re-send link” does the same for someone who forgot it. Posting limits are read at sign-in — after changing them the person signs out and in.</div>
+        {users.some(u => u.accessCode) && <button style={{ ...C.btn("secondary", true), color: "#DC2626", marginBottom: 12 }} onClick={clearLegacyCodes}>Remove legacy access codes ({users.filter(u => u.accessCode).length})</button>}
         <label style={C.label}>Template / Role</label>
         <Sel value={previewRoleId} onChange={e => setPreviewRoleId(e.target.value)}>
           {roles.map(role => <option key={role.id} value={role.id}>{role.name}</option>)}
@@ -6509,10 +6485,12 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
             <div style={{ gridColumn: "1 / -1" }}><label style={C.label}>Allowed Branch IDs</label><Inp value={userForm.branchIdsText} onChange={e => setUserForm(p => ({ ...p, branchIdsText: e.target.value }))} placeholder="main, marina, abu-dhabi" /></div>
             <div><label style={C.label}>Payments Approval Limit</label><Inp type="number" value={userForm.paymentApprovalLimit} onChange={e => setUserForm(p => ({ ...p, paymentApprovalLimit: e.target.value }))} /></div>
             <div><label style={C.label}>Journal Approval Limit</label><Inp type="number" value={userForm.journalApprovalLimit} onChange={e => setUserForm(p => ({ ...p, journalApprovalLimit: e.target.value }))} /></div>
-            <div><label style={C.label}>Access Code</label><Inp value={userForm.accessCode} onChange={e => setUserForm(p => ({ ...p, accessCode: e.target.value }))} placeholder={userForm.id ? "Leave blank to keep current code" : "Set a login code"} /></div>
-            <div style={{ display: "flex", alignItems: "flex-end" }}><button style={{ ...C.btn("ghost"), width: "100%", justifyContent: "center" }} onClick={() => { const nextCode = generateAccessCode(); setUserForm(p => ({ ...p, accessCode: nextCode })); toast(`Temporary code: ${nextCode}`, "info"); }}>Generate Temporary Code</button></div>
+            {!userForm.id && <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8 }}>
+              <input id="security-user-invite" type="checkbox" checked={userForm.sendInvite !== false} onChange={e => setUserForm(p => ({ ...p, sendInvite: e.target.checked }))} />
+              <label htmlFor="security-user-invite" style={{ fontSize: 13, color: "#374151", cursor: "pointer" }}>Create the login now and email a password-setup link</label>
+            </div>}
           </div>
-          <div style={{ marginTop: 10, fontSize: 12, color: "#6B7280" }}>Users sign in with their email and this access code. No reset email is needed.</div>
+          <div style={{ marginTop: 10, fontSize: 12, color: "#6B7280" }}>The person signs in with their email and a password they set themselves through the emailed link. Their email must be verified before anything can be read.</div>
           <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8 }}>
             <input id="security-user-active" type="checkbox" checked={userForm.active !== false} onChange={e => setUserForm(p => ({ ...p, active: e.target.checked }))} />
             <label htmlFor="security-user-active" style={{ fontSize: 13, color: "#374151", cursor: "pointer" }}>User is active</label>
@@ -6587,233 +6565,195 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
 }
 
 function AuthGate({ children }) {
+  // ── Login = Firebase Auth email + password, verified email, and a record in
+  // authorized_users (which decides the role). No anonymous sessions, no access
+  // codes in the database. Firebase keeps the session across reloads.
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState(null);
   const [userAccess, setUserAccess] = useState(null);
+  const [mode, setMode] = useState("signin");            // signin | setup | reset | verify
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPass, setLoginPass] = useState("");
+  const [loginPass2, setLoginPass2] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
-
-  const explainBackendAccessError = (err) => {
-    const code = err?.code || "";
-    const host = window.location.hostname || window.location.host || "this site";
-    if (code === "auth/unauthorized-domain") {
-      return `Firebase Authentication does not trust ${host} yet. Add this domain in Firebase Authentication > Settings > Authorized domains.`;
-    }
-    if (code === "auth/operation-not-allowed") {
-      return "Firebase Anonymous Authentication is disabled. Enable Anonymous sign-in in Firebase Authentication > Sign-in method, or sign in once with the old Firebase password.";
-    }
-    if (code === "permission-denied" || /Missing or insufficient permissions/i.test(err?.message || "")) {
-      return `Firebase blocked access to login records for ${host}. On the hosted site, allow the domain in Firebase Authentication and make sure Anonymous sign-in is enabled for access-code login.`;
-    }
-    return err?.message || "Could not connect to Firebase authentication.";
-  };
-
-  const ensureBackendSession = async () => {
-    if (typeof auth === 'undefined') return null;
-    if (auth.currentUser) return auth.currentUser;
-    if (!auth?.signInAnonymously) throw new Error("Firebase Anonymous Authentication is not available in this build.");
-    try {
-      await auth.signInAnonymously();
-    } catch (err) {
-      console.warn("Anonymous auth unavailable:", err?.message || err);
-      throw new Error(explainBackendAccessError(err));
-    }
-    if (!auth.currentUser) throw new Error("Firebase could not create a backend session for access-code login.");
-    return auth.currentUser;
-  };
+  const [pendingUser, setPendingUser] = useState(null);  // signed in, email not verified yet
+  const adopting = useRef(false);
 
   const resolveUserAccess = async (sessionUser) => {
     const roleId = sessionUser?.roleId || sessionUser?.role || "secretary";
     const defaultTemplate = getDefaultSecurityTemplate(roleId);
     let template = defaultTemplate;
-    if (typeof db !== 'undefined') {
-      try {
-        const roleSnap = await db.collection('security_roles').doc(roleId).get();
-        if (roleSnap.exists) {
-          const roleData = roleSnap.data() || {};
-          template = {
-            ...(defaultTemplate || {}),
-            ...roleData,
-            id: roleId,
-            permissions: sanitizeRolePermissions(roleData.permissions || {})
-          };
-        }
-      } catch (err) {
-        console.error("Role template lookup failed:", err);
+    try {
+      const roleSnap = await db.collection('security_roles').doc(roleId).get();
+      if (roleSnap.exists) {
+        const roleData = roleSnap.data() || {};
+        template = { ...(defaultTemplate || {}), ...roleData, id: roleId, permissions: sanitizeRolePermissions(roleData.permissions || {}) };
       }
-    }
+    } catch (err) { console.error("Role template lookup failed:", err); }
     const legacyRole = sessionUser?.role || template?.legacyRole || defaultTemplate?.legacyRole || "secretary";
     const permissions = roleId === "admin" || legacyRole === "admin"
       ? sanitizeRolePermissions(getDefaultSecurityTemplate("admin")?.permissions || {})
       : sanitizeRolePermissions(sessionUser?.permissions || template?.permissions || {});
     // approvalLimits (AED, per user) drive the approval workflow: blank = no limit.
+    // They are read here, at login — change them, and the user signs in again.
     return { email: normalizeUserEmail(sessionUser?.email), roleId, legacyRole, permissions, templateName: template?.name || roleId,
              approvalLimits: sessionUser?.approvalLimits || {} };
   };
 
-  const finishLogin = (sessionUser) => {
-    const email = normalizeUserEmail(sessionUser?.email);
-    const role = sessionUser?.role || "secretary";
-    if (!email) return;
-    ls_set(AUTH_SESSION_KEY, { email, role, loggedInAt: new Date().toISOString() });
-    setUser({ email });
-    setUserRole(role);
+  // A Firebase session becomes an app session only through authorized_users.
+  const adoptSession = async (fbUser) => {
+    if (!fbUser) return false;
+    const email = normalizeUserEmail(fbUser.email);
+    if (!fbUser.emailVerified) { setPendingUser(fbUser); setMode("verify"); return false; }
+    let data = null;
+    try {
+      const doc = await db.collection('authorized_users').doc(email).get();
+      if (doc.exists) data = doc.data() || {};
+    } catch (err) {
+      throw new Error(explainAuthError(err));
+    }
+    if (!data) {
+      // Empty database (first ever login) → this verified user becomes the admin.
+      // Under the production rules a non-authorised user cannot run this query,
+      // so it only ever succeeds on a fresh installation.
+      let empty = false;
+      try { empty = (await db.collection('authorized_users').limit(1).get()).empty; } catch { }
+      if (!empty) throw new Error("This email is not authorised. Ask an admin to add you in User Management.");
+      data = { email, role: 'admin', roleId: 'admin', branchIds: ['main'], active: true, addedAt: new Date().toISOString(), addedBy: 'first-login' };
+      await db.collection('authorized_users').doc(email).set(data, { merge: true });
+    }
+    if (data.active === false) throw new Error("This user is inactive.");
+    const access = await resolveUserAccess({ email, ...data });
+    ACTIVE_USER_ACCESS = access;
+    claimLocalCache(email);
+    setUser({ email, uid: fbUser.uid });
+    setUserRole(data.role || access.legacyRole || "secretary");
+    setUserAccess(access);
+    setPendingUser(null);
+    setMode("signin");
+    setLoginPass(""); setLoginPass2(""); setError("");
+    if (typeof logAudit === "function") logAudit("login", { email }, data.role || "", email).catch(() => {});
+    return true;
   };
 
-  const signOut = () => {
-    ls_remove(AUTH_SESSION_KEY);
+  const signOut = async () => {
+    try { if (user) await logAudit("logout", { email: user.email }, userRole, user.email); } catch { }
+    try { await auth.signOut(); } catch { }
     ACTIVE_USER_ACCESS = null;
-    setUser(null);
-    setUserRole(null);
-    setUserAccess(null);
-    setLoginPass("");
-    setError("");
+    clearLocalCache();
+    try { localStorage.removeItem(LS_CACHE_OWNER); } catch { }
+    setUser(null); setUserRole(null); setUserAccess(null); setPendingUser(null);
+    setLoginPass(""); setLoginPass2(""); setError(""); setNotice(""); setMode("signin");
   };
 
+  // Firebase restores the session itself; every change passes through adoptSession.
   useEffect(() => {
-    let alive = true;
-    const restoreSession = async () => {
-      if (typeof db === 'undefined') {
-        setUser({ email: 'test@example.com' });
-        setUserRole('admin');
-        setLoading(false);
-        return;
-      }
+    if (typeof auth === 'undefined' || !auth || !auth.onAuthStateChanged) { setLoading(false); return; }
+    const unsub = auth.onAuthStateChanged(async fbUser => {
+      if (adopting.current) return;
+      adopting.current = true;
       try {
-        await ensureBackendSession();
-        const saved = ls_get(AUTH_SESSION_KEY, null);
-        const email = normalizeUserEmail(saved?.email);
-        if (!email) return;
-        const doc = await db.collection('authorized_users').doc(email).get();
-        if (!doc.exists || doc.data()?.active === false) {
-          ls_remove(AUTH_SESSION_KEY);
-          return;
-        }
-        const access = await resolveUserAccess({ email, ...doc.data() });
-        ACTIVE_USER_ACCESS = access;
-        if (alive) {
-          finishLogin({ email, ...doc.data() });
-          setUserAccess(access);
-        }
+        if (fbUser) await adoptSession(fbUser);
+        else { setUser(null); setUserRole(null); setUserAccess(null); ACTIVE_USER_ACCESS = null; }
       } catch (err) {
-        console.error('Session restore error:', err);
-        ls_remove(AUTH_SESSION_KEY);
+        setError(err.message || String(err));
+        try { await auth.signOut(); } catch { }
+        setUser(null); setUserRole(null); setUserAccess(null); ACTIVE_USER_ACCESS = null;
       } finally {
-        if (alive) setLoading(false);
+        adopting.current = false;
+        setLoading(false);
       }
-    };
-    restoreSession();
-    return () => { alive = false; };
+    });
+    return () => unsub();
   }, []);
 
-  const tryLegacyPasswordMigration = async (email, accessCode) => {
-    if (typeof auth === 'undefined' || !auth?.signInWithEmailAndPassword) return false;
-    try {
-      await auth.signInWithEmailAndPassword(email, accessCode);
-      await db.collection('authorized_users').doc(email).set({
-        accessCode,
-        accessCodeUpdatedAt: new Date().toISOString(),
-        accessCodeUpdatedBy: email,
-        migratedFromLegacyAuthAt: new Date().toISOString()
-      }, { merge: true });
-      return true;
-    } catch (err) {
-      return false;
-    }
+  const run = async (fn) => {
+    setError(""); setNotice(""); setAuthBusy(true);
+    try { await fn(); } catch (err) { setError(explainAuthError(err)); } finally { setAuthBusy(false); }
   };
-
-  const handleLogin = async () => {
+  const handleLogin = () => run(async () => {
     const email = normalizeUserEmail(loginEmail);
-    const accessCode = normalizeAccessCode(loginPass);
-    setError("");
-    if (!email || !accessCode) { setError("Enter email and access code."); return; }
-    try {
-      setAuthBusy(true);
-      let legacySignedIn = false;
-      if (typeof auth !== 'undefined' && auth?.signInWithEmailAndPassword) {
-        try {
-          await auth.signInWithEmailAndPassword(email, accessCode);
-          legacySignedIn = true;
-        } catch { }
-      }
-      if (!legacySignedIn) await ensureBackendSession();
-      const userRef = db.collection('authorized_users').doc(email);
-      const doc = await userRef.get();
-      if (doc.exists) {
-        const userData = doc.data() || {};
-        if (userData.active === false) throw new Error("This user is inactive.");
-        let savedCode = normalizeAccessCode(userData.accessCode);
-        if (!savedCode) {
-          if (legacySignedIn) {
-            await userRef.set({
-              accessCode,
-              accessCodeUpdatedAt: new Date().toISOString(),
-              accessCodeUpdatedBy: email,
-              migratedFromLegacyAuthAt: new Date().toISOString()
-            }, { merge: true });
-            savedCode = accessCode;
-          } else {
-            const migrated = await tryLegacyPasswordMigration(email, accessCode);
-            if (migrated) savedCode = accessCode;
-          }
-        }
-        if (!savedCode) throw new Error("This user needs an admin to set an access code in User Management.");
-        if (savedCode !== accessCode) throw new Error("Incorrect access code.");
-        const access = await resolveUserAccess({ email, ...userData, accessCode: savedCode });
-        ACTIVE_USER_ACCESS = access;
-        finishLogin({ email, ...userData, accessCode: savedCode });
-        setUserAccess(access);
-        setLoginPass("");
-        return;
-      }
-
-      const existingUsers = await db.collection('authorized_users').limit(1).get();
-      if (!existingUsers.empty) throw new Error("This email is not authorized. Ask admin to add it and set an access code.");
-
-      const firstUser = {
-        email,
-        role: 'admin',
-        roleId: 'admin',
-        branchIds: ['main'],
-        active: true,
-        accessCode,
-        addedAt: new Date().toISOString(),
-        addedBy: 'first-login',
-        accessCodeUpdatedAt: new Date().toISOString(),
-        accessCodeUpdatedBy: email
-      };
-      await userRef.set(firstUser, { merge: true });
-      const access = await resolveUserAccess(firstUser);
-      ACTIVE_USER_ACCESS = access;
-      finishLogin(firstUser);
-      setUserAccess(access);
-      setLoginPass("");
-    } catch (err) {
-      setError(explainBackendAccessError(err));
-    } finally {
-      setAuthBusy(false);
-    }
-  };
+    if (!email || !loginPass) throw new Error("Enter your email and password.");
+    await auth.signInWithEmailAndPassword(email, loginPass);   // onAuthStateChanged → adoptSession
+  });
+  // First-time setup: the person already exists in authorized_users (added by an
+  // admin) but has no login yet. The account is only usable once the email is
+  // verified AND an admin has authorised it, so this cannot grant access by itself.
+  const handleSetup = () => run(async () => {
+    const email = normalizeUserEmail(loginEmail);
+    if (!email) throw new Error("Enter your email.");
+    if ((loginPass || "").length < 8) throw new Error("Choose a password of at least 8 characters.");
+    if (loginPass !== loginPass2) throw new Error("The two passwords do not match.");
+    const cred = await auth.createUserWithEmailAndPassword(email, loginPass);
+    await cred.user.sendEmailVerification();
+    setPendingUser(cred.user); setMode("verify");
+  });
+  const handleReset = () => run(async () => {
+    const email = normalizeUserEmail(loginEmail);
+    if (!email) throw new Error("Enter your email.");
+    await auth.sendPasswordResetEmail(email);
+    setNotice(`A password-reset link has been emailed to ${email}. It also verifies the address.`);
+    setMode("signin");
+  });
+  const handleResendVerify = () => run(async () => {
+    const u = pendingUser || auth.currentUser;
+    if (!u) throw new Error("Sign in first.");
+    await u.sendEmailVerification();
+    setNotice(`Verification link sent to ${u.email}.`);
+  });
+  const handleVerified = () => run(async () => {
+    const u = pendingUser || auth.currentUser;
+    if (!u) throw new Error("Sign in first.");
+    await u.reload();
+    if (!u.emailVerified) throw new Error("Not verified yet — open the link in the email, then try again.");
+    await adoptSession(auth.currentUser);
+  });
 
   if (loading) return <div style={{ position: "fixed", inset: 0, background: NAVY, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20 }}>
     <Logo size={64} /><div style={{ color: GOLD, fontSize: 18, fontWeight: 700 }}>NASAMA PROPERTIES</div>
     <div style={{ color: "#8B8BA8", fontSize: 13 }}>Loading…</div>
   </div>;
 
-  if (!user) return <div style={{ position: "fixed", inset: 0, background: `linear-gradient(135deg, ${NAVY} 0%, #2D2D45 100%)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-    <div style={{ background: "#fff", borderRadius: 16, padding: 40, width: "100%", maxWidth: 400, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
-      <div style={{ textAlign: "center", marginBottom: 24 }}><Logo size={48} /><div style={{ fontWeight: 700, fontSize: 18, color: NAVY, marginTop: 8 }}>Nasama Properties</div><div style={{ fontSize: 13, color: "#6B7280" }}>Accounting System v2 · Clean Backend</div></div>
-      {error && <div style={C.err}>{error}</div>}
-      <div style={{ marginBottom: 12 }}><label style={C.label}>Email</label><Inp value={loginEmail} onChange={e => setLoginEmail(e.target.value)} placeholder="your@email.com" /></div>
-      <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 12 }}>Use the access code set by the admin. If this is the very first login, this screen creates the first admin user.</div>
-      <div style={{ marginBottom: 16 }}><label style={C.label}>Password</label><input type="password" style={C.input} value={loginPass} onChange={e => setLoginPass(e.target.value)} placeholder="••••••••" onKeyDown={e => e.key === "Enter" && handleLogin()} /></div>
-      <button style={{ ...C.btn(), width: "100%", justifyContent: "center", padding: "12px 0" }} onClick={handleLogin}>{authBusy ? "Signing In..." : "Sign In"}</button>
-      <div style={{ marginTop: 12, fontSize: 12, color: "#6B7280", textAlign: "center" }}>If someone forgets the code, an admin can reset it from User Management.</div>
-    </div>
-  </div>;
+  if (!user) {
+    const link = (label, onClick) => <button type="button" onClick={onClick} style={{ background: "none", border: "none", color: "#1D4ED8", cursor: "pointer", fontSize: 12.5, padding: 0 }}>{label}</button>;
+    const onEnter = e => { if (e.key === "Enter") (mode === "setup" ? handleSetup : mode === "reset" ? handleReset : handleLogin)(); };
+    return <div style={{ position: "fixed", inset: 0, background: `linear-gradient(135deg, ${NAVY} 0%, #2D2D45 100%)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: 40, width: "100%", maxWidth: 420, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
+        <div style={{ textAlign: "center", marginBottom: 24 }}><Logo size={48} /><div style={{ fontWeight: 700, fontSize: 18, color: NAVY, marginTop: 8 }}>Nasama Properties</div><div style={{ fontSize: 13, color: "#6B7280" }}>Accounting System</div></div>
+        {error && <div style={C.err}>{error}</div>}
+        {notice && <div style={{ ...C.err, background: "#ECFDF5", color: "#047857", border: "1px solid #A7F3D0" }}>{notice}</div>}
+
+        {mode === "verify" ? <>
+          <div style={{ fontSize: 14, fontWeight: 700, color: NAVY, marginBottom: 8 }}>Verify your email</div>
+          <div style={{ fontSize: 13, color: "#374151", lineHeight: 1.6, marginBottom: 16 }}>
+            We sent a verification link to <strong>{(pendingUser && pendingUser.email) || loginEmail}</strong>. Open it, then come back and press the button below. Nothing can be read until the address is verified.
+          </div>
+          <button style={{ ...C.btn(), width: "100%", justifyContent: "center", padding: "12px 0" }} disabled={authBusy} onClick={handleVerified}>{authBusy ? "Checking…" : "I've verified — continue"}</button>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14 }}>
+            {link("Resend the link", handleResendVerify)}
+            {link("Use another account", signOut)}
+          </div>
+        </> : <>
+          <div style={{ marginBottom: 12 }}><label style={C.label}>Email</label><Inp value={loginEmail} onChange={e => setLoginEmail(e.target.value)} placeholder="your@email.com" /></div>
+          {mode !== "reset" && <div style={{ marginBottom: 12 }}><label style={C.label}>{mode === "setup" ? "Choose a password" : "Password"}</label><input type="password" style={C.input} value={loginPass} onChange={e => setLoginPass(e.target.value)} placeholder="••••••••" onKeyDown={onEnter} /></div>}
+          {mode === "setup" && <div style={{ marginBottom: 12 }}><label style={C.label}>Repeat the password</label><input type="password" style={C.input} value={loginPass2} onChange={e => setLoginPass2(e.target.value)} placeholder="••••••••" onKeyDown={onEnter} /></div>}
+          {mode === "setup" && <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 12, lineHeight: 1.5 }}>For people an admin has already added in User Management. You will receive a verification email; access starts once it is confirmed.</div>}
+          {mode === "reset" && <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 12, lineHeight: 1.5 }}>We will email a link to set a new password.</div>}
+          <button style={{ ...C.btn(), width: "100%", justifyContent: "center", padding: "12px 0", marginTop: 4 }} disabled={authBusy}
+            onClick={mode === "setup" ? handleSetup : mode === "reset" ? handleReset : handleLogin}>
+            {authBusy ? "Please wait…" : mode === "setup" ? "Create my login" : mode === "reset" ? "Send reset link" : "Sign In"}
+          </button>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14, gap: 8, flexWrap: "wrap" }}>
+            {mode === "signin" ? <>{link("Forgot password?", () => { setError(""); setMode("reset"); })}{link("First time here? Set your password", () => { setError(""); setMode("setup"); })}</>
+              : link("← Back to sign in", () => { setError(""); setMode("signin"); })}
+          </div>
+        </>}
+      </div>
+    </div>;
+  }
 
   return React.Children.map(children, child => React.cloneElement(child, { userRole, userAccess, userEmail: user.email, signOut }));
 }
@@ -7452,6 +7392,19 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     return written;
   };
 
+  // What the audit log keeps per ledger write: enough to see who changed which
+  // entry, by how much, and (for edits) which fields moved.
+  const auditTxnSummary = (t, prev) => {
+    if (!t) return {};
+    const sum = x => (x && x.lines || []).reduce((s, l) => s + (l.debit || 0), 0);
+    const out = { txId: t.id, ref: t.ref || "", date: t.date || "", txnType: t.txnType || "", description: t.description || "", totalDebit: sum(t), isVoid: !!t.isVoid };
+    if (prev) {
+      const keys = ["date", "description", "counterparty", "isVoid", "deal_id", "invoice_id"].filter(k => JSON.stringify(prev[k]) !== JSON.stringify(t[k]));
+      if (sum(prev) !== sum(t) || JSON.stringify(prev.lines) !== JSON.stringify(t.lines)) keys.push("lines");
+      out.changed = keys; out.prevTotalDebit = sum(prev);
+    }
+    return out;
+  };
   const persistTxn = useCallback(async (txn) => {
     if (!txn?.id) throw new Error("Transaction id is required");
     if (!navigator.onLine) throw new Error("Offline — changes not saved");
@@ -7481,6 +7434,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
         return next;
       });
       setWriteMeta(meta => ({ ...meta, transactions: { status: "saved", startedAt, completedAt: new Date().toISOString(), error: "" } }));
+      logAudit(prevTxn ? "txn_update" : "txn_create", auditTxnSummary(saved, prevTxn), accessSubject, userEmail).catch(() => {});
       return saved;
     } catch (e) {
       setSyncError(true);
@@ -7537,6 +7491,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       return next;
     });
     setWriteMeta(meta => ({ ...meta, transactions: { status: "saved", startedAt, completedAt: new Date().toISOString(), error: "" } }));
+    logAudit("txn_batch", { count: final.length, entries: final.slice(0, 50).map(t => auditTxnSummary(t, (txnsRef.current || []).find(x => x.id === t.id))) }, accessSubject, userEmail).catch(() => {});
     return final;
   }, []);
   const saveTxn = useCallback((txn) => { persistTxn(txn).catch(e => toast(`Save error: ${e.message}`, "error")); }, [persistTxn]);
@@ -7628,12 +7583,15 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     if (!navigator.onLine) throw new Error("Offline — changes not saved");
     assertPeriodOpen({ prev: (txnsRef.current || []).find(t => t.id === txnId) || null, settings: settingsRef.current });
     assertNotReconciled({ prev: (txnsRef.current || []).find(t => t.id === txnId) || null });
+    const gone = (txnsRef.current || []).find(t => t.id === txnId) || null;
     await window.fsDeleteDoc('transactions', txnId);
     setTxns(prev => {
       const next = prev.filter(t => t.id !== txnId);
       ls_set('transactions', next);
       return next;
     });
+    // The whole entry goes into the log: a hard delete is otherwise untraceable.
+    logAudit("txn_delete", { ...auditTxnSummary(gone), lines: (gone && gone.lines) || [] }, accessSubject, userEmail).catch(() => {});
   }, []);
   const journal = useMemo(() => createJournalEngine({ accounts, txns, saveTxn }), [accounts, txns, saveTxn]);
 

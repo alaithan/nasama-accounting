@@ -1370,6 +1370,50 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     const ls_get = (k, fb) => { try { const v = localStorage.getItem("na2_" + k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
     const ls_set = (k, v) => { try { localStorage.setItem("na2_" + k, JSON.stringify(v)); } catch { } };
     const ls_remove = (k) => { try { localStorage.removeItem("na2_" + k); } catch { } };
+    // The local mirror of every collection belongs to ONE signed-in user. On
+    // sign-out, or when a different person signs in on the same machine, it is
+    // wiped so nobody sees the previous user's ledger.
+    const LS_CACHE_OWNER = "na2_cache_owner";
+    const clearLocalCache = () => {
+      try {
+        Object.keys(localStorage).filter(k => k.startsWith("na2_") && k !== LS_CACHE_OWNER).forEach(k => localStorage.removeItem(k));
+      } catch { }
+    };
+    const claimLocalCache = (email) => {
+      try {
+        const owner = localStorage.getItem(LS_CACHE_OWNER) || "";
+        if (owner !== email) { clearLocalCache(); localStorage.setItem(LS_CACHE_OWNER, email); }
+      } catch { }
+    };
+    // Random throw-away password for an invited user's Auth account; they set
+    // their own through the password-reset email and never see this one.
+    const randomPassword = () => {
+      const a = new Uint8Array(24);
+      (window.crypto || {}).getRandomValues ? window.crypto.getRandomValues(a) : a.forEach((_, i) => { a[i] = Math.floor(Math.random() * 256); });
+      return "Nz" + Array.from(a, b => "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[b % 62]).join("") + "!7";
+    };
+    /** Why a Firebase Auth / Firestore error happened, in the user's words. */
+    const explainAuthError = (err) => {
+      const code = (err && err.code) || "";
+      const host = window.location.hostname || "this site";
+      const map = {
+        "auth/invalid-email": "That email address is not valid.",
+        "auth/user-not-found": "No login exists for that email yet. Use “First time here? Set your password”, or ask an admin to send you an invite.",
+        "auth/wrong-password": "Email or password is incorrect.",
+        "auth/invalid-credential": "Email or password is incorrect.",
+        "auth/invalid-login-credentials": "Email or password is incorrect.",
+        "auth/too-many-requests": "Too many attempts — wait a few minutes or reset your password.",
+        "auth/user-disabled": "This login has been disabled by an admin.",
+        "auth/email-already-in-use": "A login already exists for that email. Sign in, or use “Forgot password”.",
+        "auth/weak-password": "Choose a longer password (at least 8 characters).",
+        "auth/network-request-failed": "No connection to Firebase — check your internet.",
+        "auth/unauthorized-domain": `Firebase Authentication does not trust ${host} yet. Add it under Firebase Authentication › Settings › Authorized domains.`,
+        "auth/operation-not-allowed": "Email/password sign-in is switched off. Enable it under Firebase Authentication › Sign-in method.",
+      };
+      if (map[code]) return map[code];
+      if (code === "permission-denied" || /insufficient permissions/i.test((err && err.message) || "")) return "Your login is not authorised for this data. Make sure your email is verified and an admin has added you in User Management.";
+      return (err && err.message) || "Could not reach Firebase.";
+    };
     // useState that remembers its value in localStorage, so a section's filter /
     // sort / tab survives leaving and re-opening the page. Use a unique key.
     const usePersistedState = (key, fallback) => {

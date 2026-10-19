@@ -2,21 +2,60 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Require an authenticated session for all data access.
-    //
-    // The app ALWAYS signs in before touching Firestore — either with
-    // email/password, or the anonymous "access-code" backend session
-    // (ensureBackendSession → signInAnonymously). So this rule keeps every
-    // legitimate login working while blocking anonymous public access from
-    // the open internet (the cause of Firebase's "insecure rules" warning).
-    //
-    // NOTE: because the access-code login uses anonymous auth, request.auth
-    // is also non-null for anonymous app users. This is a big step up from
-    // world-open, but not airtight against someone who deliberately signs in
-    // anonymously outside the app. Hardening further (e.g. dropping anonymous
-    // auth, per-user rules) is a larger change — ask if you want it.
+    // ── Who may touch the data ──────────────────────────────────────────
+    // Every request must come from a real Firebase Auth user (email/password)
+    // whose email is verified, who has a record in authorized_users, and who
+    // is not switched off. Anonymous sessions are refused outright — the old
+    // rule accepted ANY signed-in session, including anonymous ones anyone
+    // could create from the open internet.
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.firebase.sign_in_provider != 'anonymous'
+        && request.auth.token.email_verified == true;
+    }
+    function userPath() {
+      return /databases/$(database)/documents/authorized_users/$(request.auth.token.email.lower());
+    }
+    function userData() { return get(userPath()).data; }
+    function isAuthorized() {
+      return signedIn() && exists(userPath()) && userData().active != false;
+    }
+    function roleId() {
+      return userData().roleId != null ? userData().roleId : userData().role;
+    }
+    function isAdmin() {
+      return isAuthorized() && (roleId() == 'admin' || userData().role == 'admin');
+    }
+    // The "sales" role is read-only (it sees the pipeline and performance).
+    function canWrite() { return isAuthorized() && roleId() != 'sales'; }
+
+    // ── Admin-only configuration ────────────────────────────────────────
+    match /authorized_users/{email} {
+      allow read: if isAuthorized() && (request.auth.token.email.lower() == email || isAdmin());
+      allow write: if isAdmin();
+    }
+    match /security_roles/{id}    { allow read: if isAuthorized(); allow write: if isAdmin(); }
+    match /approval_policies/{id} { allow read: if isAuthorized(); allow write: if isAdmin(); }
+    match /company_branches/{id}  { allow read: if isAuthorized(); allow write: if isAdmin(); }
+    match /settings/{id}          { allow read: if isAuthorized(); allow write: if isAdmin(); }
+
+    // ── Append-only logs ────────────────────────────────────────────────
+    match /audit_logs/{id} {
+      allow read: if isAdmin();
+      allow create: if isAuthorized();
+      allow update, delete: if false;
+    }
+    match /deal_stage_changes/{id} {
+      allow read: if isAuthorized();
+      allow create: if canWrite();
+      allow update, delete: if false;
+    }
+
+    // ── Everything else (ledger, deals, invoices, counters, attachments…) ──
+    match /user_presence/{id} { allow read, write: if isAuthorized(); }
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read: if isAuthorized();
+      allow write: if canWrite();
     }
   }
 }
