@@ -6606,8 +6606,15 @@ function AuthGate({ children }) {
   // A Firebase session becomes an app session only through authorized_users.
   const adoptSession = async (fbUser) => {
     if (!fbUser) return false;
+    // A browser can still hold an ANONYMOUS session from the old access-code
+    // login (no email, never verifiable). Discard it and show the sign-in page.
+    if (fbUser.isAnonymous || !fbUser.email) {
+      try { await auth.signOut(); } catch { }
+      setPendingUser(null); setMode("signin");
+      return false;
+    }
     const email = normalizeUserEmail(fbUser.email);
-    if (!fbUser.emailVerified) { setPendingUser(fbUser); setMode("verify"); return false; }
+    if (!fbUser.emailVerified) { setPendingUser(fbUser); setLoginEmail(fbUser.email || ""); setMode("verify"); return false; }
     let data = null;
     try {
       const doc = await db.collection('authorized_users').doc(email).get();
