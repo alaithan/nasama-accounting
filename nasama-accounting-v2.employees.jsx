@@ -196,6 +196,7 @@ function buildEmployeeLedger({ roster, deals, txns, accounts, from, to }) {
 
   (txns || []).forEach(t => {
     if (t.isVoid || !inRange(t.date)) return;
+    if (typeof isClosingTxn === "function" && isClosingTxn(t)) return;   // year-end close is not payroll
     (t.lines || []).forEach(l => {
       const a = acctById.get(l.accountId);
       if (!a) return;
@@ -210,7 +211,7 @@ function buildEmployeeLedger({ roster, deals, txns, accounts, from, to }) {
         isReversal: amt < 0,
       };
 
-      const tagId = l.broker_id || l.manager_id || t.broker_id || "";
+      const tagId = l.broker_id || l.manager_id || l.employee_id || t.broker_id || "";
       const tagged = tagId ? (byBrokerId.get(tagId) || byId.get(tagId)) : null;
       if (tagged) return add(tagged, row, "tagged");
 
@@ -241,34 +242,48 @@ function buildEmployeeLedger({ roster, deals, txns, accounts, from, to }) {
   }
 
   // ── revenue side ───────────────────────────────────────────────
-  const srByDeal = new Map();
+  // Revenue = the deal's revenue-account lines (credit − debit): NET of VAT, so
+  // it compares like-for-like with the (net) broker cost, and it works for cash
+  // receipts and accrual invoices alike — reversals and credit notes subtract
+  // by themselves. It is dated by the ENTRY (receipt / invoice date), not by the
+  // deal's creation date, so revenue lands in the period it was earned.
+  const revInPeriod = new Map(), revEver = new Map();
   (txns || []).forEach(t => {
-    if (t.isVoid || t.txnType !== "SR" || !t.deal_id) return;
-    const cash = (t.lines || []).reduce((s, l) => {
+    if (t.isVoid) return;
+    (t.lines || []).forEach(l => {
       const a = acctById.get(l.accountId);
-      return s + (a && (a.isBank || a.isCash || a.code === "1001" || a.code === "1002") ? (l.debit || 0) : 0);
-    }, 0);
-    srByDeal.set(t.deal_id, (srByDeal.get(t.deal_id) || 0) + cash);
+      const dealId = l.deal_id || t.deal_id;
+      if (!a || a.type !== "Revenue" || !dealId) return;
+      const amt = (l.credit || 0) - (l.debit || 0);
+      revEver.set(dealId, (revEver.get(dealId) || 0) + amt);
+      if (inRange(t.date)) revInPeriod.set(dealId, (revInPeriod.get(dealId) || 0) + amt);
+    });
   });
 
   (deals || []).forEach(d => {
     const p = d.broker_id ? byBrokerId.get(d.broker_id) : null;
-    if (!p || !inRange(d.created_at)) return;
+    if (!p) return;
     const rec = people.get(p.id);
     if (!rec) return;
+    const createdInRange = inRange(d.created_at);
+    const periodRevenue = revInPeriod.get(d.id) || 0;
+    if (!createdInRange && !periodRevenue) return;
     const collected = d.stage === "Commission Collected";
-    // No linked receipt? For deals already marked collected the cash came in before the
-    // system existed, so fall back to the expected commission — a reporting figure only,
-    // no bank transaction, no double count. Mirrors PerformancePage.
-    const cashIn = srByDeal.get(d.id) || (collected ? (d.expected_commission_net || 0) : 0);
+    // Deals marked collected before the system existed have no revenue in the
+    // books at all: fall back to the expected commission, dated by the deal —
+    // a reporting figure only, no double count. Mirrors PerformancePage.
+    const legacy = !revEver.has(d.id) && collected && createdInRange ? (d.expected_commission_net || 0) : 0;
+    const generated = periodRevenue || legacy;
     rec.dealCount++;
     rec.deals.push({ id: d.id, name: d.property_name || d.id, stage: d.stage, type: d.type,
-      value: d.transaction_value || 0, commission: d.expected_commission_net || 0, cashIn,
+      value: d.transaction_value || 0, commission: d.expected_commission_net || 0, cashIn: generated,
       brokerPaid: d.broker_paid_amount || 0, date: d.created_at || "" });
-    if (collected) { rec.collectedCount++; rec.generated += cashIn; }
-    else rec.pipeline += (d.expected_commission_net || 0);
+    rec.generated += generated;
+    if (collected && createdInRange) rec.collectedCount++;
+    // Pipeline: open (not collected, not cancelled) and not yet booked as revenue.
+    if (isOpenDeal(d) && createdInRange) rec.pipeline += Math.max(0, (d.expected_commission_net || 0) - Math.max(0, revEver.get(d.id) || 0));
     // Collected but nothing paid out to the broker → an unrecorded or unpaid obligation.
-    if (collected && !(d.broker_paid_amount > 0)) {
+    if (collected && createdInRange && !(d.broker_paid_amount > 0)) {
       const paidByTxn = (txns || []).some(t => !t.isVoid && t.deal_id === d.id && t.txnType === "BP");
       if (!paidByTxn) rec.outstanding.push({ id: d.id, name: d.property_name || d.id, commission: d.expected_commission_net || 0, date: d.created_at || "" });
     }
@@ -315,8 +330,107 @@ function describePayBasis(cost) {
 // ╔══════════════════════════════════════════════════╗
 //  PAGE
 // ╚══════════════════════════════════════════════════╝
+// ══ Payroll & end-of-service (Stage 6.2 / 6.3) ═════════════════════
+// Accrue the month's salaries (DR 5010 / CR 2240 per person), pay them
+// (DR 2240 / CR bank, recovering any staff advance via CR 1150), record staff
+// advances (DR 1150 / CR bank), and true the UAE end-of-service provision up
+// to the month end (DR 5302 / CR 2250). Uses base_salary and join_date.
+function PayrollTab({ employees, txns, accounts, postWithApproval, userRole }) {
+  const prevMonth = (() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })();
+  const [month, setMonth] = useState(prevMonth);
+  const [busy, guard] = useSubmitGuard();
+  const [action, setAction] = useState(null);     // { kind: "pay"|"advance", emp, amount, recover, bankCode, date }
+  const KEYS = ["salaries", "salariesPayable", "staffAdvances", "eosbProvision", "eosbExpense"];
+  const { accounts: chart, missing } = withStage6Accounts(accounts, KEYS);
+  const patches = missing.map(a => ({ col: "accounts", id: a.id, data: a }));
+  const banks = chart.filter(isMoneyAccount);
+  const byCode = c => chart.find(a => a.code === c);
+  const okMonth = /^\d{4}-\d{2}$/.test(month);
+  const asOf = okMonth ? monthEnd(month) : todayStr();
+  const people = (employees || []).filter(e => !e.archived);
+  const eosb = useMemo(() => computeEosbProvision({ accounts: chart, employees: people, txns, asOf }), [chart, people, txns, asOf]);
+  const eosbById = new Map(eosb.map(r => [r.employee.id, r]));
+  const owedOf = e => employeeBalance(txns, byCode("2240").id, e.id);
+  const advOf = e => -employeeBalance(txns, byCode("1150").id, e.id);
+  const accrualPreview = useMemo(() => { try { return buildSalaryAccrualTxn({ accounts: chart, employees: people, txns, month }); } catch (e) { return { error: e.message }; } }, [chart, people, txns, month]);
+  const accrualTotal = accrualPreview.lines ? accrualPreview.lines.reduce((s, l) => s + (l.debit || 0), 0) : 0;
+  const eosbAdj = eosb.reduce((s, r) => s + r.adjustment, 0);
+  const canPost = hasPermission(userRole, "accounting.create");
+  const post = async (list, scope, summary, okMsg) => {
+    const res = await postWithApproval(list, { scope, summary, patches });
+    toast(res.status === "pending" ? `${summary} — sent for approval` : okMsg, res.status === "pending" ? "info" : "success");
+  };
+  const accrue = async () => {
+    try { await post([buildSalaryAccrualTxn({ accounts: chart, employees: people, txns, month })], "journal", `Salary accrual ${month}`, `Salaries for ${month} accrued — ${fmtAED(accrualTotal)}`); }
+    catch (e) { toast(e.message, "error"); }
+  };
+  const updateEosb = async () => {
+    try { await post([buildEosbTxn({ accounts: chart, rows: eosb, asOf })], "journal", `End-of-service provision to ${asOf}`, `End-of-service provision updated to ${asOf}`); }
+    catch (e) { toast(e.message, "error"); }
+  };
+  const runAction = async () => {
+    const a = action;
+    try {
+      const amountC = toCents(a.amount), recoverC = toCents(a.recover || 0);
+      const txn = a.kind === "pay"
+        ? buildSalaryPaymentTxn({ accounts: chart, txns, employee: a.emp, grossC: amountC, recoverC, bankCode: a.bankCode, date: a.date })
+        : buildStaffAdvanceTxn({ accounts: chart, employee: a.emp, amountC, bankCode: a.bankCode, date: a.date });
+      await post([txn], "payments", `${a.kind === "pay" ? "Salary payment" : "Staff advance"} — ${a.emp.name}`, a.kind === "pay" ? `Salary paid to ${a.emp.name}` : `Advance to ${a.emp.name} recorded`);
+      setAction(null);
+    } catch (e) { toast(e.message, "error"); }
+  };
+  if (!people.length) return <div style={{ ...C.card, padding: 24, color: "#6B7280", fontSize: 13 }}>Create the employee records first (Roster tab), then set each person's base salary and join date.</div>;
+  return <div>
+    <div style={{ ...C.card, padding: 16, marginBottom: 14, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+      <label style={C.label}>Month</label><Inp type="month" value={month} onChange={e => setMonth(e.target.value)} style={{ width: 170 }} />
+      {canPost && <button style={C.btn()} disabled={busy || !!accrualPreview.error} onClick={() => guard(accrue)} title="DR 5010 Employee Salaries / CR 2240 Salaries Payable, one line per person">Accrue salaries ({fmtAED(accrualTotal)})</button>}
+      {accrualPreview.error && <span style={{ fontSize: 12, color: "#6B7280" }}>{accrualPreview.error}</span>}
+      {canPost && <button style={C.btn("secondary")} disabled={busy || !eosbAdj} onClick={() => guard(updateEosb)} title="True the provision up (or down) to what each person has earned by the month end">Update end-of-service provision ({eosbAdj >= 0 ? "+" : "−"}{fmtAED(Math.abs(eosbAdj))})</button>}
+      {missing.length > 0 && <span style={{ fontSize: 11.5, color: "#9CA3AF" }}>Will create: {missing.map(a => a.code).join(", ")}</span>}
+    </div>
+    <div style={C.card}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+        <thead><tr>{["Employee", "Base salary", "Owed (2240)", "Advance (1150)", "Service", "EOSB earned", "EOSB booked", ""].map((h, i) => <th key={h} style={{ ...C.th, textAlign: i > 0 && i < 7 ? "right" : "left" }}>{h}</th>)}</tr></thead>
+        <tbody>{people.map(e => {
+          const g = eosbById.get(e.id);
+          return <tr key={e.id}>
+            <td style={C.td}><div style={{ fontWeight: 600 }}>{e.name}</div><div style={{ fontSize: 11, color: "#9CA3AF" }}>{e.join_date ? `joined ${fmtDate(e.join_date)}` : "no join date"}{e.leave_date ? ` · left ${fmtDate(e.leave_date)}` : ""}</div></td>
+            <td style={{ ...C.td, textAlign: "right" }}>{e.base_salary ? fmtAED(e.base_salary) : "—"}</td>
+            <td style={{ ...C.td, textAlign: "right", fontWeight: 600, color: owedOf(e) > 0 ? "#B45309" : undefined }}>{fmtAED(owedOf(e))}</td>
+            <td style={{ ...C.td, textAlign: "right" }}>{advOf(e) ? fmtAED(advOf(e)) : "—"}</td>
+            <td style={{ ...C.td, textAlign: "right" }}>{g ? `${g.years.toFixed(1)} y${g.vested ? "" : " (not yet vested)"}` : "—"}</td>
+            <td style={{ ...C.td, textAlign: "right" }}>{g ? fmtAED(g.amountC) : "—"}</td>
+            <td style={{ ...C.td, textAlign: "right" }}>{g ? fmtAED(g.held) : "—"}</td>
+            <td style={{ ...C.td, textAlign: "right", whiteSpace: "nowrap" }}>{canPost && <>
+              {owedOf(e) > 0 && <button style={{ ...C.btn("secondary", true), marginRight: 4 }} onClick={() => setAction({ kind: "pay", emp: e, amount: fromCents(owedOf(e)), recover: fromCents(Math.min(advOf(e), owedOf(e))), bankCode: (banks.find(b => b.code === "1002") || banks[0] || {}).code, date: todayStr() })}>Pay</button>}
+              <button style={C.btn("secondary", true)} onClick={() => setAction({ kind: "advance", emp: e, amount: "", recover: "", bankCode: (banks.find(b => b.code === "1002") || banks[0] || {}).code, date: todayStr() })}>Advance</button>
+            </>}</td>
+          </tr>;
+        })}</tbody>
+      </table>
+      <div style={{ fontSize: 11.5, color: "#9CA3AF", marginTop: 10, lineHeight: 1.6 }}>
+        End of service (UAE Federal Decree-Law 33/2021): 21 days' basic salary for each of the first five years, 30 days for each year after, pro rata, capped at two years' salary; daily rate = basic ÷ 30. The provision accrues from the first day; it is payable only after one year's service.
+      </div>
+    </div>
+    {action && <div style={C.modal} onClick={() => setAction(null)}>
+      <div style={C.mbox(460)} onClick={e => e.stopPropagation()}>
+        <div style={C.mhdr}><span style={{ fontWeight: 700 }}>{action.kind === "pay" ? `Pay salary — ${action.emp.name}` : `Staff advance — ${action.emp.name}`}</span><button onClick={() => setAction(null)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
+        <div style={C.mbdy}><div style={C.fg}>
+          <div><label style={C.label}>{action.kind === "pay" ? "Salary cleared (AED)" : "Amount (AED)"}</label><NumInp value={action.amount} onValue={v => setAction(a => ({ ...a, amount: v }))} /></div>
+          {action.kind === "pay" && <div><label style={C.label}>Recover advance (AED)</label><NumInp value={action.recover} onValue={v => setAction(a => ({ ...a, recover: v }))} /></div>}
+          <div><label style={C.label}>Date</label><Inp type="date" value={action.date} onChange={e => setAction(a => ({ ...a, date: e.target.value }))} /></div>
+          <div><label style={C.label}>Bank</label><Sel value={action.bankCode} onChange={e => setAction(a => ({ ...a, bankCode: e.target.value }))}>{banks.map(b => <option key={b.code} value={b.code}>{b.name}</option>)}</Sel></div>
+        </div>
+        {action.kind === "pay" && <div style={{ fontSize: 12, color: "#6B7280", marginTop: 10 }}>Bank pays {fmtAED(Math.max(0, toCents(action.amount) - toCents(action.recover || 0)))}; {fmtAED(toCents(action.recover || 0))} is recovered from the advance.</div>}
+        </div>
+        <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setAction(null)}>Cancel</button><button style={C.btn()} disabled={busy} onClick={() => guard(runAction)}>{busy ? "Posting…" : "Post"}</button></div>
+      </div>
+    </div>}
+  </div>;
+}
+
 function EmployeesPage(p) {
-  const { employees, setEmployees, brokers, deals, txns, accounts, userRole } = p;
+  const { employees, setEmployees, brokers, deals, txns, accounts, userRole, postWithApproval } = p;
   const [tab, setTab] = usePersistedState("emp_tab", "roster");
   const [dateFilter, setDateFilter] = usePersistedDateFilter("emp_period", "this_year");
   const [selectedId, setSelectedId] = useState("");
@@ -346,6 +460,7 @@ function EmployeesPage(p) {
     { id: "register", label: "Payroll Register", icon: "📋" },
     { id: "league", label: "Contribution", icon: "📊" },
     { id: "exceptions", label: "Exceptions", icon: "🚨" },
+    { id: "payroll", label: "Payroll & EOSB", icon: "💼" },
   ];
 
   return <div>
@@ -372,6 +487,7 @@ function EmployeesPage(p) {
     {tab === "register" && <RegisterTab led={led} dateFilter={dateFilter} />}
     {tab === "league" && <LeagueTab led={led} onOpen={openPerson} />}
     {tab === "exceptions" && <ExceptionsTab led={led} deals={deals} />}
+    {tab === "payroll" && <PayrollTab employees={isDerived ? [] : employees} txns={txns} accounts={accounts} postWithApproval={postWithApproval} userRole={userRole} />}
 
     {editing && <EmployeeEditor emp={editing} roster={roster} onClose={() => setEditing(null)}
       onSave={(next) => {

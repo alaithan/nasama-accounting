@@ -25,20 +25,27 @@ function reconDetectColumns(headers) {
   return { date, desc, debit, credit, amount, balance };
 }
 
-// Parse a money cell → number (handles "1,234.56", "(123.45)", trailing "Dr").
+// Parse a money cell → number. Handles "1,234.56", "(123.45)", "Dr"/"Cr"
+// markers, a trailing minus ("1000.00-"), and European "1.234,56" / "123,45".
 function reconParseAmount(v) {
   if (v == null) return null;
+  if (typeof v === "number") return isFinite(v) ? v : null;
   let s = String(v).trim();
   if (!s) return null;
   let neg = false;
   if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1); }
   if (/\b(dr|debit)\b/i.test(s)) neg = true;
   if (/\b(cr|credit)\b/i.test(s)) neg = false;
-  s = s.replace(/[^0-9.\-]/g, "");
-  if (s === "" || s === "-" || s === ".") return null;
+  if (/-\s*$/.test(s)) { neg = true; s = s.replace(/-\s*$/, ""); }
+  if (/^\s*-/.test(s)) neg = true;
+  s = s.replace(/[^0-9.,]/g, "");
+  const lastDot = s.lastIndexOf("."), lastComma = s.lastIndexOf(",");
+  if (lastComma > lastDot && /,\d{1,2}$/.test(s)) s = s.replace(/\./g, "").replace(",", ".");   // 1.234,56 · 123,45
+  else s = s.replace(/,/g, "");                                                                // 1,234.56
+  if (s === "" || s === ".") return null;
   const n = parseFloat(s);
   if (!isFinite(n)) return null;
-  return neg ? -Math.abs(n) : n;
+  return neg ? -Math.abs(n) : Math.abs(n);
 }
 
 // Find the header row in a raw matrix (banks often prepend title/address rows).
@@ -52,6 +59,16 @@ function reconFindHeaderRow(matrix) {
   return 0;
 }
 
+// An Excel Date cell → YYYY-MM-DD. SheetJS may hand back local or UTC midnight;
+// shifting by 12 h before reading the UTC date is right for either.
+function reconCellToString(c) {
+  if (c instanceof Date && !isNaN(c)) {
+    const d = new Date(c.getTime() + 12 * 3600 * 1000);
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+  }
+  return String(c == null ? "" : c).trim();
+}
+
 // Raw matrix (array of arrays) → { headers, rows[] } keyed by header.
 function reconMatrixToRows(matrix) {
   if (!matrix || !matrix.length) return { headers: [], rows: [] };
@@ -59,26 +76,58 @@ function reconMatrixToRows(matrix) {
   const headers = (matrix[hi] || []).map((h, i) => String(h || "").trim() || ("Column " + (i + 1)));
   const rows = matrix.slice(hi + 1)
     .filter(r => (r || []).some(c => String(c == null ? "" : c).trim() !== ""))
-    .map(r => { const o = {}; headers.forEach((h, i) => { o[h] = String((r || [])[i] == null ? "" : (r || [])[i]).trim(); }); return o; });
+    .map(r => { const o = {}; headers.forEach((h, i) => { o[h] = reconCellToString((r || [])[i]); }); return o; });
   return { headers, rows };
 }
 
 // PDF text lines → row objects with synthetic Date/Description/Amount/Balance.
+//
+// Bank PDFs print withdrawals and deposits UNSIGNED in separate columns, and the
+// text layer loses which column a number came from. So an amount is never taken
+// as money-in by default (that imported every withdrawal as a deposit). Its sign
+// comes from, in order: an explicit marker on the line (minus, brackets, DR/CR),
+// or the running balance (balance − previous balance). A line whose sign cannot
+// be proven is flagged `_signUnknown` and kept out of matching.
 function reconPdfLinesToRows(textLines) {
   const dateRe = /(\d{2}\/\d{2}\/\d{4}|\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|\d{4}-\d{2}-\d{2})/;
-  const numRe = /-?\(?[\d,]+\.\d{2}\)?/g;
+  const numRe = /-?\(?[\d,]+\.\d{2}\)?(?:\s*(?:CR|DR|Cr|Dr)\b)?/g;
+  const openingRe = /opening\s+balance|balance\s+(?:brought|b\/f)|brought\s+forward|\bb\/f\b/i;
   const out = [];
+  let openingBal = null;
   (textLines || []).forEach(t => {
-    const dm = t.match(dateRe);
-    if (!dm) return;
     const nums = t.match(numRe);
     if (!nums || !nums.length) return;
+    if (openingRe.test(t) && out.length === 0) { openingBal = reconParseAmount(nums[nums.length - 1]); return; }
+    const dm = t.match(dateRe);
+    if (!dm) return;
     let amount = nums[0], balance = "";
     if (nums.length >= 2) { balance = nums[nums.length - 1]; amount = nums[nums.length - 2]; }
     const desc = t.replace(dateRe, "").replace(numRe, "").replace(/\s+/g, " ").trim();
     out.push({ Date: dm[1], Description: desc, Amount: amount, Balance: balance });
   });
-  return out;
+  return reconSignPdfRows(out, openingBal);
+}
+
+// Sign each PDF row (see above). Statements printed newest-first are read in
+// date order for the balance walk. Returns the rows with a signed Amount and
+// `_signSource` ("explicit" | "balance") or `_signUnknown: true`.
+function reconSignPdfRows(rows, openingBal) {
+  const explicit = a => /^\s*-|^\s*\(|\b(?:CR|DR)\b/i.test(String(a || ""));
+  const iso = r => reconNormDate(r.Date, "dmy");
+  const asc = rows.length < 2 || iso(rows[0]) <= iso(rows[rows.length - 1]);
+  const ordered = asc ? rows.slice() : rows.slice().reverse();
+  let prev = openingBal;
+  const signed = ordered.map(r => {
+    const mag = Math.abs(reconParseAmount(r.Amount) || 0);
+    const bal = r.Balance ? reconParseAmount(r.Balance) : null;
+    let out;
+    if (explicit(r.Amount)) out = { ...r, Amount: String(reconParseAmount(r.Amount)), _signSource: "explicit" };
+    else if (prev != null && bal != null && Math.abs(Math.abs(bal - prev) - mag) < 0.005) out = { ...r, Amount: String(bal >= prev ? mag : -mag), _signSource: "balance" };
+    else out = { ...r, Amount: String(mag), _signUnknown: true };
+    if (bal != null) prev = bal;
+    return out;
+  });
+  return asc ? signed : signed.reverse();
 }
 
 async function reconReadPdf(arrayBuffer) {
@@ -99,25 +148,53 @@ async function reconReadPdf(arrayBuffer) {
   }
   const rows = reconPdfLinesToRows(textLines);
   if (!rows.length) throw new Error("Couldn't read transactions from this PDF. Try the bank's CSV or Excel export.");
-  return { headers: ["Date", "Description", "Amount", "Balance"], rows };
+  return { headers: ["Date", "Description", "Amount", "Balance"], rows, unknownSigns: rows.filter(r => r._signUnknown).length };
 }
 
 // Normalize any parsed date to YYYY-MM-DD so the period window + sorting are
 // consistent regardless of source format (parseImportDate handles dd/mm/yyyy and
 // "d Mon yyyy"; Date.parse mops up the rest, e.g. Excel's m/d/yyyy).
-function reconNormDate(raw) {
-  const p = parseImportDate(String(raw || "").trim());
+//
+// `order` ("dmy" | "mdy") decides numeric a/b/yyyy dates. It is detected ONCE per
+// file (reconDetectDateOrder) — deciding row by row read 03/04 as 3 Apr in one
+// row and 4 Mar in the next. Unreadable dates come back "" (never guessed).
+function reconNormDate(raw, order = "dmy") {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const m = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/.exec(s);
+  if (m) {
+    let a = parseInt(m[1], 10), b = parseInt(m[2], 10), y = parseInt(m[3], 10);
+    if (y < 100) y += 2000;
+    const [day, mon] = order === "mdy" ? [b, a] : [a, b];
+    if (mon < 1 || mon > 12 || day < 1 || day > 31) return "";
+    return `${y}-${String(mon).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+  const p = parseImportDate(s);
   if (/^\d{4}-\d{2}-\d{2}$/.test(p)) return p;
-  const t = Date.parse(p || raw || "");
+  const t = Date.parse(s);
   if (!isNaN(t)) { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
-  return p || "";
+  return "";
+}
+// "dmy" unless some row can only be month-first (second part > 12). UAE banks
+// print day-first, so an all-ambiguous file stays day-first.
+function reconDetectDateOrder(rawDates) {
+  let dmy = false, mdy = false;
+  (rawDates || []).forEach(r => {
+    const m = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-]\d{2,4}$/.exec(String(r || "").trim());
+    if (!m) return;
+    if (parseInt(m[1], 10) > 12) dmy = true;
+    if (parseInt(m[2], 10) > 12) mdy = true;
+  });
+  return mdy && !dmy ? "mdy" : "dmy";
 }
 
 // Row objects + column map → normalized statement lines.
 // amountC is signed cents: + = money in (credit), − = money out (debit).
 function reconRowsToLines(rows, map) {
+  const order = reconDetectDateOrder((rows || []).map(r => map.date ? r[map.date] : ""));
   return (rows || []).map((row, i) => {
-    const date = reconNormDate(map.date ? row[map.date] : "");
+    const date = reconNormDate(map.date ? row[map.date] : "", order);
     let amt = null;
     if (map.amount) {
       amt = reconParseAmount(row[map.amount]);
@@ -135,17 +212,45 @@ function reconRowsToLines(rows, map) {
       desc: map.desc ? String(row[map.desc] || "").trim() : "",
       amountC: amt == null ? 0 : Math.round(amt * 100),
       balanceC: balRaw == null ? null : Math.round(balRaw * 100),
+      ...(row._signUnknown ? { signUnknown: true } : {}),
     };
   }).filter(l => l.date || l.amountC);
 }
 
-// Recorded bank txns for one account → { id, date, ref, desc, amountC (signed) }.
+// Recorded bank txns for one account → { id, date, ref, desc, amountC (signed),
+// reconciled }.
 function reconBookBankTxns(txns, bankAcctId) {
   return (txns || []).filter(t => !t.isVoid).map(t => {
     const amt = (t.lines || []).filter(l => l.accountId === bankAcctId).reduce((s, l) => s + (l.debit || 0) - (l.credit || 0), 0);
     if (!amt) return null;
-    return { id: t.id, date: t.date || "", ref: t.ref || "", desc: t.description || "", amountC: amt };
+    return { id: t.id, date: t.date || "", ref: t.ref || "", desc: t.description || "", amountC: amt,
+      reconciled: !!t.reconciled_at, reconciliationId: t.reconciliation_id || "" };
   }).filter(Boolean);
+}
+
+// Book balance of the account AS OF the statement's end date. Comparing a past
+// statement with today's balance put every later entry into "unexplained", so a
+// past month could never reconcile.
+function reconBookBalanceAsOf(book, to) {
+  return (book || []).reduce((s, b) => (!to || b.date <= to) ? s + b.amountC : s, 0);
+}
+
+// Book items still to be matched for a statement ending `to`: not yet ticked
+// off by an earlier saved reconciliation, and dated no later than `to` (+ the
+// date tolerance, so a deposit booked a day after the statement can pair).
+function reconOpenBook(book, to, toleranceDays) {
+  const limit = to ? isoAddDays(to, toleranceDays || 0) : "";
+  return (book || []).filter(b => !b.reconciled && (!limit || b.date <= limit));
+}
+
+// Outstanding = unmatched book items that belong in this reconciliation. With
+// saved reconciliations, every item since the first one that is still not
+// ticked off carries forward (an uncleared cheque from last month stays on the
+// list until the bank clears it). Without any, only the statement's own window.
+function reconOutstanding(bookOnly, period, sessions) {
+  const live = (sessions || []).filter(x => x && x.status !== "void" && x.from);
+  const start = live.length ? live.map(x => x.from).sort()[0] : period.from;
+  return (bookOnly || []).filter(b => !b.reconciled && (!start || b.date >= start) && (!period.to || b.date <= period.to));
 }
 
 // Bounded subset-sum: the smallest subset (size 2..maxSize) of `cands` whose
@@ -176,17 +281,31 @@ function reconSubsetSum(targetC, cands, tolC, maxSize) {
 // (2) near 1:1 — amounts within amountTolC (rounding/fee/typo). (3) group/split —
 // one entry ↔ a combination of lines on the other side that sum to it (e.g. a
 // receipt banked as two cheques, or a fee + its VAT).
-function reconMatch(lines, bookTxns, toleranceDays, amountTolC) {
+//
+// opts.manualPairs  [{ lineId, bookId }] — user-forced pairs, applied first.
+// opts.unmatchLineIds Set — lines the user un-paired: never auto-matched.
+// Lines with no readable date, or an unproven sign (PDF), are never matched —
+// a dateless line used to match any same-amount entry at any date.
+function reconMatch(lines, bookTxns, toleranceDays, amountTolC, opts = {}) {
   const usedBook = new Set(), usedLine = new Set();
   const dayMs = 86400000;
   const toTime = d => { const t = Date.parse(d); return isNaN(t) ? null : t; };
-  const dDiff = (a, b) => { const lt = toTime(a), btt = toTime(b); return (lt != null && btt != null) ? Math.abs(lt - btt) / dayMs : 0; };
+  const dDiff = (a, b) => { const lt = toTime(a), btt = toTime(b); return (lt != null && btt != null) ? Math.abs(lt - btt) / dayMs : Infinity; };
   const inWin = (a, b) => dDiff(a, b) <= toleranceDays;
-  const matched = [], near = [], groups = [];
+  const matched = [], near = [], groups = [], manual = [];
+  const unmatch = opts.unmatchLineIds || new Set();
+  (opts.manualPairs || []).forEach(mp => {
+    const line = lines.find(l => l.id === mp.lineId), book = bookTxns.find(b => b.id === mp.bookId);
+    if (!line || !book || usedLine.has(line.id) || usedBook.has(book.id)) return;
+    usedLine.add(line.id); usedBook.add(book.id);
+    manual.push({ line, book, diffC: line.amountC - book.amountC });
+  });
+  lines.forEach(l => { if (!l.date || l.signUnknown || unmatch.has(l.id)) usedLine.add(l.id); });   // held out of auto-matching
   const sorted = [...lines].sort((a, b) => String(a.date).localeCompare(String(b.date)));
 
   // Pass 1 — exact 1:1 (nearest date wins)
   sorted.forEach(line => {
+    if (usedLine.has(line.id)) return;           // manual pair, or held out (no date / unproven sign / un-paired)
     let best = null, bestDiff = Infinity;
     for (const bt of bookTxns) {
       if (usedBook.has(bt.id) || bt.amountC !== line.amountC) continue;
@@ -234,9 +353,10 @@ function reconMatch(lines, bookTxns, toleranceDays, amountTolC) {
     }
   });
 
-  const statementOnly = sorted.filter(l => !usedLine.has(l.id));
+  const pairedLine = new Set([...matched, ...near, ...manual].map(m => m.line.id).concat(...groups.map(g => g.lines.map(l => l.id))));
+  const statementOnly = sorted.filter(l => !pairedLine.has(l.id));
   const bookOnly = bookTxns.filter(bt => !usedBook.has(bt.id));
-  return { matched, near, groups, statementOnly, bookOnly };
+  return { matched, near, groups, manual, statementOnly, bookOnly };
 }
 
 const reconFmtSigned = (c) => (c > 0 ? "+" : c < 0 ? "−" : "") + fmtAED(Math.abs(c)).replace("AED ", "");
@@ -244,7 +364,7 @@ const reconFmtSigned = (c) => (c > 0 ? "+" : c < 0 ? "−" : "") + fmtAED(Math.a
 // ═══════════════════════════════════════════════════════════════════
 //  BankReconcileModal
 // ═══════════════════════════════════════════════════════════════════
-function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, onClose }) {
+function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, userRole, userEmail, onClose }) {
   const bankAccts = (accounts || []).filter(a => a.isBank || a.isCash || a.code === "1001" || a.code === "1002");
   const [step, setStep] = React.useState("upload");           // upload | review
   const [busy, setBusy] = React.useState(false);
@@ -254,65 +374,161 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, onClo
   const [colMap, setColMap] = React.useState({ date: "", desc: "", debit: "", credit: "", amount: "", balance: "" });
   const [bankCode, setBankCode] = React.useState(() => (bankAccts.find(a => a.code === "1002") || bankAccts[0] || {}).code || "1002");
   const [stmtBalStr, setStmtBalStr] = React.useState("");
+  const [stmtBalTyped, setStmtBalTyped] = React.useState(false);   // a typed balance is never overwritten by auto-fill
   const [tolerance, setTolerance] = React.useState(7);        // days — bank value dates routinely lag booking by a few days
   const [amountTol, setAmountTol] = React.useState(1);        // AED — pair near-amounts (rounding/fees/typos)
   const [showMap, setShowMap] = React.useState(false);
   const [showMatched, setShowMatched] = React.useState(false);
   const [addAcct, setAddAcct] = React.useState({});           // lineId -> offset account id (quick pre-pick)
   const [addLine, setAddLine] = React.useState(null);         // statement line being added via the detail window
+  const [excluded, setExcluded] = React.useState(() => new Set());       // statement line ids left out (e.g. a summary row)
+  const [manualPairs, setManualPairs] = React.useState([]);              // [{ lineId, bookId }]
+  const [unmatched, setUnmatched] = React.useState(() => new Set());     // line ids the user un-paired
+  const [sessions, setSessions] = React.useState([]);                    // saved reconciliations for this account
+  const [saving, setSaving] = React.useState(false);
+  const canReconcile = typeof hasPermission === "function" ? hasPermission(userRole, "accounting.reconcile") : true;
 
   const acct = bankAccts.find(a => a.code === bankCode) || bankAccts[0];
-  const lines = React.useMemo(() => parsed ? reconRowsToLines(parsed.rows, colMap) : [], [parsed, colMap]);
+  const allLines = React.useMemo(() => parsed ? reconRowsToLines(parsed.rows, colMap) : [], [parsed, colMap]);
+  const lines = React.useMemo(() => allLines.filter(l => !excluded.has(l.id)), [allLines, excluded]);
+  const excludedLines = allLines.filter(l => excluded.has(l.id));
+  const unsignedLines = lines.filter(l => l.signUnknown);
+  const datelessLines = lines.filter(l => !l.date);
   const period = React.useMemo(() => {
     const ds = lines.map(l => l.date).filter(Boolean).sort();
     return { from: ds[0] || "", to: ds[ds.length - 1] || "" };
   }, [lines]);
 
-  const bookTxns = React.useMemo(() => acct ? reconBookBankTxns(txns, acct.id) : [], [txns, acct]);
-  const amountTolC = Math.round((parseFloat(amountTol) || 0) * 100);
-  const result = React.useMemo(() => reconMatch(lines, bookTxns, tolerance, amountTolC), [lines, bookTxns, tolerance, amountTolC]);
+  // Saved reconciliations for this account (for carry-forward and undo).
+  React.useEffect(() => {
+    if (!acct || typeof db === "undefined") return;
+    const unsub = db.collection("bank_reconciliations").where("accountId", "==", acct.id).onSnapshot(
+      snap => setSessions(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.to || "").localeCompare(String(a.to || "")))),
+      err => console.error("bank_reconciliations", err));
+    return () => unsub();
+  }, [acct && acct.id]);
+  const liveSessions = sessions.filter(x => x.status !== "void");
 
-  // Outstanding = book txns not on the statement, scoped to the statement's own
-  // date window (older items already cleared in prior periods are not "outstanding").
-  const outstanding = React.useMemo(() => result.bookOnly.filter(b =>
-    (!period.from || b.date >= period.from) && (!period.to || b.date <= period.to)
-  ), [result.bookOnly, period]);
+  const bookAll = React.useMemo(() => acct ? reconBookBankTxns(txns, acct.id) : [], [txns, acct]);
+  // Match only against entries not already ticked off by a saved reconciliation.
+  const bookTxns = React.useMemo(() => reconOpenBook(bookAll, period.to, tolerance), [bookAll, period.to, tolerance]);
+  const amountTolC = Math.round((parseFloat(amountTol) || 0) * 100);
+  const result = React.useMemo(() => reconMatch(lines, bookTxns, tolerance, amountTolC, { manualPairs, unmatchLineIds: unmatched }),
+    [lines, bookTxns, tolerance, amountTolC, manualPairs, unmatched]);
+
+  // Outstanding = book entries not on the statement — carried forward from the
+  // first saved reconciliation when there is one (see reconOutstanding).
+  const outstanding = React.useMemo(() => reconOutstanding(result.bookOnly, period, liveSessions), [result.bookOnly, period, sessions]);
 
   // Auto-fill the statement closing balance from the latest line that carries a balance.
   React.useEffect(() => {
-    if (!lines.length) return;
+    if (!lines.length || stmtBalTyped) return;
     const withBal = lines.filter(l => l.balanceC != null && l.date);
     if (!withBal.length) return;
     const last = withBal.reduce((a, b) => (String(b.date).localeCompare(String(a.date)) >= 0 ? b : a));
     setStmtBalStr(((last.balanceC || 0) / 100).toFixed(2));
   }, [lines]);
 
-  const bookBalC = acct ? accountBalance(acct, ledger) : 0;
-  const sumStmtOnly = result.statementOnly.reduce((s, l) => s + l.amountC, 0);
+  // Book balance AS OF the statement end (not today) — see reconBookBalanceAsOf.
+  const bookBalC = acct ? (period.to ? reconBookBalanceAsOf(bookAll, period.to) : accountBalance(acct, ledger)) : 0;
+  // Lines with no sign proven / no date are not "unrecorded" — they are unread.
+  const sumStmtOnly = result.statementOnly.filter(l => !l.signUnknown).reduce((s, l) => s + l.amountC, 0);
   const sumOutstanding = outstanding.reduce((s, b) => s + b.amountC, 0);
   const sumNearDiff = result.near.reduce((s, n) => s + n.diffC, 0);   // Σ(statement − book) over near pairs
   const sumGroupDiff = result.groups.reduce((s, g) => s + g.diffC, 0); // Σ(statement − book) over grouped sets
-  const expectedC = bookBalC + sumStmtOnly - sumOutstanding + sumNearDiff + sumGroupDiff;
+  const sumManualDiff = result.manual.reduce((s, m) => s + m.diffC, 0);
+  // A statement line may pair with an entry booked a few days AFTER the
+  // statement end (within the date tolerance). The as-of book balance leaves
+  // that entry out, so add it back — otherwise a balanced statement showed it
+  // as "unexplained".
+  const lateMatchedC = [...result.matched, ...result.near, ...result.manual].map(m => m.book)
+    .concat(...result.groups.map(g => g.book))
+    .filter(b => period.to && b.date > period.to).reduce((s, b) => s + b.amountC, 0);
+  const expectedC = bookBalC + sumStmtOnly - sumOutstanding + sumNearDiff + sumGroupDiff + sumManualDiff + lateMatchedC;
   const breakdown = [
-    ["Book balance (per system)", bookBalC, false],
+    [`Book balance${period.to ? ` at ${period.to}` : " (per system)"}`, bookBalC, false],
     ["Add: unrecorded on statement", sumStmtOnly, true],
     ["Less: outstanding in books", -sumOutstanding, true],
     ...(result.near.length ? [["Near-match differences (stmt − book)", sumNearDiff, true]] : []),
     ...(result.groups.length ? [["Grouped-match differences (stmt − book)", sumGroupDiff, true]] : []),
+    ...(result.manual.length ? [["Manual-pair differences (stmt − book)", sumManualDiff, true]] : []),
+    ...(lateMatchedC ? [["Add: matched entries booked after the statement end", lateMatchedC, true]] : []),
     ["Expected statement balance", expectedC, false],
   ];
   // Control totals — the aggregate that matters most: do total money-in and
   // money-out on the statement equal the books over the same period? This is the
   // reliable check; line-matching is only for locating the specific differences.
-  const stmtIn = lines.reduce((s, l) => s + (l.amountC > 0 ? l.amountC : 0), 0);
-  const stmtOut = lines.reduce((s, l) => s + (l.amountC < 0 ? -l.amountC : 0), 0);
-  const bookInPeriod = bookTxns.filter(b => (!period.from || b.date >= period.from) && (!period.to || b.date <= period.to));
+  const signedLines = lines.filter(l => !l.signUnknown);
+  const stmtIn = signedLines.reduce((s, l) => s + (l.amountC > 0 ? l.amountC : 0), 0);
+  const stmtOut = signedLines.reduce((s, l) => s + (l.amountC < 0 ? -l.amountC : 0), 0);
+  const bookInPeriod = bookAll.filter(b => (!period.from || b.date >= period.from) && (!period.to || b.date <= period.to));
   const bookIn = bookInPeriod.reduce((s, b) => s + (b.amountC > 0 ? b.amountC : 0), 0);
   const bookOut = bookInPeriod.reduce((s, b) => s + (b.amountC < 0 ? -b.amountC : 0), 0);
   const inDiff = stmtIn - bookIn, outDiff = stmtOut - bookOut;
   const totalsMatch = Math.abs(inDiff) < 1 && Math.abs(outDiff) < 1;
   // Amounts that already matched — flag a likely duplicate when the same value also sits in Outstanding.
   const matchedAmounts = new Set([...result.matched, ...result.near].map(m => m.book.amountC));
+  const bankFeesAcct = (accounts || []).find(a => a.code === "5600") || (accounts || []).find(a => a.type === "Expense" && /bank\s*(fee|charge)/i.test(a.name || ""));
+  const pairOptions = (line) => outstanding
+    .filter(b => Math.sign(b.amountC) === Math.sign(line.amountC))
+    .sort((a, b) => Math.abs(a.amountC - line.amountC) - Math.abs(b.amountC - line.amountC))
+    .slice(0, 25);
+
+  // ── Confirm: save the session and tick off every matched book entry ──
+  const matchedBookIds = [...result.matched, ...result.near, ...result.manual].map(m => m.book.id)
+    .concat(...result.groups.map(g => g.book.map(b => b.id)));
+  const confirmReconciliation = async () => {
+    if (!canReconcile) { toast("Saving a reconciliation needs Accounting · Reconcile permission", "error"); return; }
+    if (!period.to || actualC == null) { toast("Enter the statement closing balance first", "warning"); return; }
+    if (unsignedLines.length) { toast(`${unsignedLines.length} statement line(s) have no proven sign — fix the file or exclude them first`, "warning"); return; }
+    if (!reconciled && !window.confirm(`The reconciliation is NOT balanced (${reconFmtSigned(unexplainedC)} unexplained).\n\nSave it anyway? The difference is recorded on the session.`)) return;
+    if (liveSessions.some(x => x.to >= period.to)) { if (!window.confirm(`A reconciliation for ${acct.name} already runs to ${liveSessions[0].to}. Save this one too?`)) return; }
+    setSaving(true);
+    try {
+      const ref = db.collection("bank_reconciliations").doc();
+      const now = new Date().toISOString();
+      const session = { id: ref.id, accountId: acct.id, accountCode: acct.code, accountName: acct.name, from: period.from, to: period.to,
+        statementBalanceC: actualC, bookBalanceC: bookBalC, unexplainedC, reconciled, fileName,
+        matchedTxnIds: matchedBookIds, outstandingTxnIds: outstanding.map(b => b.id),
+        statementOnlyCount: result.statementOnly.length, excludedCount: excludedLines.length,
+        status: "final", createdAt: now, createdBy: userEmail || "" };
+      // Stamps are metadata only (reconKey unchanged), written straight to
+      // Firestore in ≤450-op batches; the transactions listener refreshes the UI.
+      const stamp = { reconciled_at: now, reconciliation_id: ref.id, statement_to: period.to, reconciled_by: userEmail || "" };
+      const ops = [{ ref, data: session }].concat(matchedBookIds.map(id => ({ ref: db.collection("transactions").doc(id), data: stamp, merge: true })));
+      for (let i = 0; i < ops.length; i += 450) {
+        const b = db.batch();
+        ops.slice(i, i + 450).forEach(o => o.merge ? b.set(o.ref, o.data, { merge: true }) : b.set(o.ref, o.data));
+        await b.commit();
+      }
+      if (typeof logAudit === "function") logAudit("bank_reconciliation_saved", { id: ref.id, account: acct.code, to: period.to, matched: matchedBookIds.length, unexplainedC }, userRole, userEmail);
+      toast(`Reconciliation to ${period.to} saved — ${matchedBookIds.length} entries ticked off`, "success");
+      onClose();
+    } catch (e) { toast("Could not save the reconciliation: " + e.message, "error"); }
+    finally { setSaving(false); }
+  };
+  // Undo the most recent saved reconciliation for this account: clears the
+  // stamps it set (so those entries can be edited and re-matched) and marks it void.
+  const undoLatest = async () => {
+    const last = liveSessions[0];
+    if (!last || !canReconcile) return;
+    if (!window.confirm(`Undo the reconciliation of ${acct.name} to ${last.to}?\n\n${(last.matchedTxnIds || []).length} entries become unreconciled again.`)) return;
+    setSaving(true);
+    try {
+      const clear = { reconciled_at: "", reconciliation_id: "", statement_to: "", reconciled_by: "" };
+      const ids = (last.matchedTxnIds || []).filter(id => (txns || []).some(t => t.id === id && t.reconciliation_id === last.id));
+      const ops = ids.map(id => ({ ref: db.collection("transactions").doc(id), data: clear }))
+        .concat([{ ref: db.collection("bank_reconciliations").doc(last.id), data: { status: "void", voidedAt: new Date().toISOString(), voidedBy: userEmail || "" } }]);
+      for (let i = 0; i < ops.length; i += 450) {
+        const b = db.batch();
+        ops.slice(i, i + 450).forEach(o => b.set(o.ref, o.data, { merge: true }));
+        await b.commit();
+      }
+      if (typeof logAudit === "function") logAudit("bank_reconciliation_undone", { id: last.id, account: acct.code, to: last.to }, userRole, userEmail);
+      toast(`Reconciliation to ${last.to} undone`, "success");
+    } catch (e) { toast("Undo failed: " + e.message, "error"); }
+    finally { setSaving(false); }
+  };
 
   const hasStmtBal = stmtBalStr.trim() !== "" && isFinite(parseFloat(stmtBalStr));
   const actualC = hasStmtBal ? toCents(stmtBalStr) : null;
@@ -333,8 +549,10 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, onClo
         setColMap({ date: "Date", desc: "Description", amount: "Amount", balance: "Balance", debit: "", credit: "" });
       } else if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
         if (typeof XLSX === "undefined") throw new Error("Excel reader not loaded — check your connection.");
-        const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
-        const matrix = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "", raw: false });
+        // cellDates + raw: date cells arrive as real dates (no m/d vs d/m guess)
+        // and amounts as numbers; reconCellToString normalises both.
+        const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+        const matrix = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "", raw: true });
         ({ headers, rows } = reconMatrixToRows(matrix));
         setColMap(reconDetectColumns(headers));
       } else {
@@ -345,6 +563,7 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, onClo
         setColMap(reconDetectColumns(headers));
       }
       if (!rows.length) throw new Error("No data rows found in this file.");
+      setExcluded(new Set()); setManualPairs([]); setUnmatched(new Set()); setStmtBalTyped(false);
       setParsed({ headers, rows, kind: name.split(".").pop() });
       setShowMap(false);
       setStep("review");
@@ -390,6 +609,13 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, onClo
                   {bankAccts.map(a => <option key={a.code} value={a.code}>{a.name} · {a.code}</option>)}
                 </select>
               </div>
+              {liveSessions.length > 0 && <div style={{ ...card, marginBottom: 14, fontSize: 12.5, color: "#374151" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span>Last reconciled to <strong>{liveSessions[0].to}</strong> · statement {fmtAED(liveSessions[0].statementBalanceC || 0)} · {(liveSessions[0].matchedTxnIds || []).length} entries ticked off{liveSessions[0].reconciled ? " · ✓ balanced" : ` · ${reconFmtSigned(liveSessions[0].unexplainedC || 0)} unexplained`}</span>
+                  {canReconcile && <button style={{ ...C.btn("secondary", true), color: "#DC2626" }} disabled={saving} onClick={undoLatest}>Undo last</button>}
+                </div>
+                {liveSessions.length > 1 && <div style={{ fontSize: 11.5, color: "#9CA3AF", marginTop: 4 }}>{liveSessions.length} saved reconciliations · earlier: {liveSessions.slice(1, 4).map(x => x.to).join(", ")}</div>}
+              </div>}
               <label style={{ display: "block", border: "2px dashed #C7D2FE", borderRadius: 14, padding: "40px 24px", textAlign: "center", cursor: "pointer", background: "#F8FAFF" }}>
                 <input type="file" accept=".csv,.txt,.xlsx,.xls,.pdf" style={{ display: "none" }} onChange={e => onFile(e.target.files && e.target.files[0])} />
                 <div style={{ fontSize: 40, marginBottom: 8 }}>📄</div>
@@ -440,7 +666,7 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, onClo
                   <div style={lbl}>Statement closing balance</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
                     <span style={{ fontSize: 13, color: "#9CA3AF" }}>AED</span>
-                    <input style={{ ...sel, fontSize: 18, fontWeight: 800, padding: "4px 8px" }} value={stmtBalStr} onChange={e => setStmtBalStr(e.target.value)} placeholder="enter / auto" />
+                    <input style={{ ...sel, fontSize: 18, fontWeight: 800, padding: "4px 8px" }} value={stmtBalStr} onChange={e => { setStmtBalTyped(true); setStmtBalStr(e.target.value); }} placeholder="enter / auto" />
                   </div>
                   <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 2 }}>from file or type it in</div>
                 </div>
@@ -517,6 +743,13 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, onClo
                 </div>
               )}
 
+              {(unsignedLines.length > 0 || datelessLines.length > 0) && (
+                <div style={{ ...card, marginBottom: 16, borderLeft: "4px solid #DC2626", background: "#FEF2F2", fontSize: 12.5, color: "#991B1B" }}>
+                  {unsignedLines.length > 0 && <div><strong>{unsignedLines.length} line(s) have no proven sign.</strong> The PDF does not say whether they are money in or out (no running balance to read it from), so they are kept out of matching and totals. Use the bank's CSV/Excel export, or exclude them.</div>}
+                  {datelessLines.length > 0 && <div style={{ marginTop: unsignedLines.length ? 6 : 0 }}><strong>{datelessLines.length} line(s) have no readable date</strong> and are never matched. Check the Date column mapping.</div>}
+                </div>
+              )}
+
               {/* Unrecorded on statement */}
               <ReconSection title="Unrecorded — on statement, not in your books" count={result.statementOnly.length} accent="#D97706"
                 hint="These are at the bank but missing from your records. Add them to close the gap.">
@@ -526,20 +759,30 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, onClo
                       <thead><tr style={{ background: "#F9FAFB" }}>{["Date", "Description", "Amount", "Post against", ""].map((h, i) => <th key={h} style={{ ...th, textAlign: i === 2 ? "right" : "left" }}>{h}</th>)}</tr></thead>
                       <tbody>
                         {result.statementOnly.map(l => (
-                          <tr key={l.id} style={{ borderTop: "1px solid #F2F4F7" }}>
+                          <React.Fragment key={l.id}>
+                          <tr style={{ borderTop: "1px solid #F2F4F7", opacity: l.signUnknown ? 0.6 : 1 }}>
                             <td style={td}>{l.date || "—"}</td>
                             <td style={{ ...td, maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={l.desc}>{l.desc || "—"}</td>
-                            <td style={{ ...td, textAlign: "right" }}>{money(l.amountC)}</td>
+                            <td style={{ ...td, textAlign: "right" }}>{l.signUnknown ? <span title="Sign not proven — in or out?">±{fmtAED(Math.abs(l.amountC)).replace("AED ", "")}</span> : money(l.amountC)}</td>
                             <td style={td}>
                               <select style={{ ...sel, fontSize: 12, padding: "5px 8px", minWidth: 160 }} value={addAcct[l.id] || ""} onChange={e => setAddAcct(m => ({ ...m, [l.id]: e.target.value }))}>
                                 <option value="">— choose account —</option>
                                 {(accounts || []).filter(a => a.id !== (acct && acct.id)).map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
                               </select>
                             </td>
-                            <td style={{ ...td, textAlign: "right" }}>
-                              <button style={{ ...C.btn(), padding: "4px 12px", fontSize: 12 }} onClick={() => setAddLine(l)}>Add…</button>
+                            <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                              {!l.signUnknown && l.amountC < 0 && bankFeesAcct && <button style={{ ...C.btn("secondary"), padding: "4px 8px", fontSize: 11.5, marginRight: 4 }} title={`Post as ${bankFeesAcct.code} · ${bankFeesAcct.name}`} onClick={() => { setAddAcct(m => ({ ...m, [l.id]: bankFeesAcct.id })); setAddLine(l); }}>Bank charge</button>}
+                              {!l.signUnknown && <button style={{ ...C.btn(), padding: "4px 12px", fontSize: 12, marginRight: 4 }} onClick={() => setAddLine(l)}>Add…</button>}
+                              <button style={{ ...C.btn("secondary"), padding: "4px 8px", fontSize: 11.5 }} title="Leave this line out (e.g. a summary or duplicate row on the statement)" onClick={() => setExcluded(x => new Set([...x, l.id]))}>Exclude</button>
                             </td>
                           </tr>
+                          {!l.signUnknown && pairOptions(l).length > 0 && <tr><td colSpan={5} style={{ ...td, paddingTop: 0, borderTop: "none" }}>
+                            <select style={{ ...sel, fontSize: 11.5, padding: "3px 6px", maxWidth: 520 }} value="" onChange={e => { const bookId = e.target.value; if (!bookId) return; setUnmatched(u => { const n = new Set(u); n.delete(l.id); return n; }); setManualPairs(mp => [...mp.filter(x => x.lineId !== l.id && x.bookId !== bookId), { lineId: l.id, bookId }]); }}>
+                              <option value="">↔ Pair with an outstanding book entry…</option>
+                              {pairOptions(l).map(b => <option key={b.id} value={b.id}>{b.date} · {b.ref} · {reconFmtSigned(b.amountC)}{b.amountC !== l.amountC ? ` (diff ${reconFmtSigned(l.amountC - b.amountC)})` : ""} · {(b.desc || "").slice(0, 40)}</option>)}
+                            </select>
+                          </td></tr>}
+                          </React.Fragment>
                         ))}
                       </tbody>
                     </table>}
@@ -625,19 +868,20 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, onClo
               {/* Matched */}
               <div style={{ ...card, marginBottom: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setShowMatched(s => !s)}>
-                  <span style={{ fontWeight: 700, fontSize: 13, color: "#047857" }}>✓ Matched · {result.matched.length}</span>
+                  <span style={{ fontWeight: 700, fontSize: 13, color: "#047857" }}>✓ Matched · {result.matched.length + result.manual.length}{result.manual.length ? ` (${result.manual.length} paired by hand)` : ""}</span>
                   <span style={{ fontSize: 12, color: "#6B7280" }}>{showMatched ? "Hide" : "Show"}</span>
                 </div>
                 {showMatched && (
                   <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 10 }}>
-                    <thead><tr style={{ background: "#F9FAFB" }}>{["Date", "Statement", "Book ref", "Amount"].map((h, i) => <th key={h} style={{ ...th, textAlign: i === 3 ? "right" : "left" }}>{h}</th>)}</tr></thead>
+                    <thead><tr style={{ background: "#F9FAFB" }}>{["Date", "Statement", "Book ref", "Amount", ""].map((h, i) => <th key={i} style={{ ...th, textAlign: i === 3 ? "right" : "left" }}>{h}</th>)}</tr></thead>
                     <tbody>
-                      {result.matched.map((m, i) => (
-                        <tr key={i} style={{ borderTop: "1px solid #F2F4F7" }}>
+                      {[...result.manual.map(m => ({ ...m, isManual: true })), ...result.matched].map((m, i) => (
+                        <tr key={i} style={{ borderTop: "1px solid #F2F4F7", background: m.isManual ? "#F5F3FF" : undefined }}>
                           <td style={td}>{m.line.date || "—"}</td>
-                          <td style={{ ...td, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.line.desc}>{m.line.desc || "—"}</td>
+                          <td style={{ ...td, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.line.desc}>{m.isManual && <span style={{ fontSize: 9.5, fontWeight: 700, color: "#6D28D9", marginRight: 5 }}>BY HAND</span>}{m.line.desc || "—"}</td>
                           <td style={{ ...td, fontFamily: "monospace", fontSize: 11 }}>{m.book.ref || "—"}</td>
-                          <td style={{ ...td, textAlign: "right" }}>{money(m.line.amountC)}</td>
+                          <td style={{ ...td, textAlign: "right" }}>{money(m.line.amountC)}{m.isManual && m.diffC ? <div style={{ fontSize: 10.5, color: "#B45309" }}>diff {reconFmtSigned(m.diffC)}</div> : null}</td>
+                          <td style={{ ...td, textAlign: "right" }}><button style={{ ...C.btn("secondary", true), fontSize: 11 }} title="Un-pair — the line goes back to Unrecorded" onClick={() => { setManualPairs(mp => mp.filter(x => x.lineId !== m.line.id)); setUnmatched(u => new Set([...u, m.line.id])); }}>Unpair</button></td>
                         </tr>
                       ))}
                     </tbody>
@@ -648,9 +892,17 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, onClo
           )}
         </div>
 
+        {step === "review" && excludedLines.length > 0 && <div style={{ padding: "8px 24px", borderTop: "1px solid #F2F4F7", fontSize: 12, color: "#6B7280" }}>
+          Excluded {excludedLines.length} line(s): {excludedLines.slice(0, 6).map(l => `${l.date || "—"} ${reconFmtSigned(l.amountC)}`).join(" · ")}{excludedLines.length > 6 ? " …" : ""}
+          {" "}<button style={{ ...C.btn("ghost", true), color: "#1D4ED8" }} onClick={() => setExcluded(new Set())}>Restore all</button>
+        </div>}
         <div style={{ ...C.mftr, justifyContent: "space-between" }}>
           <span style={{ fontSize: 12, color: "#9CA3AF" }}>{step === "review" && acct ? `Reconciling ${acct.name}` : "Statement → Ledger"}</span>
-          <button style={C.btn("secondary")} onClick={onClose}>Close</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            {step === "review" && canReconcile && <button style={C.btn(reconciled ? "success" : "secondary")} disabled={saving || actualC == null}
+              title="Save this reconciliation and tick off every matched entry (they are then locked against edits)" onClick={confirmReconciliation}>{saving ? "Saving…" : reconciled ? "✓ Confirm reconciliation" : "Save reconciliation…"}</button>}
+            <button style={C.btn("secondary")} onClick={onClose}>Close</button>
+          </div>
         </div>
 
         {addLine && (
@@ -875,7 +1127,8 @@ function reconFindDuplicates(txns, accounts, windowDays, amountTolC) {
   return sets;
 }
 
-function DuplicatesModal({ txns, accounts, persistTxn, onClose }) {
+function DuplicatesModal({ txns, accounts, persistTxn, userRole, onClose }) {
+  const canVoid = typeof hasPermission === "function" ? hasPermission(userRole, "accounting.void") : false;
   const [windowDays, setWindowDays] = React.useState(2);
   const [amountTol, setAmountTol] = React.useState(1);
   const [onlyMixed, setOnlyMixed] = React.useState(true);
@@ -888,6 +1141,13 @@ function DuplicatesModal({ txns, accounts, persistTxn, onClose }) {
   const voidTxn = async (id) => {
     const t = (txns || []).find(x => x.id === id);
     if (!t) return;
+    if (!canVoid) { toast("Voiding needs Accounting · Void permission", "error"); return; }
+    // Voiding an original that already has a live reversal double-counts it (the
+    // bug the reversal_fix_v1 migration repaired) — and a reconciled entry is
+    // locked to its bank statement.
+    if ((txns || []).some(r => r.reversesTxnId === t.id && !r.isVoid)) { toast("This entry has already been reversed — voiding it as well would double-count", "warning"); return; }
+    if (t.reversesTxnId) { toast("This is a reversal entry — delete or void it from the Journal instead", "warning"); return; }
+    if (isTxnReconciled(t)) { toast("This entry is reconciled against a bank statement — undo the reconciliation first", "warning"); return; }
     if (!window.confirm(`Void this transaction?\n\n${t.ref} — ${t.description}\n\nIt stays on record marked Void and no longer affects balances. (Reversible.)`)) return;
     setBusy(id);
     try { await persistTxn({ ...t, isVoid: true }); toast("Transaction voided", "success"); }
@@ -941,7 +1201,7 @@ function DuplicatesModal({ txns, accounts, persistTxn, onClose }) {
                             <td style={{ padding: "5px 6px", fontSize: 12, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={it.desc}>{it.desc || "—"}</td>
                             <td style={{ padding: "5px 6px", fontSize: 12, textAlign: "right", fontVariantNumeric: "tabular-nums", color: it.amountC < 0 ? "#DC2626" : "#059669", whiteSpace: "nowrap" }}>{fmtAED(it.amountC)}</td>
                             <td style={{ padding: "5px 6px", textAlign: "right" }}>
-                              <button style={{ ...C.btn("secondary", true), color: "#DC2626", fontSize: 11 }} disabled={busy === it.id} onClick={() => voidTxn(it.id)}>{busy === it.id ? "…" : "Void"}</button>
+                              {canVoid && <button style={{ ...C.btn("secondary", true), color: "#DC2626", fontSize: 11 }} disabled={busy === it.id} onClick={() => voidTxn(it.id)}>{busy === it.id ? "…" : "Void"}</button>}
                             </td>
                           </tr>
                         ))}

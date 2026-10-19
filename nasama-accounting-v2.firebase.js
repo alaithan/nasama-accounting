@@ -46,18 +46,30 @@
         }
         await batch.commit();
       };
+      // Period lock (see core.jsx PERIOD LOCK). The app registers
+      // window.__periodLockGuard({ id, next, op }) once settings load; it throws
+      // when a transactions write/delete touches a closed period. Every write to
+      // the transactions collection funnels through these three helpers.
+      const guardTxnWrite = (collName, id, next, op) => {
+        if (collName === 'transactions' && typeof window.__periodLockGuard === 'function') window.__periodLockGuard({ id, next, op });
+      };
       window.fsSetDoc = async function(collName, docId, data) {
+        guardTxnWrite(collName, docId, data, 'set');
         await db.collection(collName).doc(docId).set(sanitizeFirestoreData(data), { merge: true });
       };
       // Atomic multi-doc write — all succeed or all fail
       window.fsBatchWrite = async function(ops) {
+        ops.forEach(({ col, id, data }) => guardTxnWrite(col, id, data, 'set'));
         const batch = db.batch();
-        ops.forEach(({ col, id, data }) => {
-          batch.set(db.collection(col).doc(id), sanitizeFirestoreData(data));
+        // `merge: true` on an op patches the doc instead of replacing it.
+        ops.forEach(({ col, id, data, merge }) => {
+          if (merge) batch.set(db.collection(col).doc(id), sanitizeFirestoreData(data), { merge: true });
+          else batch.set(db.collection(col).doc(id), sanitizeFirestoreData(data));
         });
         await batch.commit();
       };
       window.fsDeleteDoc = async function(collName, docId) {
+        guardTxnWrite(collName, docId, null, 'delete');
         await db.collection(collName).doc(docId).delete();
       };
       window.fsSaveSettings = async function(data) {

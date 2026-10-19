@@ -16,35 +16,13 @@ function CFPrintDoc({ accounts, filteredTxns, openingLedger, toDateLedger, dateF
     ? `For the period ${fmtDate(dateFilter.from)} to ${fmtDate(dateFilter.to)}`
     : dateFilter.to ? `As of ${fmtDate(dateFilter.to)}` : "All Periods";
 
-  // Account classifications
-  const cashAccounts    = (accounts || []).filter(isCashAccount);
-  const fixedAssetAccts = (accounts || []).filter(isFixedAssetAccount);
-  const equityAccts     = (accounts || []).filter(a => a.type === "Equity");
-  const cashIds         = new Set(cashAccounts.map(a => a.id));
-  const fixedAssetIds   = new Set(fixedAssetAccts.map(a => a.id));
-  const equityIds       = new Set(equityAccts.map(a => a.id));
-
-  // Opening & closing cash
-  const openingCash = cashAccounts.reduce((s, a) => s + accountBalance(a, openingLedger || {}), 0);
-  const closingCash = cashAccounts.reduce((s, a) => s + accountBalance(a, toDateLedger   || {}), 0);
-
-  // Classify cash flows
-  let operating = 0, investing = 0, financing = 0;
-  const opLines = [], invLines = [], finLines = [];
-
-  (filteredTxns || []).forEach(txn => {
-    const r = classifyTxnCash(txn, cashIds, fixedAssetIds, equityIds);
-    if (!r) return;
-    operating += r.operating;
-    investing += r.investing;
-    financing += r.financing;
-    const memo = txn.memo || (txn.lines && txn.lines[0] && txn.lines[0].memo) || "";
-    if (r.operating !== 0) opLines.push({ ref: txn.ref, memo, amount: r.operating, date: txn.date });
-    if (r.investing !== 0) invLines.push({ ref: txn.ref, memo, amount: r.investing, date: txn.date });
-    if (r.financing !== 0) finLines.push({ ref: txn.ref, memo, amount: r.financing, date: txn.date });
-  });
-
-  const netMovement = operating + investing + financing;
+  // Same computation as the screen report (core.jsx computeCashFlow).
+  const cf = computeCashFlow({ accounts, txns: filteredTxns, openingLedger, toDateLedger });
+  const { cashAccounts, openingCash, closingCash, netMovement } = cf;
+  const operating = cf.sections.operating.total, investing = cf.sections.investing.total;
+  const financing = cf.sections.financing.total, clientFunds = cf.sections.clientFunds.total;
+  const opLines = cf.sections.operating.lines, invLines = cf.sections.investing.lines;
+  const finLines = cf.sections.financing.lines, cfLines = cf.sections.clientFunds.lines;
 
   // Shared col group for activity tables
   function ActivityCols() {
@@ -153,6 +131,7 @@ function CFPrintDoc({ accounts, filteredTxns, openingLedger, toDateLedger, dateF
       <ActivitySection label="Operating Activities" lines={opLines} subtotal={operating} />
       <ActivitySection label="Investing Activities" lines={invLines} subtotal={investing} />
       <ActivitySection label="Financing Activities" lines={finLines} subtotal={financing} />
+      {(cfLines.length > 0 || clientFunds !== 0) && <ActivitySection label="Client Money Held for Others (2230)" lines={cfLines} subtotal={clientFunds} />}
 
       {/* Reconciliation block */}
       <div style={{ marginTop: 28, pageBreakInside: "avoid", fontFamily: PD.sans }}>
@@ -167,7 +146,9 @@ function CFPrintDoc({ accounts, filteredTxns, openingLedger, toDateLedger, dateF
               { label: "Net Cash from Operating Activities", value: operating, color: operating  >= 0 ? PD.green : PD.red },
               { label: "Net Cash from Investing Activities", value: investing, color: investing  >= 0 ? PD.green : PD.red },
               { label: "Net Cash from Financing Activities", value: financing, color: financing  >= 0 ? PD.green : PD.red },
+              ...(clientFunds !== 0 ? [{ label: "Client Money Received / (Paid Out)", value: clientFunds, color: clientFunds >= 0 ? PD.green : PD.red }] : []),
               { label: "Net Movement in Cash",              value: netMovement, color: netMovement >= 0 ? PD.green : PD.red, bold: true },
+              ...(cf.difference !== 0 ? [{ label: "Unreconciled Difference", value: cf.difference, color: PD.red }] : []),
             ].map((row, i) => (
               <tr key={i}>
                 <td style={{ padding: "3.5px 0", fontSize: row.bold ? PD.fSm : PD.fBase, fontWeight: row.bold ? 700 : 400, color: PD.inkMd, borderTop: row.bold ? "0.75px solid " + PD.rule : "none" }}>
@@ -212,42 +193,12 @@ function EquityPrintDoc({ accounts, filteredLedger, openingLedger, toDateLedger,
   const company  = settings?.company  || "Nasama Properties";
   const currency = settings?.currency || "AED";
   const trn      = settings?.trn;
-  const netIncome = (totalRev || 0) - (totalExp || 0);
+  // Same computation as the screen report (core.jsx computeEquityStatement).
+  const es = computeEquityStatement({ accounts, openingLedger, filteredLedger, toDateLedger });
 
   const periodLine = dateFilter.from && dateFilter.to
     ? `For the period ${fmtDate(dateFilter.from)} to ${fmtDate(dateFilter.to)}`
     : dateFilter.to ? `As of ${fmtDate(dateFilter.to)}` : "All Periods";
-
-  const equityAccounts = (accounts || []).filter(a => a.type === "Equity");
-
-  function isCapital(a)  { return /capital/i.test(a.name || ""); }
-  function isDrawing(a)  { return /drawing|draw|withdrawal/i.test(a.name || ""); }
-  function isRetained(a) { return /retained|reserve|profit/i.test(a.name || ""); }
-
-  const capitalAccts  = equityAccounts.filter(isCapital);
-  const drawingAccts  = equityAccounts.filter(a => isDrawing(a) && !isCapital(a));
-  const retainedAccts = equityAccounts.filter(a => isRetained(a) && !isCapital(a) && !isDrawing(a));
-  const otherEquity   = equityAccounts.filter(a => !isCapital(a) && !isDrawing(a) && !isRetained(a));
-
-  function sumBal(accts, ledger) {
-    return accts.reduce((s, a) => s + accountBalance(a, ledger || {}), 0);
-  }
-
-  const openCapital  = sumBal(capitalAccts,  openingLedger);
-  const openDrawings = sumBal(drawingAccts,  openingLedger);
-  const openRetained = sumBal(retainedAccts, openingLedger);
-  const openOther    = sumBal(otherEquity,   openingLedger);
-  const openTotal    = sumBal(equityAccounts, openingLedger);
-
-  const perCapital  = sumBal(capitalAccts, filteredLedger);
-  const perDrawings = sumBal(drawingAccts, filteredLedger);
-  const perOther    = sumBal(otherEquity,  filteredLedger);
-
-  const closeCapital  = sumBal(capitalAccts,  toDateLedger);
-  const closeDrawings = sumBal(drawingAccts,  toDateLedger);
-  const closeRetained = sumBal(retainedAccts, toDateLedger);
-  const closeOther    = sumBal(otherEquity,   toDateLedger);
-  const closeTotal    = sumBal(equityAccounts, toDateLedger) + netIncome;
 
   // 5-column table: Label | Opening | Movement | Net Income | Closing
   const colW = [null, 120, 120, 120, 120];
@@ -329,35 +280,17 @@ function EquityPrintDoc({ accounts, filteredLedger, openingLedger, toDateLedger,
           </tr>
         </thead>
         <tbody>
-          {capitalAccts.length > 0 && (
-            <DataRow label="Capital / Paid-in Capital" opening={openCapital} movement={perCapital} ni={0} closing={closeCapital} />
-          )}
-          {drawingAccts.length > 0 && (
-            <DataRow label="Drawings" opening={-openDrawings} movement={-perDrawings} ni={0} closing={-closeDrawings} />
-          )}
-          {retainedAccts.length > 0 && (
-            <DataRow label="Retained Earnings" opening={openRetained} movement={0} ni={0} closing={closeRetained} />
-          )}
-          <DataRow label="Net Income / (Loss) for Period" opening={0} movement={0} ni={netIncome} closing={netIncome} />
-          {otherEquity.length > 0 && (
-            <DataRow label="Other Equity" opening={openOther} movement={perOther} ni={0} closing={closeOther} />
-          )}
-          <DataRow
-            label="Total Equity"
-            opening={openTotal}
-            movement={perCapital - perDrawings + perOther}
-            ni={netIncome}
-            closing={closeTotal}
-            bold
-          />
+          {es.rows.map(r => <DataRow key={r.key} label={r.label} opening={r.opening} movement={r.movement} ni={r.ni} closing={r.closing} />)}
+          <DataRow label="Total Equity" opening={es.total.opening} movement={es.total.movement} ni={es.total.ni} closing={es.total.closing} bold />
+          {es.difference !== 0 && <DataRow label="Difference to Balance Sheet" opening={0} movement={0} ni={0} closing={es.difference} />}
         </tbody>
       </table>
 
       {/* Note */}
       <div style={{ marginTop: 20, padding: "10px 0", borderTop: "0.75px solid " + PD.ruleLt, fontSize: PD.fXs, color: PD.inkSub, fontFamily: PD.sans, lineHeight: 1.6 }}>
         <span style={{ fontWeight: 700, color: PD.inkMd }}>Note: </span>
-        Net income for the period is sourced from the Profit &amp; Loss statement and is reflected as an addition to retained earnings before any distribution.
-        Drawings represent direct withdrawals by the owner and reduce total equity.
+        Figures are signed as they affect equity — drawings are negative. Opening retained earnings include profit from earlier periods not yet closed to
+        Retained Earnings; the period's net income comes from the Profit &amp; Loss statement. The closing total equals equity on the Balance Sheet.
       </div>
 
       <PrintDocNote company={company} />
@@ -554,7 +487,7 @@ function NotesPrintDoc({ accounts, filteredLedger, toDateLedger, priorLedger, ha
         trn ? ["Tax Registration No.", trn] : null,
         ["Reporting Period",      periodLabel],
         ["Report Generated",      generated],
-        ["Total Transactions",    String((filteredTxns || []).length)],
+        ["Total Transactions",    String((filteredTxns || []).filter(t => !t.isVoid).length)],
       ].filter(Boolean)} />
 
       {/* Note 2 — Basis of Preparation */}

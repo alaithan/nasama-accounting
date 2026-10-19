@@ -19,6 +19,9 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     // Tenancy deals carry tenancy_start / tenancy_end and ride the renewal radar.
     // A Renewal is a renewed tenancy: it books to 4020 Rental Commission like a Rental.
     const TENANCY_DEAL_TYPES = ["Rental", "Renewal"];
+    // Still in the pipeline: neither collected nor cancelled. A cancelled deal's
+    // commission will never arrive, so it must not inflate pipeline or runway.
+    const isOpenDeal = d => !!d && d.stage !== "Commission Collected" && d.stage !== "Cancelled";
     const isTenancyType = t => TENANCY_DEAL_TYPES.includes(t);
     const DEAL_TYPE_BADGE = { "Off-Plan": "info", Secondary: "gold", Rental: "success", Renewal: "purple" };
     const ACCT_TYPES = ["Asset", "Liability", "Equity", "Revenue", "Expense"];
@@ -36,7 +39,35 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       OD: { label: "Owner Drawing", desc: "Profit release / owner withdrawal" },
       AC: { label: "Accrual", desc: "Expense incurred but not yet paid" },
       CF: { label: "Client Funds", desc: "Money held on behalf of a client — not company revenue" },
+      IN: { label: "Tax Invoice", desc: "Commission invoiced — receivable, revenue and output VAT booked at issue" },
+      CN: { label: "Credit Note", desc: "Tax credit note — reverses an invoice's receivable, revenue and VAT" },
     };
+
+    // ── INVOICE LIFECYCLE & RECEIVABLES ──────────────
+    // An issued tax invoice is cancelled only by a tax credit note (status
+    // "credited"). Legacy invoices voided before credit notes existed keep
+    // status "void". A commission claim that has been converted into a tax
+    // invoice ("converted") is superseded by that invoice. All three mean "this
+    // document no longer bills anything" everywhere.
+    const invoiceIsCancelled = (inv) => { const s = (inv && inv.status) || "draft"; return s === "void" || s === "credited" || s === "converted"; };
+    // Accrual invoicing (Settings › Invoicing): when on, issuing an invoice dated
+    // on/after `from` posts DR Commission Receivable / CR Revenue / CR Output VAT,
+    // so revenue and VAT follow the TAX POINT (the invoice date) — and a receipt
+    // against that invoice then only clears the receivable. Off (the default),
+    // or for invoices before `from`, revenue is booked when cash arrives, as before.
+    const AR_ACCOUNT_CODE = "1100";
+    const AR_ACCOUNT_SEED = { id: "a1100", code: AR_ACCOUNT_CODE, name: "Commission Receivable", type: "Asset", isBank: false, isCash: false, isOutputVAT: false, isInputVAT: false };
+    const invoiceAccrualSettings = (settings) => {
+      const a = (settings && settings.arInvoicing) || {};
+      return { enabled: !!a.enabled, from: /^\d{4}-\d{2}-\d{2}$/.test(String(a.from || "")) ? a.from : "" };
+    };
+    /** True when an invoice dated `invoiceDate` is issued on the accrual basis. */
+    const invoiceUsesAccrual = (settings, invoiceDate) => {
+      const a = invoiceAccrualSettings(settings);
+      return a.enabled && !!a.from && !!invoiceDate && String(invoiceDate) >= a.from;
+    };
+    /** True when this invoice booked its receivable at issue (so receipts must clear AR, not book revenue). */
+    const invoiceIsAccrual = (inv) => !!(inv && inv.arTxnId);
 
     // ── ACCRUALS ──────────────────────────────────────
     // An accrual (AC) recognises an expense before the cash goes out:
@@ -51,20 +82,55 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     // Tags are compared as whole words: "accrual-settlement" must NOT match a
     // naive substring test for "accrual", or every settlement reads as an accrual.
     const txnTagList = (t) => String((t && t.tags) || "").split(/[,;\s]+/).filter(Boolean);
-    const isAccrualTxn = (t) => !!t && (t.txnType === "AC" || txnTagList(t).includes(ACCRUAL_TAG));
-    const isAccrualSettlementTxn = (t) => !!t && txnTagList(t).includes(ACCRUAL_SETTLEMENT_TAG);
+
+    // ── REVERSED PAIRS ────────────────────────────────
+    // Contra-entry model: a reversal (reversesTxnId set) and its original both stay
+    // live and net to zero in the ledger. Derived views that read ONE side of an
+    // entry (cash debits, invoice links, deal collection) must therefore drop the
+    // whole pair, or a reversed receipt keeps counting as collected. Skipping the
+    // pair is exact, and it also covers legacy reversals that carry no deal_id.
+    /** Ids of originals that have a live (non-void) reversal. */
+    const reversedTxnIds = (txns) => {
+      const s = new Set();
+      (txns || []).forEach(r => { if (r && r.reversesTxnId && !r.isVoid) s.add(r.reversesTxnId); });
+      return s;
+    };
+    /** True when `t` is a reversal entry, or an original offset by a live reversal. */
+    const isInReversedPair = (t, reversedIds) => !!t && (!!t.reversesTxnId || reversedIds.has(t.id));
+
+    // A reversal entry inherits the original's tags (so "accrual" stays on it),
+    // but it is NOT an accrual — it cancels one. Without this check every accrual
+    // reversal showed a red "Unpaid" pill.
+    const isAccrualTxn = (t) => !!t && !t.reversesTxnId && (t.txnType === "AC" || txnTagList(t).includes(ACCRUAL_TAG));
+    const isAccrualSettlementTxn = (t) => !!t && !t.reversesTxnId && txnTagList(t).includes(ACCRUAL_SETTLEMENT_TAG);
 
     // "unpaid" | "settled" | "reversed" | "void" — null when this isn't an accrual.
-    // The settlement is matched on planned_expense_id, which both postAccrual and
-    // postAccrualSettlement stamp onto their transaction.
+    //
+    // A settlement names the accrual it clears via accrual_txn_id. Matching on
+    // planned_expense_id alone was wrong for RECURRING items: every cycle reuses
+    // the same planned-expense id, so January's settlement marked February's
+    // (still unpaid) accrual "Settled". Legacy settlements written before
+    // accrual_txn_id existed are paired with legacy accruals of the same planned
+    // expense first-in-first-out: the n-th accrual is settled by the n-th settlement.
+    // A settlement that was itself reversed settles nothing.
     const accrualStatus = (txn, txns) => {
       if (!isAccrualTxn(txn)) return null;
       if (txn.isVoid) return "void";
       const all = txns || [];
-      if (all.some(r => r.reversesTxnId === txn.id && !r.isVoid)) return "reversed";
+      const reversed = reversedTxnIds(all);
+      if (reversed.has(txn.id)) return "reversed";
+      const liveSettlement = s => !s.isVoid && isAccrualSettlementTxn(s) && !reversed.has(s.id);
+      if (all.some(s => liveSettlement(s) && s.accrual_txn_id === txn.id)) return "settled";
       const pe = txn.planned_expense_id || "";
-      if (pe && all.some(s => !s.isVoid && s.planned_expense_id === pe && isAccrualSettlementTxn(s))) return "settled";
-      return "unpaid";
+      if (!pe) return "unpaid";
+      const order = (a, b) => String(a.date || "").localeCompare(String(b.date || "")) || String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+      // Accruals of this planned expense that still need a legacy settlement
+      // (not void/reversed, not already claimed by an explicit one), oldest first.
+      const explicitlySettled = new Set(all.filter(s => liveSettlement(s) && s.accrual_txn_id).map(s => s.accrual_txn_id));
+      const accruals = all.filter(a => isAccrualTxn(a) && !a.isVoid && !reversed.has(a.id) && a.planned_expense_id === pe && !explicitlySettled.has(a.id)).sort(order);
+      const legacySettlements = all.filter(s => liveSettlement(s) && !s.accrual_txn_id && s.planned_expense_id === pe);
+      const idx = accruals.findIndex(a => a.id === txn.id);
+      return idx >= 0 && idx < legacySettlements.length ? "settled" : "unpaid";
     };
     const ACCRUAL_STATUS = {
       unpaid:   { label: "Unpaid",   fg: "#B91C1C", bg: "#FEF2F2", br: "#FECACA", title: "Expense recognised but not yet paid — still owed under Accrued Expenses Payable (2210)" },
@@ -196,6 +262,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       const inRange = t => (!from || (t.date || "") >= from) && (!to || (t.date || "") <= to);
       const rows = new Map();
       let received = 0, applied = 0, refunded = 0, glMovement = 0;
+      const byId = new Map((txns || []).map(t => [t.id, t]));
       (txns || []).forEach(t => {
         if (!cfA || t.isVoid || !inRange(t)) return;
         // Signed 2230 movement: a credit increases what we hold, a debit releases it.
@@ -205,9 +272,13 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         glMovement += delta;
         const mv = clientFundsMovement(t);
         if (!mv) return;                                  // untagged → falls into `untracked`
-        const key = t.deal_id || t.customer_id || `party:${t.counterparty || "(unidentified)"}`;
-        if (!rows.has(key)) rows.set(key, { key, deal_id: t.deal_id || "", customer_id: t.customer_id || "",
-          counterparty: t.counterparty || "", received: 0, applied: 0, refunded: 0, held: 0, txns: [] });
+        // A reversal belongs to its original's party. Legacy reversals carry no
+        // deal_id/customer_id, so keying them on their own fields split one party
+        // in two: the original still "held", plus a phantom negative party.
+        const src = (t.reversesTxnId && byId.get(t.reversesTxnId)) || t;
+        const key = src.deal_id || src.customer_id || `party:${src.counterparty || "(unidentified)"}`;
+        if (!rows.has(key)) rows.set(key, { key, deal_id: src.deal_id || "", customer_id: src.customer_id || "",
+          counterparty: src.counterparty || "", received: 0, applied: 0, refunded: 0, held: 0, txns: [] });
         const r = rows.get(key);
         if (mv === "received")    { r.received += delta;  received += delta; }
         else if (mv === "earned") { r.applied  += -delta; applied  += -delta; }
@@ -243,8 +314,12 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         for (const [id, v] of buckets) { if (cents <= 0) break; if (v <= 0) continue;
           const d = Math.min(v, cents); buckets.set(id, v - d); cents -= d; }
       };
-      [...((party && party.txns) || [])].sort((a, b) => (a.date || "").localeCompare(b.date || "")).forEach(t => {
+      const partyTxns = (party && party.txns) || [];
+      const reversed = reversedTxnIds(partyTxns);
+      [...partyTxns].sort((a, b) => (a.date || "").localeCompare(b.date || "")).forEach(t => {
         if (t.isVoid) return;
+        // A reversed pair nets to zero on cash and on 2230 — drop both sides.
+        if (isInReversedPair(t, reversed)) return;
         const mv = clientFundsMovement(t);
         const cfDelta = (t.lines || []).reduce((s, l) => cfA && l.accountId === cfA.id ? s + (l.credit || 0) - (l.debit || 0) : s, 0);
         let moved = 0;
@@ -406,6 +481,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       reports:        "accounting.read",
       vat:            "accounting.read",
       budget:         "accounting.read",
+      insights:       "accounting.read",   // cash forecast, receivables, VAT return — same audience as Reports
       users:          "system.read",
       settings:       "system.read",
       manual:         "system.read",
@@ -430,6 +506,13 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     };
     const canAccessPage = (subject, pg) => {
       if (isAdminSubject(subject)) return true;
+      // Approvals: anyone who can post a payment or journal (to follow their own
+      // requests) or approve. Not in PAGE_ACCESS_BRIDGE: it needs ANY of several.
+      if (pg === "approvals") {
+        const acc = resolveAccessSubject(subject);
+        if (acc && acc.permissions) return !!(acc.permissions["expenses.create"] || acc.permissions["accounting.create"] || acc.permissions["system.approve"]);
+        return ["accountant"].includes(resolveLegacyRole(subject));
+      }
       const bridged = PAGE_ACCESS_BRIDGE[pg];
       const access = resolveAccessSubject(subject);
       if (access?.permissions && bridged) return !!access.permissions[bridged];
@@ -440,7 +523,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         developers: ['admin', 'accountant', 'secretary'], payments: ['admin', 'accountant'],
         vendors: ['admin', 'accountant'], banking: ['admin', 'accountant'],
         reports: ['admin', 'accountant'], vat: ['admin', 'accountant'],
-        budget: ['admin', 'accountant'],
+        budget: ['admin', 'accountant'], insights: ['admin', 'accountant'],
         manual: ['admin', 'accountant', 'secretary'],
         settings: ['admin', 'accountant'], users: ['admin'],
         banana2: ['admin', 'accountant', 'secretary', 'sales']
@@ -458,6 +541,485 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       return Math.round(num * 100);
     };
     const fromCents = c => ((c || 0) / 100).toFixed(2);
+
+    // ── APPROVAL WORKFLOW ─────────────────────────────
+    // Each user record carries posting limits (authorized_users.approvalLimits,
+    // in AED): `payments` for payment vouchers / broker payments / settlements,
+    // `journalEntries` for manual journals. A blank limit means UNLIMITED — the
+    // behaviour before this existed — and admins are never limited, so nothing
+    // changes until an admin sets limits.
+    //
+    // Above the limit the entry is NOT posted: it becomes a pending request in
+    // approval_requests, outside the ledger, and only posts when an eligible
+    // approver approves it. Eligible = an admin, or a user whose role has an
+    // active approval policy for that module whose limit covers the amount
+    // (blank policy limit = any amount). Nobody approves their own request.
+    // Policy `sequence` (multi-level chains) is not enforced: one approval posts.
+    const APPROVAL_SCOPES = {
+      payments: { label: "Payment", limitKey: "payments",       policyModules: ["expenses", "payments", "purchases"] },
+      journal:  { label: "Journal entry", limitKey: "journalEntries", policyModules: ["accounting", "journalEntries", "bank", "banking"] },
+    };
+    /** Which approval scope a posted txn falls under, or null when none applies. */
+    const approvalScopeOfTxn = (t) => {
+      if (!t || t.isVoid || t.reversesTxnId) return null;          // reversals undo, they are not new spending
+      if (txnTagList(t).includes("opening-balance")) return null;
+      if (t.txnType === "PV" || t.txnType === "BP") return "payments";
+      if (t.txnType === "JV") return "journal";
+      return null;
+    };
+    /** Gross value of an entry (or several): total debits, in cents. */
+    const approvalAmountCents = (txns) => (Array.isArray(txns) ? txns : [txns]).reduce((s, t) =>
+      s + ((t && t.lines) || []).reduce((ss, l) => ss + (l.debit || 0), 0), 0);
+    /** A user's posting limit for a scope, in cents. Infinity = no limit. */
+    const postingLimitCents = (access, scope) => {
+      if (isAdminSubject(access)) return Infinity;
+      const key = APPROVAL_SCOPES[scope] && APPROVAL_SCOPES[scope].limitKey;
+      const raw = access && access.approvalLimits ? access.approvalLimits[key] : null;
+      if (raw === null || raw === undefined || raw === "") return Infinity;
+      const n = Number(raw);
+      return isFinite(n) && n >= 0 ? Math.round(n * 100) : Infinity;
+    };
+    const needsApproval = ({ access, scope, amountCents }) =>
+      !!scope && (amountCents || 0) > postingLimitCents(access, scope);
+    /**
+     * Backstop for every write path: throws when `next` is an over-limit
+     * payment/journal that carries no approval. New entries and edits that RAISE
+     * the amount are checked; voiding, re-linking or re-labelling is not.
+     */
+    const assertWithinPostingLimit = ({ prev = null, next, access }) => {
+      if (!next || next.approval_request_id) return;
+      const scope = approvalScopeOfTxn(next);
+      if (!scope) return;
+      const amount = approvalAmountCents(next);
+      if (prev && amount <= approvalAmountCents(prev)) return;
+      if (amount > postingLimitCents(access, scope)) {
+        throw new Error(`${APPROVAL_SCOPES[scope].label} of ${fmtAED(amount)} is above your posting limit of ${fmtAED(postingLimitCents(access, scope))} — it needs approval. Submit it from the posting screen so it goes to an approver.`);
+      }
+    };
+    const normEmail = v => String(v || "").toLowerCase().trim();
+    /** Approval policies that let `access` approve `request`. */
+    const approvalPoliciesFor = ({ access, request, policies }) => {
+      const mods = (APPROVAL_SCOPES[request && request.scope] || {}).policyModules || [];
+      return (policies || []).filter(p => p && p.active !== false && mods.includes(p.module) && p.roleId === (access && access.roleId) &&
+        (p.approvalLimit === null || p.approvalLimit === undefined || p.approvalLimit === "" || Math.round(Number(p.approvalLimit) * 100) >= (request.amountCents || 0)));
+    };
+    /** "" when `access`/`email` may approve or reject `request`, else the reason they may not. */
+    const approvalDecisionBlocker = ({ access, email, request, policies }) => {
+      if (!request) return "Request not found";
+      if ((request.status || "pending") !== "pending") return `Already ${request.status}`;
+      if (normEmail(email) && normEmail(email) === normEmail(request.requestedBy)) return "You cannot approve your own request";
+      if (isAdminSubject(access)) return "";
+      if (approvalPoliciesFor({ access, request, policies }).length) return "";
+      return "Your role has no approval policy covering this amount";
+    };
+
+    // ── CASH FLOW CLASSIFICATION ──────────────────────
+    // One definition for every cash-flow figure (Dashboard tiles, 6-month series,
+    // Cash Flow statement), so they cannot disagree.
+    //   cash      — bank + cash accounts only (isBank / isCash / 1001). A prefix
+    //               test on "10" wrongly swept in 1004 Prepaid Expenses.
+    //   clientFunds — money received for / refunded to clients (2230). It sits in
+    //               our bank but is not the company's cash flow, so it is shown on
+    //               its own line and never as operating cash.
+    //   investing — fixed assets.   financing — capital, drawings, opening
+    //               balance, loans (2200 / "loan" liabilities).
+    //   transfer  — between our own cash accounts (no effect).
+    const isMoneyAccount = (a) => !!a && (!!a.isBank || !!a.isCash || a.code === "1001");
+    const isFixedAssetAcct = (a) => !!a && a.type === "Asset" && ((String(a.code || "") >= "1500" && String(a.code || "") <= "1599") || /fixed|equipment|furniture|computer|vehicle|machinery/i.test(a.name || ""));
+    const isFinancingLiability = (a) => !!a && a.type === "Liability" && (a.code === "2200" || /loan|borrow/i.test(a.name || ""));
+    /** "operating" | "investing" | "financing" | "clientFunds" | "transfer" | null (no cash moved). */
+    const cashFlowCategory = (t, accountById) => {
+      if (!t || t.isVoid) return null;
+      const acct = l => accountById.get(l.accountId);
+      const lines = t.lines || [];
+      const money = lines.filter(l => isMoneyAccount(acct(l)));
+      if (!money.length) return null;
+      const net = money.reduce((s, l) => s + (l.debit || 0) - (l.credit || 0), 0);
+      const other = lines.filter(l => !isMoneyAccount(acct(l)) && ((l.debit || 0) || (l.credit || 0)));
+      if (!other.length) return net === 0 ? "transfer" : "operating";
+      if (isClientFundsTxn(t) || other.some(l => (acct(l) || {}).code === CLIENT_FUNDS_CODE)) return "clientFunds";
+      if (other.some(l => isFixedAssetAcct(acct(l)))) return "investing";
+      if (["CI", "OD"].includes(t.txnType) || txnTagList(t).includes("opening-balance") ||
+          other.some(l => { const a = acct(l); return a && (a.type === "Equity" || isFinancingLiability(a)); })) return "financing";
+      return "operating";
+    };
+    /** Net cash moved by `t` (money-account debits − credits), in cents. */
+    const txnCashNet = (t, accountById) => (t.lines || []).reduce((s, l) => isMoneyAccount(accountById.get(l.accountId)) ? s + (l.debit || 0) - (l.credit || 0) : s, 0);
+    /**
+     * The Cash Flow statement for a period. `txns` = the period's entries (voids
+     * are ignored here — they are also absent from both ledgers, so the
+     * statement reconciles: opening + movements = closing). `difference` is
+     * shown on the report and must be zero; anything else is a data problem.
+     */
+    const computeCashFlow = ({ accounts, txns, openingLedger, toDateLedger }) => {
+      const accountById = new Map((accounts || []).map(a => [a.id, a]));
+      const cashAccounts = (accounts || []).filter(isMoneyAccount);
+      const openingCash = cashAccounts.reduce((s, a) => s + accountBalance(a, openingLedger || {}), 0);
+      const closingCash = cashAccounts.reduce((s, a) => s + accountBalance(a, toDateLedger || {}), 0);
+      const sections = { operating: { total: 0, lines: [] }, investing: { total: 0, lines: [] }, financing: { total: 0, lines: [] }, clientFunds: { total: 0, lines: [] } };
+      (txns || []).forEach(t => {
+        const cat = cashFlowCategory(t, accountById);
+        if (!cat || cat === "transfer") return;
+        const amount = txnCashNet(t, accountById);
+        if (!amount) return;
+        sections[cat].total += amount;
+        sections[cat].lines.push({ ref: t.ref, memo: t.description || ((t.lines || [])[0] || {}).memo || "", amount, date: t.date });
+      });
+      const netMovement = sections.operating.total + sections.investing.total + sections.financing.total + sections.clientFunds.total;
+      return { cashAccounts, openingCash, closingCash, sections, netMovement, difference: closingCash - (openingCash + netMovement) };
+    };
+
+    // ── STATEMENT OF CHANGES IN EQUITY ────────────────
+    // Every row is SIGNED as it affects equity (drawings negative) and closes as
+    // opening + movement + net income, so the total row is a plain sum and the
+    // closing total equals the Balance Sheet's equity (equity accounts + all
+    // profit to date). Profit earned before the period and never closed to 3002
+    // is part of opening retained earnings — leaving it out made the statement
+    // disagree with the Balance Sheet by every prior year's profit.
+    const computeEquityStatement = ({ accounts, openingLedger, filteredLedger, toDateLedger }) => {
+      const eq = (accounts || []).filter(a => a.type === "Equity");
+      const isCapital  = a => /capital/i.test(a.name || "");
+      const isDrawing  = a => !isCapital(a) && /drawing|draw|withdrawal/i.test(a.name || "");
+      const isRetained = a => !isCapital(a) && !isDrawing(a) && /retained|reserve|profit/i.test(a.name || "");
+      const groups = {
+        capital:  eq.filter(isCapital),
+        retained: eq.filter(isRetained),
+        drawings: eq.filter(isDrawing),
+        other:    eq.filter(a => !isCapital(a) && !isDrawing(a) && !isRetained(a)),
+      };
+      const sum = (accts, ledger) => accts.reduce((s, a) => s + accountBalance(a, ledger || {}), 0);
+      const netIncomeOf = ledger => (accounts || []).reduce((s, a) =>
+        a.type === "Revenue" ? s + accountBalance(a, ledger || {}) : a.type === "Expense" ? s - accountBalance(a, ledger || {}) : s, 0);
+      const priorProfit = netIncomeOf(openingLedger);
+      const periodProfit = netIncomeOf(filteredLedger);
+      const mk = (key, label, accts, extraOpening = 0, ni = 0) => {
+        const opening = sum(accts, openingLedger) + extraOpening, movement = sum(accts, filteredLedger);
+        return { key, label, opening, movement, ni, closing: opening + movement + ni };
+      };
+      const rows = [];
+      if (groups.capital.length) rows.push(mk("capital", "Capital / Paid-in Capital", groups.capital));
+      rows.push(mk("retained", "Retained Earnings (incl. profit for the period)", groups.retained, priorProfit, periodProfit));
+      if (groups.drawings.length) rows.push(mk("drawings", "Owner Drawings", groups.drawings));
+      if (groups.other.length) rows.push(mk("other", "Other Equity", groups.other));
+      const total = rows.reduce((t, r) => ({ opening: t.opening + r.opening, movement: t.movement + r.movement, ni: t.ni + r.ni, closing: t.closing + r.closing }),
+        { opening: 0, movement: 0, ni: 0, closing: 0 });
+      const balanceSheetEquity = sum(eq, toDateLedger) + netIncomeOf(toDateLedger);
+      const capitalIntroduced = rows.filter(r => r.key === "capital").reduce((s, r) => s + r.movement, 0);
+      return { rows, total, priorProfit, periodProfit, capitalIntroduced, balanceSheetEquity, difference: balanceSheetEquity - total.closing };
+    };
+
+    // ── SEQUENTIAL REFERENCES ─────────────────────────
+    // The engine stamps a provisional ref from the clock (PV-MGX3K2AB) because it
+    // builds entries synchronously. At save time App replaces it with the next
+    // number in a per-prefix, per-year series (PV-2026-00042), allocated inside
+    // the same Firestore transaction that writes the entry, from the counter doc
+    // meta/txnRefCounters. A failed save allocates nothing, so the series has no
+    // gaps except where an entry is later deleted. Only provisional refs are
+    // renumbered: imported bank refs, OB-, REV-<original> and anything typed by
+    // hand keep their ref, and existing entries are never renumbered.
+    const SEQ_REF_PREFIXES = ["SR", "PV", "BP", "BT", "JV", "AC", "CF", "CFE", "CFP", "REC"];
+    const PROVISIONAL_REF_RE = new RegExp(`^(${SEQ_REF_PREFIXES.join("|")})-[0-9A-Z]{7,10}(-[A-Z0-9]{1,3})?$`);
+    /** Prefix when `ref` is a provisional clock ref that should be numbered, else "". */
+    const provisionalRefPrefix = (ref) => { const m = PROVISIONAL_REF_RE.exec(String(ref || "")); return m ? m[1] : ""; };
+    /**
+     * Allocate sequential refs. `txns` = NEW entries being saved; `counters` =
+     * the stored { "PV-2026": 41, … }. Returns { refs: Map(id → new ref),
+     * counters: { key → last number used } } — only the keys that moved.
+     */
+    const planSequentialRefs = (txns, counters) => {
+      const next = {}; const refs = new Map();
+      (txns || []).forEach(t => {
+        const prefix = t && provisionalRefPrefix(t.ref);
+        if (!prefix) return;
+        const year = /^\d{4}/.test(String(t.date || "")) ? String(t.date).slice(0, 4) : String(new Date().getFullYear());
+        const key = `${prefix}-${year}`;
+        const n = (next[key] !== undefined ? next[key] : (Number((counters || {})[key]) || 0)) + 1;
+        next[key] = n;
+        refs.set(t.id, `${key}-${String(n).padStart(5, "0")}`);
+      });
+      return { refs, counters: next };
+    };
+
+    // ══ ACCOUNTING COMPLETENESS (Stage 6) ═════════════
+    // Accounts these features post to. Created on first use (passed alongside the
+    // entry in one batch), so an existing chart is never renumbered.
+    const STAGE6_ACCOUNTS = {
+      staffAdvances:   { id: "a1150", code: "1150", name: "Staff Advances", type: "Asset" },
+      accDepreciation: { id: "a1590", code: "1590", name: "Accumulated Depreciation", type: "Asset" },
+      salariesPayable: { id: "a2240", code: "2240", name: "Salaries Payable", type: "Liability" },
+      eosbProvision:   { id: "a2250", code: "2250", name: "End-of-Service Benefits Provision", type: "Liability" },
+      eosbExpense:     { id: "a5302", code: "5302", name: "End of Service Benefits", type: "Expense" },
+      depreciation:    { id: "a5610", code: "5610", name: "Depreciation Expense", type: "Expense" },
+      salaries:        { id: "a5010", code: "5010", name: "Employee Salaries", type: "Expense" },
+      retained:        { id: "a3002", code: "3002", name: "Retained Earnings", type: "Equity" },
+    };
+    const stage6Seed = k => ({ isBank: false, isCash: false, isOutputVAT: false, isInputVAT: false, ...STAGE6_ACCOUNTS[k] });
+    /** { accounts: chart incl. any missing ones, missing: seeds to create } for the given keys. */
+    const withStage6Accounts = (accounts, keys) => {
+      const have = new Set((accounts || []).map(a => a.code));
+      const missing = keys.map(stage6Seed).filter(a => !have.has(a.code));
+      return { accounts: [...(accounts || []), ...missing], missing };
+    };
+    const acctByCode = (accounts, code) => (accounts || []).find(a => a.code === code);
+    const monthEnd = (ym) => { const [y, m] = ym.split("-").map(Number); return `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`; };
+    const s6Line = (accountId, debit, credit, memo, extra = {}) => ({ id: uid(), accountId, debit, credit, memo, ...extra });
+    const s6Txn = ({ date, description, ref, tags, lines, extra = {} }) => {
+      const dr = lines.reduce((s, l) => s + (l.debit || 0), 0), cr = lines.reduce((s, l) => s + (l.credit || 0), 0);
+      if (dr !== cr) throw new Error(`Unbalanced: DR=${dr} CR=${cr}`);
+      if (!dr) throw new Error("Nothing to post");
+      return { id: uid(), date, description, ref, counterparty: "", tags, txnType: "JV", isVoid: false, lines, createdAt: new Date().toISOString(), ...extra };
+    };
+    const liveTxns = txns => (txns || []).filter(t => t && !t.isVoid);
+
+    // ── 6.1 Depreciation — straight line, per fixed-asset ACCOUNT ──
+    // config[accountId] = { lifeMonths, residualPct, startMonth: "YYYY-MM" }.
+    // Cost = the asset account's balance at month end. Each month books
+    // (cost − residual) / life, capped so accumulated depreciation never
+    // exceeds the depreciable amount; lines carry asset_account_id so each
+    // class is tracked inside the single 1590 contra account.
+    const isDepreciableAsset = a => isFixedAssetAcct(a) && a.code !== "1590" && !/accumulated|depreciation/i.test(a.name || "");
+    const computeDepreciation = ({ accounts, txns, config, month }) => {
+      const end = monthEnd(month);
+      const live = liveTxns(txns).filter(t => (t.date || "") <= end);
+      const acc = acctByCode(accounts, "1590");
+      const tag = `dep-${month}`;
+      const postedIds = new Set(live.filter(t => txnTagList(t).includes(tag)).flatMap(t => (t.lines || []).map(l => l.asset_account_id)).filter(Boolean));
+      return (accounts || []).filter(isDepreciableAsset).map(a => {
+        const cfg = (config || {})[a.id] || {};
+        const life = parseInt(cfg.lifeMonths, 10) || 0;
+        const residualPct = Math.max(0, Math.min(100, parseFloat(cfg.residualPct) || 0));
+        const cost = live.reduce((s, t) => s + (t.lines || []).reduce((ss, l) => l.accountId === a.id ? ss + (l.debit || 0) - (l.credit || 0) : ss, 0), 0);
+        const accumulated = acc ? live.reduce((s, t) => s + (t.lines || []).reduce((ss, l) => l.accountId === acc.id && l.asset_account_id === a.id ? ss + (l.credit || 0) - (l.debit || 0) : ss, 0), 0) : 0;
+        const depreciable = Math.round(cost * (1 - residualPct / 100));
+        const monthly = life > 0 ? Math.round(depreciable / life) : 0;
+        const started = !cfg.startMonth || month >= cfg.startMonth;
+        const already = postedIds.has(a.id);
+        const amount = !already && started && life > 0 ? Math.max(0, Math.min(monthly, depreciable - accumulated)) : 0;
+        return { account: a, cost, accumulated, nbv: cost - accumulated, monthly, amount, life, residualPct, already, started, configured: life > 0 };
+      });
+    };
+    const buildDepreciationTxn = ({ accounts, rows, month }) => {
+      const exp = acctByCode(accounts, "5610"), acc = acctByCode(accounts, "1590");
+      if (!exp || !acc) throw new Error("Depreciation accounts (5610 / 1590) not found");
+      const lines = [];
+      rows.filter(r => r.amount > 0).forEach(r => {
+        const memo = `Depreciation ${month} — ${r.account.name}`;
+        lines.push(s6Line(exp.id, r.amount, 0, memo, { asset_account_id: r.account.id }));
+        lines.push(s6Line(acc.id, 0, r.amount, memo, { asset_account_id: r.account.id }));
+      });
+      return s6Txn({ date: monthEnd(month), description: `Depreciation — ${month}`, ref: `JV-${Date.now().toString(36).toUpperCase()}`, tags: `depreciation dep-${month}`, lines });
+    };
+
+    // ── 6.2 Payroll: accrue → pay (recovering advances) · staff advances ──
+    // Employee lines carry employee_id; balances per person are read back from
+    // 2240 (owed to them) and 1150 (advanced to them).
+    const employeeBalance = (txns, accountId, employeeId, sign = 1) => liveTxns(txns).reduce((s, t) => s + (t.lines || []).reduce((ss, l) =>
+      l.accountId === accountId && l.employee_id === employeeId ? ss + sign * ((l.credit || 0) - (l.debit || 0)) : ss, 0), 0);
+    const employeeActiveIn = (e, month) => {
+      const start = `${month}-01`, end = monthEnd(month);
+      return !!e && !e.archived && (!e.join_date || e.join_date <= end) && (!e.leave_date || e.leave_date >= start);
+    };
+    const buildSalaryAccrualTxn = ({ accounts, employees, txns, month }) => {
+      const exp = acctByCode(accounts, "5010"), pay = acctByCode(accounts, "2240");
+      if (!exp || !pay) throw new Error("Salary accounts (5010 / 2240) not found");
+      const tag = `payroll-${month}`;
+      const done = new Set(liveTxns(txns).filter(t => txnTagList(t).includes(tag)).flatMap(t => (t.lines || []).map(l => l.employee_id)).filter(Boolean));
+      const lines = [];
+      (employees || []).filter(e => (e.base_salary || 0) > 0 && employeeActiveIn(e, month) && !done.has(e.id)).forEach(e => {
+        const memo = `Salary ${month} — ${e.name || e.id}`;
+        lines.push(s6Line(exp.id, e.base_salary, 0, memo, { employee_id: e.id }));
+        lines.push(s6Line(pay.id, 0, e.base_salary, memo, { employee_id: e.id }));
+      });
+      if (!lines.length) throw new Error(`Salaries for ${month} are already accrued (or no active employee has a base salary)`);
+      return s6Txn({ date: monthEnd(month), description: `Salary accrual — ${month}`, ref: `JV-${Date.now().toString(36).toUpperCase()}`, tags: `payroll-accrual ${tag}`, lines });
+    };
+    const buildStaffAdvanceTxn = ({ accounts, employee, amountC, bankCode, date }) => {
+      const adv = acctByCode(accounts, "1150"), bank = acctByCode(accounts, bankCode);
+      if (!adv || !bank) throw new Error("Staff Advances (1150) or the bank account not found");
+      if (!(amountC > 0)) throw new Error("Amount must be positive");
+      const memo = `Staff advance — ${employee.name || employee.id}`;
+      return s6Txn({ date, description: memo, ref: `PV-${Date.now().toString(36).toUpperCase()}`, tags: "staff-advance",
+        lines: [s6Line(adv.id, amountC, 0, memo, { employee_id: employee.id }), s6Line(bank.id, 0, amountC, memo, { employee_id: employee.id })],
+        extra: { txnType: "PV", counterparty: employee.name || "" } });
+    };
+    // Clears `grossC` of what is owed (2240), recovers `recoverC` of the advance
+    // (1150), and pays the rest from the bank.
+    const buildSalaryPaymentTxn = ({ accounts, txns, employee, grossC, recoverC = 0, bankCode, date }) => {
+      const pay = acctByCode(accounts, "2240"), adv = acctByCode(accounts, "1150"), bank = acctByCode(accounts, bankCode);
+      if (!pay || !bank) throw new Error("Salaries Payable (2240) or the bank account not found");
+      const owed = employeeBalance(txns, pay.id, employee.id);
+      const advanced = adv ? -employeeBalance(txns, adv.id, employee.id) : 0;
+      if (!(grossC > 0)) throw new Error("Amount must be positive");
+      if (grossC > owed) throw new Error(`Only ${fmtAED(owed)} is owed to ${employee.name || "this employee"}`);
+      if (recoverC < 0 || recoverC > advanced) throw new Error(`Advance recovery must be between 0 and ${fmtAED(advanced)}`);
+      if (recoverC > grossC) throw new Error("The recovery cannot exceed the salary being paid");
+      const memo = `Salary payment — ${employee.name || employee.id}`;
+      const lines = [s6Line(pay.id, grossC, 0, memo, { employee_id: employee.id })];
+      if (recoverC > 0) lines.push(s6Line(adv.id, 0, recoverC, `Advance recovered — ${employee.name || ""}`, { employee_id: employee.id }));
+      if (grossC - recoverC > 0) lines.push(s6Line(bank.id, 0, grossC - recoverC, memo, { employee_id: employee.id }));
+      return s6Txn({ date, description: memo, ref: `PV-${Date.now().toString(36).toUpperCase()}`, tags: "salary-payment", lines, extra: { txnType: "PV", counterparty: employee.name || "" } });
+    };
+
+    // ── 6.3 UAE end-of-service gratuity (Federal Decree-Law 33/2021, Art. 51) ──
+    // 21 days' basic wage per year for the first five years, 30 days per year
+    // after, pro rata for part years; daily wage = basic ÷ 30; capped at two
+    // years' wage. The PROVISION accrues from day one (the right to be paid
+    // only vests after a year of service — shown, not applied, to the liability).
+    const yearsOfService = (joinDate, asOf) => {
+      if (!joinDate || !asOf || asOf < joinDate) return 0;
+      const ms = new Date(asOf + "T12:00:00") - new Date(joinDate + "T12:00:00");
+      return ms / (365.25 * 86400000);
+    };
+    const computeGratuity = ({ basicMonthlyC, joinDate, asOf }) => {
+      const years = yearsOfService(joinDate, asOf);
+      const daily = (basicMonthlyC || 0) / 30;
+      const days = Math.min(years, 5) * 21 + Math.max(0, years - 5) * 30;
+      return { years, days, amountC: Math.round(Math.min(days * daily, 24 * (basicMonthlyC || 0))), vested: years >= 1 };
+    };
+    const computeEosbProvision = ({ accounts, employees, txns, asOf }) => {
+      const prov = acctByCode(accounts, "2250");
+      return (employees || []).filter(e => (e.base_salary || 0) > 0 && e.join_date && !e.archived).map(e => {
+        const end = e.leave_date && e.leave_date < asOf ? e.leave_date : asOf;
+        const g = computeGratuity({ basicMonthlyC: e.base_salary, joinDate: e.join_date, asOf: end });
+        const held = prov ? employeeBalance(liveTxns(txns).filter(t => (t.date || "") <= asOf), prov.id, e.id) : 0;
+        return { employee: e, ...g, held, adjustment: g.amountC - held };
+      });
+    };
+    const buildEosbTxn = ({ accounts, rows, asOf }) => {
+      const exp = acctByCode(accounts, "5302"), prov = acctByCode(accounts, "2250");
+      if (!exp || !prov) throw new Error("End-of-service accounts (5302 / 2250) not found");
+      const lines = [];
+      rows.filter(r => r.adjustment !== 0).forEach(r => {
+        const memo = `End-of-service provision to ${asOf} — ${r.employee.name || r.employee.id}`;
+        if (r.adjustment > 0) { lines.push(s6Line(exp.id, r.adjustment, 0, memo, { employee_id: r.employee.id })); lines.push(s6Line(prov.id, 0, r.adjustment, memo, { employee_id: r.employee.id })); }
+        else { lines.push(s6Line(prov.id, -r.adjustment, 0, memo, { employee_id: r.employee.id })); lines.push(s6Line(exp.id, 0, -r.adjustment, memo, { employee_id: r.employee.id })); }
+      });
+      return s6Txn({ date: asOf, description: `End-of-service provision — to ${asOf}`, ref: `JV-${Date.now().toString(36).toUpperCase()}`, tags: "eosb-provision", lines });
+    };
+
+    // ── 6.4 Year-end close — revenue and expenses to 3002 Retained Earnings ──
+    // The closing entry (tag "year-end-close") is EXCLUDED from every period
+    // P&L figure (isClosingTxn) — otherwise the closed year would report zero
+    // profit — but INCLUDED in balances, so the Balance Sheet moves the year's
+    // profit from "profit to date" into Retained Earnings and still balances.
+    const isClosingTxn = t => txnTagList(t).includes("year-end-close");
+    const withoutClosing = txns => (txns || []).filter(t => !isClosingTxn(t));
+    const buildYearEndCloseTxn = ({ accounts, txns, year }) => {
+      const re = acctByCode(accounts, "3002");
+      if (!re) throw new Error("Retained Earnings account (3002) not found");
+      const tag = `close-${year}`;
+      if (liveTxns(txns).some(t => txnTagList(t).includes(tag))) throw new Error(`${year} is already closed`);
+      const inYear = liveTxns(txns).filter(t => !isClosingTxn(t) && String(t.date || "").slice(0, 4) === String(year));
+      const L = buildLedger(inYear, accounts);
+      const lines = [];
+      let profit = 0;
+      (accounts || []).filter(a => a.type === "Revenue" || a.type === "Expense").forEach(a => {
+        const bal = accountBalance(a, L);
+        if (!bal) return;
+        const memo = `Close ${year} — ${a.code} ${a.name}`;
+        if (a.type === "Revenue") { profit += bal; lines.push(bal > 0 ? s6Line(a.id, bal, 0, memo) : s6Line(a.id, 0, -bal, memo)); }
+        else { profit -= bal; lines.push(bal > 0 ? s6Line(a.id, 0, bal, memo) : s6Line(a.id, -bal, 0, memo)); }
+      });
+      if (!lines.length) throw new Error(`No revenue or expense in ${year} to close`);
+      lines.push(profit >= 0 ? s6Line(re.id, 0, profit, `Profit for ${year}`) : s6Line(re.id, -profit, 0, `Loss for ${year}`));
+      return { txn: s6Txn({ date: `${year}-12-31`, description: `Year-end close ${year} — profit to Retained Earnings`, ref: `JV-${Date.now().toString(36).toUpperCase()}`, tags: `year-end-close ${tag}`, lines }), profit };
+    };
+
+    // ── 6.6 Foreign currency (AED is the functional currency) ──
+    // The ledger stays in AED. A foreign receipt / payment records the original
+    // currency, amount and rate on the entry (fx_*), and posts the AED value.
+    const FX_CURRENCIES = ["AED", "USD", "EUR", "GBP", "SAR", "INR", "PKR", "CNY", "RUB", "CHF", "CAD", "AUD"];
+    const fxToAed = (amount, rate) => {
+      const a = parseFloat(String(amount ?? "").replace(/,/g, "")), r = parseFloat(rate);
+      return isFinite(a) && isFinite(r) && r > 0 ? Math.round(a * r * 100) / 100 : NaN;
+    };
+    const fxLabel = t => t && t.fx_currency && t.fx_currency !== "AED" ? `${t.fx_currency} ${Number(t.fx_amount || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} @ ${t.fx_rate}` : "";
+
+    // ── RECONCILED ENTRIES ────────────────────────────
+    // A bank entry ticked off against a statement (Banking › Reconcile) carries
+    // reconciled_at / reconciliation_id. Changing what it moved (amount,
+    // accounts, date, void) would silently break that reconciliation, so those
+    // changes are refused until the reconciliation is undone. Descriptive edits
+    // (memo, counterparty, deal link) stay allowed, and a reversal dated today is
+    // the normal way to correct it.
+    const isTxnReconciled = (t) => !!(t && t.reconciled_at);
+    const reconKey = t => JSON.stringify({ date: t.date || "", isVoid: !!t.isVoid,
+      lines: (t.lines || []).map(l => [l.accountId, l.debit || 0, l.credit || 0]) });
+    const assertNotReconciled = ({ prev = null, next = null }) => {
+      if (!isTxnReconciled(prev)) return;
+      const msg = `${prev.ref || "This entry"} is reconciled against a bank statement (to ${fmtDate(prev.statement_to || "")}). ` +
+        "Undo that reconciliation in Banking › Reconcile first, or correct it with a reversal.";
+      if (!next) throw new Error(msg);                                   // delete
+      const merged = { ...prev, ...next };
+      if (reconKey(merged) !== reconKey(prev)) throw new Error(msg);
+    };
+
+    // ── CHART OF ACCOUNTS GUARDS ──────────────────────
+    // The posting engine finds these accounts BY CODE (byCode("2210"), the
+    // revenue map 4000/4010/4020, …). Renumbering one silently breaks posting.
+    const ENGINE_ACCOUNT_CODES = ["1001", "1002", "2105", "2210", "2230", "3000", "4000", "4010", "4020", "5030", "5040", "5500", "5510"];
+    /** accountId → number of ledger lines (including void txns) that reference it. */
+    const accountUsage = (txns) => {
+      const m = new Map();
+      (txns || []).forEach(t => (t.lines || []).forEach(l => { if (l && l.accountId) m.set(l.accountId, (m.get(l.accountId) || 0) + 1); }));
+      return m;
+    };
+    /**
+     * Validate saving `draft` over `original` (null for a new account).
+     * Returns an error string, or "" when the save is allowed.
+     */
+    const validateAccountSave = ({ draft, original, accounts, usage }) => {
+      const code = String((draft && draft.code) || "").trim();
+      if (!code || !String((draft && draft.name) || "").trim()) return "Code and name required";
+      if (!/^[0-9A-Za-z-]+$/.test(code)) return "Account code may contain only letters, digits and '-'";
+      const clash = (accounts || []).find(a => a.code === code && (!original || a.id !== original.id));
+      if (clash) return `Code ${code} is already used by "${clash.name}"`;
+      if (original) {
+        const used = (usage && usage.get(original.id)) || 0;
+        if (used > 0 && code !== original.code) return `Code cannot change — ${used} ledger line(s) post to this account. Create a new account instead.`;
+        if (used > 0 && draft.type !== original.type) return `Type cannot change — ${used} ledger line(s) post to this account, and changing it would move them between the P&L and the Balance Sheet.`;
+        if (code !== original.code && ENGINE_ACCOUNT_CODES.includes(original.code)) return `Code ${original.code} is a system account the posting engine looks up by number — it cannot be renumbered.`;
+      }
+      return "";
+    };
+    /** Error string when `account` may not be deleted, else "". */
+    const validateAccountDelete = ({ account, usage }) => {
+      const used = (usage && usage.get(account.id)) || 0;
+      if (used > 0) return `Cannot delete: ${used} ledger line(s) post to this account (including void or offsetting entries).`;
+      if (ENGINE_ACCOUNT_CODES.includes(account.code)) return `Cannot delete: ${account.code} is a system account the posting engine needs.`;
+      return "";
+    };
+
+    // ── PERIOD LOCK ───────────────────────────────────
+    // settings.lockedThrough (YYYY-MM-DD) closes every date on or before it.
+    // Inside a closed period nothing may be posted, edited or deleted; the only
+    // way to correct a closed month is a reversal dated in an open period.
+    // Enforced at the Firestore helper (firebase.js → window.__periodLockGuard)
+    // so every module is covered, not just the pages that remember to check.
+    const normalizeLockDate = v => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : "");
+    const periodLockDate = settings => normalizeLockDate(settings && settings.lockedThrough);
+    const isDateLocked = (date, settings) => {
+      const lock = periodLockDate(settings);
+      return !!lock && !!date && String(date) <= lock;
+    };
+    const isTxnLocked = (txn, settings) => !!txn && isDateLocked(txn.date, settings);
+    const periodLockMessage = (date, settings) =>
+      `Period closed through ${fmtDate(periodLockDate(settings))} — this entry is dated ${fmtDate(date)}. ` +
+      `Post it in an open period, or correct it with a reversal dated after the lock. An admin can reopen the period in Settings.`;
+    /**
+     * Throws when a write would touch a closed period.
+     *   prev — the stored txn being replaced/deleted (null for a new post)
+     *   next — the txn being written (null for a delete); a partial patch
+     *          without `date` keeps prev's date, as a merge write would.
+     */
+    const assertPeriodOpen = ({ prev = null, next = null, settings }) => {
+      if (!periodLockDate(settings)) return;
+      if (prev && isDateLocked(prev.date, settings)) throw new Error(periodLockMessage(prev.date, settings));
+      if (next) {
+        const date = next.date !== undefined ? next.date : prev && prev.date;
+        if (isDateLocked(date, settings)) throw new Error(periodLockMessage(date, settings));
+      }
+    };
     // ── COMMISSION ↔ INVOICE LINKING ──────────────────
     // Commission (excl VAT) of one invoice line, in cents. Invoice line amounts
     // are major AED units (commission = dealValue × pct%); deals store cents.
@@ -471,7 +1033,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         const dv = parseFloat(String(li.dealValue ?? "").replace(/,/g, "")) || 0;
         const pct = parseFloat(li.commissionPct ?? li.commission_pct) || 0;
         amt = dv > 0 && pct > 0 ? dv * pct / 100 : 0;
-        if (li.vatInclusive) amt = parseFloat((amt / 1.05).toFixed(2));
+        if (li.vatInclusive && !li.noVat) amt = parseFloat((amt / 1.05).toFixed(2));
       }
       return Math.round((amt || 0) * 100);
     };
@@ -512,6 +1074,9 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       }
       return Math.round(net * 0.05);
     };
+    // The VAT rate a Sale Receipt for this deal should use: 0 when the deal is
+    // not VAT-applicable, else the standard 5%. (No deal → 5%, the old default.)
+    const dealReceiptVatRate = (deal) => (deal && !deal.vat_applicable ? 0 : 5);
     // Total cash the developer pays for a deal's commission (net + VAT).
     const dealGrossCents = (deal) => (deal ? (deal.expected_commission_net || 0) + dealVatCents(deal) : 0);
 
@@ -564,7 +1129,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       const agg = {};
       const bucket = (cid) => (agg[cid] || (agg[cid] = { issued: 0, draft: 0, issuedNums: [], draftNums: [] }));
       if (dealId) (invoices || []).forEach(inv => {
-        if ((inv.status || "draft") === "void") return;
+        if (invoiceIsCancelled(inv)) return;
         const isIssued = (inv.status || "draft") === "issued";
         (inv.lineItems || []).forEach(li => {
           if (li.dealId !== dealId) return;
@@ -618,8 +1183,13 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       };
       const cfAcctId = (accounts || []).find(x => x.code === CLIENT_FUNDS_CODE)?.id;
       let collectedCents = 0; const receipts = [];
+      const reversed = reversedTxnIds(txns);
       if (dealId) (txns || []).forEach(t => {
         if (t.isVoid) return;
+        // This sum reads cash DEBITS only, so a reversal (cash on the credit side)
+        // could never subtract its original. Drop the reversed pair instead: a
+        // bounced cheque that was reversed is not money collected.
+        if (isInReversedPair(t, reversed)) return;
         const linkedToDeal = t.deal_id === dealId || (t.lines || []).some(l => l.deal_id === dealId);
         if (!linkedToDeal) return;
         // A deposit is NOT a collection. Receiving one debits the bank, and the
@@ -688,6 +1258,15 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     //   renewed_from_deal_id / renewed_to_deal_id — the renewal chain
     const RENEWAL_WINDOW_DAYS = 90;
     const isoAddDays = (iso, n) => { const dt = new Date(iso + "T12:00:00"); dt.setDate(dt.getDate() + n); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`; };
+    // Same day n years away, clamped: 2024-02-29 − 1 year → 2023-02-28 (a plain
+    // string swap produced the impossible 2023-02-29). Blank in → blank out.
+    const shiftIsoYears = (iso, n) => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+      if (!m) return iso || "";
+      const y = Number(m[1]) + n, mo = Number(m[2]);
+      const dim = new Date(y, mo, 0).getDate();
+      return `${y}-${m[2]}-${String(Math.min(Number(m[3]), dim)).padStart(2, "0")}`;
+    };
     const isoAddYears = (iso, n) => { const dt = new Date(iso + "T12:00:00"); dt.setFullYear(dt.getFullYear() + n); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`; };
     const isoDaysBetween = (fromIso, toIso) => Math.round((new Date(toIso + "T12:00:00").getTime() - new Date(fromIso + "T12:00:00").getTime()) / 86400000);
     // Standard UAE tenancy term: start + 1 year − 1 day (01 Jan → 31 Dec).
@@ -1698,6 +2277,31 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         return txn;
       };
 
+      // RECEIPT AGAINST AN ACCRUAL INVOICE — DR Bank / CR Commission Receivable.
+      // Revenue and output VAT were booked when the invoice was issued, so this
+      // entry only turns the receivable into cash. Booking them again here (the
+      // cash-basis Sale Receipt) would double revenue and VAT.
+      const postInvoiceReceipt = ({ date, deal, gross, bankCode = "1002", invoiceId = "", invoiceNo = "", commit = true }) => {
+        if (!invoiceId) throw new Error("invoiceId is required — this receipt clears an invoice's receivable");
+        const bankA = byCode(bankCode) || accounts.find(a => a.isBank) || byCode("1001");
+        const arA = byCode(AR_ACCOUNT_CODE);
+        if (!bankA) throw new Error(`Bank account not found for code: ${bankCode}`);
+        if (!arA) throw new Error(`Commission Receivable account (${AR_ACCOUNT_CODE}) not found`);
+        const grossC = toCents(gross);
+        if (grossC <= 0) throw new Error("Amount must be positive");
+        const dealId = deal && deal.id ? deal.id : undefined;
+        const lines = [
+          makeLine({ accountId: bankA.id, debit: grossC, memo: `Receipt — Inv #${invoiceNo}`, deal_id: dealId, broker_id: deal?.broker_id, developer_id: deal?.developer }),
+          makeLine({ accountId: arA.id, credit: grossC, memo: `Clears receivable — Inv #${invoiceNo}`, deal_id: dealId, broker_id: deal?.broker_id, developer_id: deal?.developer }),
+        ];
+        validateBalanced(lines);
+        const txn = { id: uid(), date, description: `Receipt against Inv #${invoiceNo}${deal?.property_name ? `: ${deal.property_name}` : ""}`,
+          ref: `SR-${Date.now().toString(36).toUpperCase()}`, counterparty: deal?.client_name || "", tags: "sale-receipt ar-receipt", txnType: "SR",
+          isVoid: false, lines, createdAt: new Date().toISOString(), ...(dealId ? { deal_id: dealId } : {}), invoice_id: invoiceId, invoice_no: invoiceNo || "" };
+        if (commit) saveTxn(txn);
+        return txn;
+      };
+
       // ── CLIENT FUNDS (2230) — money that is not ours ──────────────
       // Model documented in the CLIENT FUNDS block near the top of this file.
       // Funds are commingled in the company's own bank account, so all three
@@ -1902,7 +2506,15 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       // ACCRUAL SETTLEMENT — Pay off a previously accrued expense.
       // DR Accrued Expenses Payable (net) / DR Input VAT / CR Bank (gross).
       // The expense is NOT touched again (it was recognised at accrual time).
-      const postAccrualSettlement = ({ date, memo, gross, vatRate = 0, paidFromCode = "1002", counterparty = "", plannedExpenseId = "", commit = true }) => {
+      //
+      // accrualTxnId names the accrual being cleared (stamped as accrual_txn_id so
+      // accrualStatus can tell recurring cycles apart). When it is given, the 2210
+      // debit is LOCKED to what was accrued, and any gap between the accrued amount
+      // and what is actually paid (net of VAT) is a true-up to the expense account:
+      // DR expense if we paid more, CR expense if we paid less. Without this a
+      // payment that differed from the accrual left a residue in 2210 for good
+      // (e.g. −47.62 after settling a VAT-inclusive accrual at 0% VAT).
+      const postAccrualSettlement = ({ date, memo, gross, vatRate = 0, paidFromCode = "1002", counterparty = "", plannedExpenseId = "", accrualTxnId = "", expenseCode = "", commit = true }) => {
         const payableA = byCode("2210") || accounts.find(a => /accrued/i.test(a.name || "") && a.type === "Liability");
         const bankA = byCode(paidFromCode) || accounts.find(a => a.isBank) || byCode("1001");
         const roundingA = byCode("2105") || byCode("5605");
@@ -1913,7 +2525,30 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         if (grossC <= 0) throw new Error("Payment amount must be positive");
         const { netC, vatC, roundingAdjustment } = computeVATSplit(grossC, vatRate);
 
-        const lines = [makeLine({ accountId: payableA.id, debit: netC, memo })];
+        let payableDebit = netC, trueUp = 0, trueUpA = null;
+        if (accrualTxnId) {
+          const all = txns || [];
+          const reversed = reversedTxnIds(all);
+          const accrual = all.find(t => t.id === accrualTxnId);
+          if (!accrual) throw new Error("The accrual being settled was not found");
+          if (accrual.isVoid) throw new Error("The accrual being settled is void");
+          if (reversed.has(accrualTxnId)) throw new Error("The accrual being settled has been reversed");
+          if (all.some(s => !s.isVoid && !s.reversesTxnId && s.accrual_txn_id === accrualTxnId && !reversed.has(s.id))) throw new Error("This accrual has already been settled");
+          const accrued = (accrual.lines || []).reduce((sum, l) => l.accountId === payableA.id ? sum + (l.credit || 0) - (l.debit || 0) : sum, 0);
+          if (accrued <= 0) throw new Error("The accrual carries no Accrued Expenses Payable balance to clear");
+          payableDebit = accrued;
+          trueUp = netC - accrued;
+          if (trueUp !== 0) {
+            // Default to the expense account the accrual itself debited.
+            const accExpLine = (accrual.lines || []).find(l => { const a = accounts.find(x => x.id === l.accountId); return a && a.type === "Expense" && (l.debit || 0) > 0; });
+            trueUpA = (expenseCode && byCode(expenseCode)) || (accExpLine && accounts.find(a => a.id === accExpLine.accountId)) || null;
+            if (!trueUpA) throw new Error("An expense account is needed to book the difference between the accrual and the payment");
+          }
+        }
+
+        const lines = [makeLine({ accountId: payableA.id, debit: payableDebit, memo })];
+        if (trueUp > 0) lines.push(makeLine({ accountId: trueUpA.id, debit: trueUp, memo: `Accrual true-up (paid more than accrued) — ${memo}` }));
+        if (trueUp < 0) lines.push(makeLine({ accountId: trueUpA.id, credit: -trueUp, memo: `Accrual true-up (paid less than accrued) — ${memo}` }));
         if (vatC > 0) {
           if (!inputVAT) throw new Error("Missing Input VAT account");
           lines.push(makeLine({ accountId: inputVAT.id, debit: vatC, memo: `VAT — ${memo}` }));
@@ -1926,11 +2561,11 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         lines.push(makeLine({ accountId: bankA.id, credit: grossC, memo }));
 
         const ref = `PV-${Date.now().toString(36).toUpperCase()}`;
-        const txn = { id: uid(), date, description: `Accrual settled: ${memo}`, ref, counterparty, tags: "accrual-settlement", txnType: "PV", isVoid: false, lines, createdAt: new Date().toISOString(), planned_expense_id: plannedExpenseId };
+        const txn = { id: uid(), date, description: `Accrual settled: ${memo}`, ref, counterparty, tags: "accrual-settlement", txnType: "PV", isVoid: false, lines, createdAt: new Date().toISOString(), planned_expense_id: plannedExpenseId, ...(accrualTxnId ? { accrual_txn_id: accrualTxnId } : {}), ...(trueUp ? { accrual_true_up: trueUp } : {}) };
         validateBalanced(lines);
         if (commit) {
           saveTxn(txn);
-          if (typeof logAudit === "function") logAudit("postAccrualSettlement", { txId: txn.id, net: netC, vat: vatC }, "system", "system").catch(() => {});
+          if (typeof logAudit === "function") logAudit("postAccrualSettlement", { txId: txn.id, net: netC, vat: vatC, accrualTxnId, trueUp }, "system", "system").catch(() => {});
         }
         return txn;
       };
@@ -1941,7 +2576,10 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       // The broker and manager legs are recorded as separate transactions by the
       // UI (two real bank transfers), so each can carry its own memo/reference —
       // hence refSuffix, which keeps the ref unique across the pair.
-      const postBrokerPayment = ({ date, deal, brokerAmount = 0, managerAmount = 0, manager_id, manager_name, paidFromCode = "1002", memo = "", refSuffix = "", commit = true }) => {
+      // settleAccrualTxnId: this payment pays a broker ACCRUAL (postBrokerAccrual)
+      // — debit Accrued Expenses (2210) by what was accrued, not the expense
+      // again, and true any difference up/down against the expense account.
+      const postBrokerPayment = ({ date, deal, brokerAmount = 0, managerAmount = 0, manager_id, manager_name, paidFromCode = "1002", memo = "", refSuffix = "", settleAccrualTxnId = "", commit = true }) => {
         if (!deal || !deal.id) throw new Error("deal_id is required for broker payment tracking");
         const bankA = byCode(paidFromCode) || accounts.find(a => a.isBank);
         if (!bankA) throw new Error("Missing bank account");
@@ -1958,12 +2596,27 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
         const bankMemo = memo || (amtC > 0 ? "Broker commission" : "Sales manager override");
         const lines = [];
-        if (amtC > 0) lines.push(
-          makeLine({ accountId: expenseA.id, debit: amtC, memo: memo || "Broker commission", deal_id: deal?.id, broker_id: deal?.broker_id, developer_id: deal?.developer })
-        );
-        if (mgrC > 0) lines.push(
-          makeLine({ accountId: mgrA.id, debit: mgrC, memo: memo || `Sales manager override${manager_name ? " — " + manager_name : ""}`, deal_id: deal?.id, manager_id, developer_id: deal?.developer })
-        );
+        let accrued = 0;
+        if (settleAccrualTxnId) {
+          const payable = byCode("2210");
+          const acc = (txns || []).find(t => t.id === settleAccrualTxnId);
+          if (!payable || !acc) throw new Error("The broker accrual being settled was not found");
+          if ((amtC > 0) === (mgrC > 0)) throw new Error("Settle one leg (broker or manager) per payment");
+          accrued = (acc.lines || []).reduce((s, l) => l.accountId === payable.id ? s + (l.credit || 0) - (l.debit || 0) : s, 0);
+          if (accrued <= 0) throw new Error("The accrual carries nothing to settle");
+          const legAcct = amtC > 0 ? expenseA : mgrA, legAmt = amtC + mgrC, trueUp = legAmt - accrued;
+          const tag = amtC > 0 ? { broker_id: deal?.broker_id } : { manager_id };
+          lines.push(makeLine({ accountId: payable.id, debit: accrued, memo: `Settles accrued ${amtC > 0 ? "broker commission" : "manager override"}`, deal_id: deal?.id, developer_id: deal?.developer, ...tag }));
+          if (trueUp > 0) lines.push(makeLine({ accountId: legAcct.id, debit: trueUp, memo: "Paid more than accrued", deal_id: deal?.id, developer_id: deal?.developer, ...tag }));
+          if (trueUp < 0) lines.push(makeLine({ accountId: legAcct.id, credit: -trueUp, memo: "Paid less than accrued", deal_id: deal?.id, developer_id: deal?.developer, ...tag }));
+        } else {
+          if (amtC > 0) lines.push(
+            makeLine({ accountId: expenseA.id, debit: amtC, memo: memo || "Broker commission", deal_id: deal?.id, broker_id: deal?.broker_id, developer_id: deal?.developer })
+          );
+          if (mgrC > 0) lines.push(
+            makeLine({ accountId: mgrA.id, debit: mgrC, memo: memo || `Sales manager override${manager_name ? " — " + manager_name : ""}`, deal_id: deal?.id, manager_id, developer_id: deal?.developer })
+          );
+        }
         lines.push(
           makeLine({ accountId: bankA.id, credit: amtC + mgrC, memo: bankMemo, deal_id: deal?.id, broker_id: amtC > 0 ? deal?.broker_id : undefined, manager_id: amtC > 0 ? undefined : manager_id, developer_id: deal?.developer })
         );
@@ -1973,11 +2626,39 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
           : amtC > 0
             ? `Broker Payment: ${deal?.broker_name || memo}`
             : `Manager Override: ${manager_name || ""}${deal?.broker_name ? " — " + deal.broker_name : ""}`.trim();
-        const txn = { id: uid(), date, description: desc, ref, counterparty: (amtC > 0 ? deal?.broker_name : manager_name) || "", tags: "broker-payment", txnType: "BP", isVoid: false, lines, createdAt: new Date().toISOString(), deal_id: deal?.id };
+        const txn = { id: uid(), date, description: desc, ref, counterparty: (amtC > 0 ? deal?.broker_name : manager_name) || "", tags: settleAccrualTxnId ? "broker-payment accrual-settlement" : "broker-payment", txnType: "BP", isVoid: false, lines, createdAt: new Date().toISOString(), deal_id: deal?.id, ...(settleAccrualTxnId ? { accrual_txn_id: settleAccrualTxnId } : {}) };
         validateBalanced(lines);
         if (commit) saveTxn(txn);
         return txn;
       };
+
+      // BROKER ACCRUAL — the broker / manager has earned the commission but is
+      // paid later (or was paid outside the books). DR 5500 / 5040 (deal-linked)
+      // / CR 2210 Accrued Expenses; one entry per leg so each settles on its own.
+      // Replaces "record on the deal only", which left the cost out of the P&L.
+      const postBrokerAccrual = ({ date, deal, leg = "broker", amount, manager_id, manager_name = "", commit = true }) => {
+        if (!deal || !deal.id) throw new Error("deal is required");
+        const payable = byCode("2210");
+        const expA = leg === "broker" ? (byCode("5500") || byCode("5000")) : (byCode("5040") || byCode("5030"));
+        if (!payable || !expA) throw new Error("Accrued Expenses (2210) or the commission expense account is missing");
+        const amtC = toCents(amount);
+        if (amtC <= 0) throw new Error("Amount must be positive");
+        const tag = leg === "broker" ? { broker_id: deal.broker_id } : { manager_id };
+        const who = leg === "broker" ? (deal.broker_name || "broker") : (manager_name || "manager");
+        const memo = `${leg === "broker" ? "Broker commission" : "Manager override"} accrued — ${who} · ${deal.property_name || ""}`.trim();
+        const lines = [
+          makeLine({ accountId: expA.id, debit: amtC, memo, deal_id: deal.id, developer_id: deal.developer, ...tag }),
+          makeLine({ accountId: payable.id, credit: amtC, memo, deal_id: deal.id, developer_id: deal.developer, ...tag }),
+        ];
+        validateBalanced(lines);
+        const txn = { id: uid(), date, description: memo, ref: `AC-${Date.now().toString(36).toUpperCase()}`, counterparty: who, tags: "accrual broker-accrual",
+          txnType: "AC", isVoid: false, lines, createdAt: new Date().toISOString(), deal_id: deal.id, accrual_leg: leg };
+        if (commit) saveTxn(txn);
+        return txn;
+      };
+      /** The unpaid broker (or manager) accrual of a deal, or null. */
+      const openBrokerAccrual = (dealId, leg = "broker") => (txns || []).find(t =>
+        !t.isVoid && t.deal_id === dealId && t.accrual_leg === leg && txnTagList(t).includes("broker-accrual") && accrualStatus(t, txns) === "unpaid") || null;
 
       // BANK TRANSFER
       const postBankTransfer = ({ date, fromCode, toCode, amount, memo = "Bank transfer", commit = true }) => {
@@ -2004,9 +2685,15 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         if (original.isVoid) throw new Error("Already voided");
         const lines = (original.lines || []).map(l => ({
           id: uid(), accountId: l.accountId, debit: l.credit || 0, credit: l.debit || 0,
-          memo: `Reversal: ${original.ref || txnId}`, deal_id: l.deal_id, broker_id: l.broker_id, developer_id: l.developer_id
+          memo: `Reversal: ${original.ref || txnId}`, deal_id: l.deal_id, broker_id: l.broker_id, developer_id: l.developer_id,
+          ...(l.manager_id !== undefined ? { manager_id: l.manager_id } : {})
         }));
-        const txn = { id: uid(), date: reverseDate, description: `${reason}: ${original.description}`, ref: `REV-${original.ref || txnId}`, counterparty: original.counterparty || "", tags: `${original.tags || ""} reversal`.trim(), txnType: "JV", isVoid: false, lines, createdAt: new Date().toISOString(), reversesTxnId: original.id };
+        // Carry the original's links so the contra entry lands on the same deal,
+        // client, invoice and planned expense in every per-party view.
+        const LINK_FIELDS = ["deal_id", "customer_id", "broker_id", "invoice_id", "invoice_no", "planned_expense_id", "accrual_txn_id", "purpose"];
+        const links = {};
+        LINK_FIELDS.forEach(k => { if (original[k] !== undefined && original[k] !== "") links[k] = original[k]; });
+        const txn = { id: uid(), date: reverseDate, description: `${reason}: ${original.description}`, ref: `REV-${original.ref || txnId}`, counterparty: original.counterparty || "", tags: `${original.tags || ""} reversal`.trim(), txnType: "JV", isVoid: false, lines, createdAt: new Date().toISOString(), ...links, reversesTxnId: original.id };
         validateBalanced(lines);
         if (commit) saveTxn(txn);
         return txn;
@@ -2097,7 +2784,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         return { passed: issues.length === 0, issues };
       };
 
-      return { post, postSaleReceipt, postPayment, postAccrual, postAccrualSettlement, postBrokerPayment, postBankTransfer, postClientFunds, postClientFundsEarned, postClientFundsPayout, clientFundsHeldCents, reverseTransaction, getVATReport, validateDealRevenueReceipt };
+      return { post, postSaleReceipt, postInvoiceReceipt, postPayment, postAccrual, postAccrualSettlement, postBrokerPayment, postBrokerAccrual, openBrokerAccrual, postBankTransfer, postClientFunds, postClientFundsEarned, postClientFundsPayout, clientFundsHeldCents, reverseTransaction, getVATReport, validateDealRevenueReceipt };
     }
 
     // ── STYLE HELPERS ─────────────────────────────────
@@ -2153,7 +2840,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       };
       return <input style={{ ...C.input, ...style, opacity: disabled ? .6 : 1 }} type="text" inputMode="decimal" value={text} onChange={handle} placeholder={placeholder} disabled={disabled} />;
     }
-    function Sel({ value, onChange, children }) { return <select style={C.select} value={value || ""} onChange={onChange}>{children}</select>; }
+    function Sel({ value, onChange, children, disabled = false }) { return <select style={{ ...C.select, ...(disabled ? { opacity: 0.6, cursor: "not-allowed" } : {}) }} value={value || ""} onChange={onChange} disabled={disabled}>{children}</select>; }
     function PageHeader({ title, sub, children }) { return <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22, flexWrap: "wrap", gap: 10 }}><div><div style={{ fontSize: 21, fontWeight: 700, color: NAVY, letterSpacing: "-0.02em" }}>{title}</div>{sub && <div style={{ fontSize: 13, color: "#667085", marginTop: 3 }}>{sub}</div>}</div>{children && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>{children}</div>}</div>; }
     function SortTh({ label, sortKey, activeKey, sortDir, onToggle, align = "left" }) {
       const active = sortKey === activeKey;
@@ -2545,7 +3232,154 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     }
 
     // ── POSTING PREVIEW ────────────────────────────────
+    // ── FOREIGN-CURRENCY AMOUNT FIELD (Stage 6.6) ─────
+    // AED: a plain AED input. Another currency: amount + rate (AED per unit),
+    // and the AED value it posts. onChange({ aed, fx }) — `aed` is the string the
+    // form already used, `fx` = { currency, amount, rate } (null for AED).
+    function FxAmountField({ label = "Gross Amount", aed, fx, onChange, placeholder = "" }) {
+      const cur = (fx && fx.currency) || "AED";
+      const set = (next) => {
+        const f = { currency: cur, amount: (fx && fx.amount) || "", rate: (fx && fx.rate) || "", ...next };
+        if (f.currency === "AED") return onChange({ aed: next.aedValue !== undefined ? next.aedValue : aed, fx: null });
+        const v = fxToAed(f.amount, f.rate);
+        onChange({ aed: isFinite(v) ? String(v) : "", fx: f });
+      };
+      return <div>
+        <label style={C.label}>{label} {cur === "AED" ? "(AED)" : `(${cur} → AED)`}</label>
+        <div style={{ display: "flex", gap: 6 }}>
+          <select style={{ ...C.select, width: 86, flex: "none" }} value={cur} onChange={e => set({ currency: e.target.value })}>
+            {FX_CURRENCIES.map(x => <option key={x} value={x}>{x}</option>)}
+          </select>
+          {cur === "AED"
+            ? <input style={C.input} type="number" value={aed || ""} placeholder={placeholder} onChange={e => set({ currency: "AED", aedValue: e.target.value })} />
+            : <>
+                <input style={C.input} type="number" value={(fx && fx.amount) || ""} placeholder={`${cur} amount`} onChange={e => set({ amount: e.target.value })} />
+                <input style={{ ...C.input, width: 110, flex: "none" }} type="number" step="any" value={(fx && fx.rate) || ""} placeholder="rate" title={`AED per 1 ${cur}`} onChange={e => set({ rate: e.target.value })} />
+              </>}
+        </div>
+        {cur !== "AED" && <div style={{ fontSize: 11, color: "#6B7280", marginTop: 3 }}>= AED {aed ? Number(aed).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"} at {(fx && fx.rate) || "?"} AED per {cur}. The ledger records AED; the {cur} amount and rate are kept on the entry.</div>}
+      </div>;
+    }
+    /** Fields stamped on an entry posted from a foreign-currency amount. */
+    const fxTxnFields = fx => fx && fx.currency && fx.currency !== "AED" ? { fx_currency: fx.currency, fx_amount: parseFloat(fx.amount) || 0, fx_rate: parseFloat(fx.rate) || 0 } : {};
+
+    // ── ATTACHMENTS (Stage 6.7) ───────────────────────
+    // Supporting documents (tax invoices, MOUs, cheque images…) on a transaction
+    // or a deal. Stored in Firestore — attachments/{id} holds the metadata and
+    // attachment_parts/{id}_p{n} the file in ≤700 KB base64 parts (the 1 MiB
+    // document cap), so no extra storage service or bucket rules are needed.
+    const ATT_MAX_BYTES = 5 * 1024 * 1024;
+    const ATT_PART = 700000;
+    /** Map parentId → number of attachments, for one parent type (one listener per page). */
+    function useAttachmentCounts(parentType) {
+      const [counts, setCounts] = useState(() => new Map());
+      useEffect(() => {
+        if (typeof db === "undefined" || !db || !db.collection) return;
+        const unsub = db.collection("attachments").where("parentType", "==", parentType).onSnapshot(snap => {
+          const m = new Map();
+          snap.docs.forEach(d => { const p = d.data().parentId; m.set(p, (m.get(p) || 0) + 1); });
+          setCounts(m);
+        }, err => console.error("attachments", err));
+        return () => unsub();
+      }, [parentType]);
+      return counts;
+    }
+    const attReadAsDataUrl = file => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(file); });
+    async function attUpload({ parentType, parentId, file, userEmail }) {
+      if (file.size > ATT_MAX_BYTES) throw new Error(`${file.name} is ${(file.size / 1048576).toFixed(1)} MB — the limit is 5 MB`);
+      const data = await attReadAsDataUrl(file);
+      const ref = db.collection("attachments").doc();
+      const parts = [];
+      for (let i = 0; i < data.length; i += ATT_PART) parts.push(data.slice(i, i + ATT_PART));
+      for (let i = 0; i < parts.length; i += 400) {           // each part is a doc; batches stay well under limits
+        const b = db.batch();
+        parts.slice(i, i + 400).forEach((chunk, j) => b.set(db.collection("attachment_parts").doc(`${ref.id}_p${i + j}`), { attachmentId: ref.id, part: i + j, data: chunk }));
+        await b.commit();
+      }
+      // Metadata last: an attachment only appears once all its parts exist.
+      await ref.set({ id: ref.id, parentType, parentId, name: file.name, mime: file.type || "application/octet-stream", size: file.size, parts: parts.length, uploadedBy: userEmail || "", uploadedAt: new Date().toISOString() });
+    }
+    async function attDownload(att) {
+      const snaps = await Promise.all(Array.from({ length: att.parts || 0 }, (_, i) => db.collection("attachment_parts").doc(`${att.id}_p${i}`).get()));
+      const data = snaps.map(x => x.exists ? x.data().data : "").join("");
+      const bin = atob(data.slice(data.indexOf(",") + 1));
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([bytes], { type: att.mime }));
+      const a = document.createElement("a"); a.href = url; a.download = att.name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+    }
+    async function attDelete(att) {
+      const b = db.batch();
+      for (let i = 0; i < (att.parts || 0); i++) b.delete(db.collection("attachment_parts").doc(`${att.id}_p${i}`));
+      b.delete(db.collection("attachments").doc(att.id));
+      await b.commit();
+    }
+    function AttachmentsModal({ parentType, parentId, title, userRole, userEmail, onClose }) {
+      const [items, setItems] = useState([]);
+      const [busy, setBusy] = useState("");
+      useEffect(() => {
+        const unsub = db.collection("attachments").where("parentId", "==", parentId).onSnapshot(
+          snap => setItems(snap.docs.map(d => d.data()).filter(a => a.parentType === parentType).sort((a, b) => String(b.uploadedAt).localeCompare(String(a.uploadedAt)))),
+          err => console.error("attachments", err));
+        return () => unsub();
+      }, [parentType, parentId]);
+      const canAdd = hasPermission(userRole, "accounting.create") || hasPermission(userRole, "sales.edit");
+      const canDel = a => isAdminSubject(userRole) || (a.uploadedBy && a.uploadedBy === userEmail);
+      const onFiles = async files => {
+        for (const f of [...(files || [])]) {
+          setBusy(f.name);
+          try { await attUpload({ parentType, parentId, file: f, userEmail }); toast(`${f.name} attached`, "success"); }
+          catch (e) { toast(e.message, "error"); }
+        }
+        setBusy("");
+      };
+      // Often opened from inside another modal (Deal Card): never let a click here
+      // bubble out and close the parent too.
+      return <div style={{ ...C.modal, zIndex: 1300 }} onClick={e => { e.stopPropagation(); onClose(); }}>
+        <div style={C.mbox(620)} onClick={e => e.stopPropagation()}>
+          <div style={C.mhdr}><span style={{ fontWeight: 700 }}>📎 Attachments — {title}</span><button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
+          <div style={C.mbdy}>
+            {canAdd && <label style={{ display: "block", border: "2px dashed #D0D5DD", borderRadius: 10, padding: 18, textAlign: "center", cursor: "pointer", marginBottom: 12, fontSize: 13, color: "#475467" }}>
+              <input type="file" multiple style={{ display: "none" }} onChange={e => onFiles(e.target.files)} />
+              {busy ? `Uploading ${busy}…` : "Choose files to attach (PDF, images… up to 5 MB each)"}
+            </label>}
+            {items.length === 0 ? <div style={{ fontSize: 13, color: "#9CA3AF", textAlign: "center", padding: 12 }}>No attachments yet.</div>
+              : <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><tbody>
+                  {items.map(a => <tr key={a.id} style={{ borderTop: "1px solid #F2F4F7" }}>
+                    <td style={{ ...C.td, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={a.name}>{a.name}</td>
+                    <td style={{ ...C.td, color: "#6B7280", fontSize: 12 }}>{(a.size / 1024).toFixed(0)} KB · {a.uploadedBy || "—"} · {fmtDate(String(a.uploadedAt || "").slice(0, 10))}</td>
+                    <td style={{ ...C.td, textAlign: "right", whiteSpace: "nowrap" }}>
+                      <button style={C.btn("secondary", true)} onClick={() => attDownload(a).catch(e => toast(e.message, "error"))}>Download</button>
+                      {canDel(a) && <button style={{ ...C.btn("secondary", true), color: "#DC2626", marginLeft: 4 }} onClick={() => { if (window.confirm(`Delete ${a.name}?`)) attDelete(a).then(() => toast("Attachment deleted", "success")).catch(e => toast(e.message, "error")); }}>Delete</button>}
+                    </td>
+                  </tr>)}
+                </tbody></table>}
+          </div>
+          <div style={C.mftr}><button style={C.btn("secondary")} onClick={onClose}>Close</button></div>
+        </div>
+      </div>;
+    }
+
+    // ── SUBMIT GUARD ──────────────────────────────────
+    // Every posting button mints a fresh txn id per click, so a double-click
+    // posted the same receipt/payment twice. `run(fn)` ignores re-entry while a
+    // previous call is still in flight. The ref blocks a second click in the same
+    // tick (before React re-renders the disabled button); `busy` drives the UI.
+    function useSubmitGuard() {
+      const inFlight = useRef(false);
+      const [busy, setBusy] = useState(false);
+      const run = useCallback(async (fn, ...args) => {
+        if (inFlight.current) return undefined;
+        inFlight.current = true; setBusy(true);
+        try { return await fn(...args); }
+        finally { inFlight.current = false; setBusy(false); }
+      }, []);
+      return [busy, run];
+    }
+
     function PostingPreview({ open, onClose, lines, accounts, onConfirm, header = {} }) {
+      const [busy, guard] = useSubmitGuard();   // hooks before the early return
       if (!open) return null;
       const tDr = lines.reduce((s, l) => s + (l.debit || 0), 0);
       const tCr = lines.reduce((s, l) => s + (l.credit || 0), 0);
@@ -2565,7 +3399,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
             </table>
             {!ok && <div style={C.err}>Journal entry is not balanced!</div>}
           </div>
-          <div style={C.mftr}><button style={C.btn("secondary")} onClick={onClose}>Cancel</button><button style={C.btn("success")} disabled={!ok} onClick={onConfirm}>✅ Confirm & Post</button></div>
+          <div style={C.mftr}><button style={C.btn("secondary")} disabled={busy} onClick={onClose}>Cancel</button><button style={C.btn("success")} disabled={!ok || busy} onClick={() => guard(onConfirm)}>{busy ? "⏳ Posting…" : "✅ Confirm & Post"}</button></div>
         </div>
       </div>;
     }
@@ -2585,6 +3419,11 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
     }
 
     // ── CENTRALIZED KPI CALCULATOR ────────────────────
+    // Commission-driven costs (broker payouts, manager overrides, incentives)
+    // only arise when revenue does, so they are not overhead a runway must cover.
+    const isVariableCommissionExpense = (a) => !!a && a.type === "Expense" &&
+      (String(a.code || "").startsWith("55") || ["5030", "5040"].includes(String(a.code || "")) || /broker|override|incentive|commission/i.test(a.name || ""));
+
     function calculateAppKpis({ accounts, txns, deals, ledger, settings }) {
       const now = new Date();
       const reportingStartDate = normalizeReportingStartDate(settings?.openingBalanceDate);
@@ -2613,8 +3452,12 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       const totalEquity      = accounts.filter(a => a.type === "Equity").reduce((s, a) => s + accountBalance(a, ledger), 0);
       const netWorth = totalAssets - totalLiabilities;
 
-      let rev = 0, exp = 0, brokerPayoutYTD = 0, operatingCashFlowMTD = 0, operatingCashFlowYTD = 0;
-      const expenseYTDByAccount = new Map();
+      // NOTE: rev / exp / brokerPayout / operatingCashFlowSinceStart run from the
+      // REPORTING START DATE (settings.openingBalanceDate), not from 1 January —
+      // they were previously misnamed year-to-date. Period figures on the Dashboard come
+      // from computePeriodKpis and follow its date filter.
+      let rev = 0, exp = 0, brokerPayoutSinceStart = 0, operatingCashFlowMTD = 0, operatingCashFlowSinceStart = 0;
+      const expenseSinceStartByAccount = new Map();
       const makeMonthKey = dateStr => (dateStr || "").slice(0, 7);
       const monthLabel   = key => {
         const [year, month] = key.split("-").map(Number);
@@ -2625,11 +3468,21 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       }).filter(key => key >= reportingStartMonthKey);
       const perfMap = new Map(last6MonthKeys.map(key => [key, { revenue: 0, expense: 0 }]));
+      // Runway base: the last 6 COMPLETE months (the current, half-finished month
+      // would drag the average down), from the reporting start onwards.
+      const last6CompleteKeys = Array.from({ length: 6 }, (_, i) => {
+        const d = new Date(currentYear, now.getMonth() - (6 - i), 1);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      }).filter(key => key >= reportingStartMonthKey);
+      const fixedMap = new Map(last6CompleteKeys.map(key => [key, 0]));
       const cashMap = new Map(last6MonthKeys.map(key => [key, { inflow: 0, outflow: 0 }]));
 
       for (let i = 0; i < txns.length; i++) {
         const t = txns[i];
         if (t.isVoid) continue;
+        // A year-end closing entry is not the year's activity (it would zero the
+        // year's revenue and expense) — see isClosingTxn.
+        if (isClosingTxn(t)) continue;
         const monthKey = makeMonthKey(t.date);
         const lines = t.lines || [];
         const inReportingPeriod = (t.date || "") >= reportingStartDate;
@@ -2646,27 +3499,28 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
           if (a.type === "Expense") {
             const amount = (l.debit || 0) - (l.credit || 0);
             txnExpense += amount;
+            if (fixedMap.has(monthKey) && !isVariableCommissionExpense(a)) fixedMap.set(monthKey, fixedMap.get(monthKey) + amount);
             if (inReportingPeriod) {
               exp += amount;
-              expenseYTDByAccount.set(a.id, (expenseYTDByAccount.get(a.id) || 0) + amount);
-              if ((a.name || "").toLowerCase().includes("broker") || (a.code || "").startsWith("55")) brokerPayoutYTD += amount;
+              expenseSinceStartByAccount.set(a.id, (expenseSinceStartByAccount.get(a.id) || 0) + amount);
+              if ((a.name || "").toLowerCase().includes("broker") || (a.code || "").startsWith("55")) brokerPayoutSinceStart += amount;
             }
           }
         });
         if (monthPerf) { monthPerf.revenue += txnRevenue; monthPerf.expense += txnExpense; }
-        const financingTagText = (t.tags || "").toLowerCase();
-        const bankLines            = lines.filter(l => { const a = accountById.get(l.accountId); return a && (a.isBank || a.code === "1001"); });
-        const nonBankOperationalLines = lines.filter(l => { const a = accountById.get(l.accountId); return a && !(a.isBank || a.code === "1001"); });
-        const isInternalTransfer   = bankLines.length > 0 && nonBankOperationalLines.length === 0;
+        // Cash categories come from cashFlowCategory — the same rules as the Cash
+        // Flow statement. Client money (2230) and transfers between our own
+        // accounts are not the company's cash flow, so they stay out of the
+        // monthly in/out series; only "operating" feeds operating cash flow.
+        const cat = cashFlowCategory(t, accountById);
         const cashBucket = cashMap.get(monthKey);
-        if (cashBucket && !isInternalTransfer) {
-          bankLines.forEach(l => { cashBucket.inflow += (l.debit || 0); cashBucket.outflow += (l.credit || 0); });
+        if (cashBucket && cat && cat !== "transfer" && cat !== "clientFunds") {
+          lines.forEach(l => { if (isMoneyAccount(accountById.get(l.accountId))) { cashBucket.inflow += (l.debit || 0); cashBucket.outflow += (l.credit || 0); } });
         }
-        const isOperatingCashTxn = bankLines.length > 0 && !isInternalTransfer && !["CI", "OD", "BT"].includes(t.txnType) && !financingTagText.includes("opening-balance");
-        if (isOperatingCashTxn) {
-          const operatingNet = bankLines.reduce((sum, l) => sum + (l.debit || 0) - (l.credit || 0), 0);
+        if (cat === "operating") {
+          const operatingNet = txnCashNet(t, accountById);
           if (monthKey === currentMonthKey) operatingCashFlowMTD += operatingNet;
-          if (inReportingPeriod) operatingCashFlowYTD += operatingNet;
+          if (inReportingPeriod) operatingCashFlowSinceStart += operatingNet;
         }
       }
 
@@ -2679,7 +3533,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         return { key, label: monthLabel(key), inflow: item.inflow, outflow: item.outflow, net: item.inflow - item.outflow };
       });
       const grossCommissionCollected      = rev;
-      const brokerShare                   = brokerPayoutYTD;
+      const brokerShare                   = brokerPayoutSinceStart;
       const companyNetCommissionRetained  = grossCommissionCollected - brokerShare;
       const operatingMargin               = rev > 0 ? ((rev - exp) / rev) * 100 : 0;
       const currentMonthPerf  = monthlyPerformance.find(item => item.key === currentMonthKey) || { revenue: 0, expense: 0, net: 0 };
@@ -2687,10 +3541,13 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       const avgMonthlyExpense = monthlyPerformance.length > 0 ? monthlyPerformance.reduce((s, item) => s + item.expense, 0) / monthlyPerformance.length : 0;
       // Runway is spendable months, so it divides availableCash — not cash, which
       // would count client money as company runway.
-      const runwayMonths      = avgMonthlyExpense > 0 ? availableCash / avgMonthlyExpense : Infinity;
-      const pendingPipelineCommission = (deals || []).filter(d => d.stage !== "Commission Collected").reduce((s, d) => s + (d.expected_commission_net || 0), 0);
+      // Fixed monthly overhead = average of the complete months' expense excluding
+      // commission-driven costs. One large broker payout used to halve the runway.
+      const avgMonthlyFixedOverhead = fixedMap.size > 0 ? [...fixedMap.values()].reduce((s, v) => s + v, 0) / fixedMap.size : 0;
+      const runwayMonths      = avgMonthlyFixedOverhead > 0 ? availableCash / avgMonthlyFixedOverhead : Infinity;
+      const pendingPipelineCommission = (deals || []).filter(isOpenDeal).reduce((s, d) => s + (d.expected_commission_net || 0), 0);
       const pipelineByType = DEAL_TYPES.map(type => {
-        const group = (deals || []).filter(d => d.type === type && d.stage !== "Commission Collected");
+        const group = (deals || []).filter(d => d.type === type && isOpenDeal(d));
         return { type, count: group.length, expected: group.reduce((s, d) => s + (d.expected_commission_net || 0), 0) };
       });
       const pipelineStageValue = DEAL_STAGES.map(stage => {
@@ -2698,8 +3555,8 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         return { stage, count: group.length, expected: group.reduce((s, d) => s + (d.expected_commission_net || 0), 0) };
       }).filter(row => row.count > 0 || row.expected > 0);
       const collectedDealsCount = (deals || []).filter(d => d.stage === "Commission Collected").length;
-      const openDealsCount      = (deals || []).filter(d => d.stage !== "Commission Collected").length;
-      const topExpenseCategories = [...expenseYTDByAccount.entries()]
+      const openDealsCount      = (deals || []).filter(isOpenDeal).length;
+      const topExpenseCategories = [...expenseSinceStartByAccount.entries()]
         .map(([id, amount]) => ({ id, name: accountById.get(id)?.name || id, amount }))
         .sort((a, b) => b.amount - a.amount).slice(0, 5);
 
@@ -2712,22 +3569,22 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
           expense: currentMonthPerf.expense, net: currentMonthPerf.net,
           cashIn: currentMonthCash.inflow, cashOut: currentMonthCash.outflow, cashNet: currentMonthCash.net,
         },
-        avgMonthlyExpense, runwayMonths, operatingCashFlowMTD, operatingCashFlowYTD,
+        avgMonthlyExpense, avgMonthlyFixedOverhead, runwayMonths, operatingCashFlowMTD, operatingCashFlowSinceStart,
         pendingPipelineCommission, pipelineByType, pipelineStageValue,
-        collectedDealsCount, openDealsCount, brokerPayoutYTD, topExpenseCategories,
+        collectedDealsCount, openDealsCount, brokerPayoutSinceStart, topExpenseCategories,
         reportingStartDate,
       };
     }
 
     // ── NAV ────────────────────────────────────────────
     const NAV = [
-      { s: "OVERVIEW" }, { id: "dashboard", label: "Dashboard", icon: "🏠" }, { id: "banana2", label: "Performance", icon: "📊" },
+      { s: "OVERVIEW" }, { id: "dashboard", label: "Dashboard", icon: "🏠" }, { id: "banana2", label: "Performance", icon: "📊" }, { id: "insights", label: "Insights", icon: "💡" },
       { s: "SALES" }, { id: "deals", label: "Deals / Pipeline", icon: "🤝" }, { id: "auditDeals", label: "Auditing Deals", icon: "📋" }, { id: "receipts", label: "Sale Receipts", icon: "💰" }, { id: "invoices", label: "Invoices", icon: "🧾" }, { id: "deposits", label: "Client Deposits", icon: "🔒" }, { id: "customers", label: "Customers", icon: "👥" }, { id: "brokers", label: "Brokers", icon: "👔" }, { id: "developers", label: "Developers", icon: "🏗️" },
       // PEOPLE — admin only. `employees` is deliberately absent from PAGE_ACCESS_BRIDGE and
       // from the legacy role map above, so canAccessPage() returns true for admin on its first
       // line and falls through to false for every other role. Do not register it in either map.
       { s: "PEOPLE" }, { id: "employees", label: "Employees", icon: "🧑‍💼" },
       { s: "EXPENSES" }, { id: "payments", label: "Payments", icon: "💳" }, { id: "vendors", label: "Vendors", icon: "🏭" }, { id: "futureExpenses", label: "Future Expenses", icon: "📅" },
-      { s: "ACCOUNTING" }, { id: "banking", label: "Banking", icon: "🏦" }, { id: "journal", label: "Journal Entries", icon: "📒" }, { id: "coa", label: "Chart of Accounts", icon: "🗂" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "vat", label: "VAT / Taxes", icon: "🧾" }, { id: "budget", label: "Budget", icon: "🎯" },
+      { s: "ACCOUNTING" }, { id: "approvals", label: "Approvals", icon: "✅" }, { id: "banking", label: "Banking", icon: "🏦" }, { id: "journal", label: "Journal Entries", icon: "📒" }, { id: "coa", label: "Chart of Accounts", icon: "🗂" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "vat", label: "VAT / Taxes", icon: "🧾" }, { id: "budget", label: "Budget", icon: "🎯" },
       { s: "SYSTEM" }, { id: "users", label: "User Management", icon: "👥" }, { id: "settings", label: "Settings", icon: "⚙️" }, { id: "manual", label: "User Manual", icon: "📖" },
     ];

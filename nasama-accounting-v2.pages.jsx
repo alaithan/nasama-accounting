@@ -162,13 +162,10 @@ function computePeriodKpis(ft, accounts) {
         if ((a.name || "").toLowerCase().includes("broker") || (a.code || "").startsWith("55")) brokerPayout += amt;
       }
     }
-    const bankLines    = lines.filter(l => { const a = accountById.get(l.accountId); return a && (a.isBank || a.code === "1001"); });
-    const nonBankLines = lines.filter(l => { const a = accountById.get(l.accountId); return a && !(a.isBank || a.code === "1001"); });
-    const isTransfer   = bankLines.length > 0 && nonBankLines.length === 0;
-    const isOp         = bankLines.length > 0 && !isTransfer && !["CI", "OD", "BT"].includes(t.txnType) && !(t.tags || "").includes("opening-balance");
-    if (isOp) {
-      opCashIn  += bankLines.reduce((s, l) => s + (l.debit  || 0), 0);
-      opCashOut += bankLines.reduce((s, l) => s + (l.credit || 0), 0);
+    // Same categories as the Cash Flow statement: client deposits/refunds,
+    // capital, loans, fixed assets and transfers are not operating cash.
+    if (cashFlowCategory(t, accountById) === "operating") {
+      lines.forEach(l => { if (isMoneyAccount(accountById.get(l.accountId))) { opCashIn += (l.debit || 0); opCashOut += (l.credit || 0); } });
     }
   }
   const vat = ft.filter(t => !isVATSettlementTxn(t, accounts)).reduce((sum, t) => {
@@ -238,7 +235,7 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
       snap.docs.forEach(doc => {
         const inv = doc.data();
         const status = inv.status || "draft";
-        if (status === "void") return;
+        if (invoiceIsCancelled(inv)) return;
         (inv.lineItems || []).forEach(li => {
           if (!li.dealId) return;
           if (!map.has(li.dealId) || status === "issued") map.set(li.dealId, status);
@@ -254,26 +251,26 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     // availableCash, not cash: client funds held in our own bank account are not
     // runway — they must be handed to someone else. See CLIENT FUNDS in core.jsx.
     const effectiveCash = kpis.availableCash + (includePending ? (kpis.pendingPipelineCommission * 0.5) : 0);
-    return kpis.avgMonthlyExpense > 0 ? effectiveCash / kpis.avgMonthlyExpense : Infinity;
-  }, [kpis.availableCash, kpis.pendingPipelineCommission, kpis.avgMonthlyExpense, includePending]);
+    return kpis.avgMonthlyFixedOverhead > 0 ? effectiveCash / kpis.avgMonthlyFixedOverhead : Infinity;
+  }, [kpis.availableCash, kpis.pendingPipelineCommission, kpis.avgMonthlyFixedOverhead, includePending]);
   const runwayAlertLevel = projectedRunway === Infinity ? null : projectedRunway < 1 ? "critical" : projectedRunway < 3 ? "warning" : null;
 
   // KPIs recomputed for the selected date period (responds to date filter)
   const filteredKpis = useMemo(() => {
-    const ft = txns.filter(t => !t.isVoid && (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to));
+    const ft = txns.filter(t => !t.isVoid && !isClosingTxn(t) && (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to));
     return computePeriodKpis(ft, accounts);
   }, [txns, accounts, dateFilter]);
 
   // ── Prior-year same period (YoY comparator) ──────────────────────────────
   const priorDateRange = useMemo(() => {
-    const shiftY = d => d ? `${parseInt(d.slice(0, 4)) - 1}${d.slice(4)}` : null;
+    const shiftY = d => d ? shiftIsoYears(d, -1) : null;
     return { from: shiftY(dateFilter.from), to: shiftY(dateFilter.to) };
   }, [dateFilter.from, dateFilter.to]);
 
   const priorFilteredKpis = useMemo(() => {
     if (!priorDateRange.from || !priorDateRange.to)
       return { rev: 0, exp: 0, brokerShare: 0, companyNetCommissionRetained: 0, operatingCashFlow: 0 };
-    const ft = txns.filter(t => !t.isVoid && (t.date || "") >= priorDateRange.from && (t.date || "") <= priorDateRange.to);
+    const ft = txns.filter(t => !t.isVoid && !isClosingTxn(t) && (t.date || "") >= priorDateRange.from && (t.date || "") <= priorDateRange.to);
     return computePeriodKpis(ft, accounts);
   }, [txns, accounts, priorDateRange.from, priorDateRange.to]);
 
@@ -394,7 +391,7 @@ function Dashboard({ accounts, txns, deals, kpis, ledger, setPage, dark, planned
     { label: "Cash & Bank", value: fmtAED(kpis.cash), sub: kpis.clientFundsHeld > 0 ? `Incl. ${fmtAED(kpis.clientFundsHeld)} held for clients — available ${fmtAED(kpis.availableCash)}` : "Available liquidity — current balance", accent: "#2563EB", rawValue: kpis.cash, prevValue: priorCash, higherIsBetter: true, timeBasis: "balance" },
     { label: "Operating Cash Flow", value: fmtAED(filteredKpis.operatingCashFlow), sub: periodLabel, accent: filteredKpis.operatingCashFlow >= 0 ? "#059669" : "#DC2626", rawValue: filteredKpis.operatingCashFlow, prevValue: priorFilteredKpis.operatingCashFlow, higherIsBetter: true, timeBasis: "period" },
     { label: "Gross Commission", value: fmtAED(filteredKpis.rev), sub: periodLabel, accent: filteredKpis.rev >= 0 ? "#0F766E" : "#B91C1C", rawValue: filteredKpis.rev, prevValue: priorFilteredKpis.rev, higherIsBetter: true, timeBasis: "period" },
-    { label: includePending ? "Projected Runway" : "Cash Runway", value: projectedRunway === Infinity ? "✓ Healthy" : `${projectedRunway.toFixed(1)} months`, sub: projectedRunway !== Infinity && projectedRunway < 3 ? (projectedRunway < 1 ? "Immediate action required — less than 1 month left" : "Below safe threshold — target 3+ months") : (includePending ? "Assumes 50% pipeline collection" : "Cash ÷ avg monthly expense"), accent: runwayAlertLevel === "critical" ? "#DC2626" : runwayAlertLevel === "warning" ? "#F59E0B" : "#059669", alertLevel: runwayAlertLevel, timeBasis: "balance" },
+    { label: includePending ? "Projected Runway" : "Cash Runway", value: projectedRunway === Infinity ? "✓ Healthy" : `${projectedRunway.toFixed(1)} months`, sub: projectedRunway !== Infinity && projectedRunway < 3 ? (projectedRunway < 1 ? "Immediate action required — less than 1 month left" : "Below safe threshold — target 3+ months") : (includePending ? "Assumes 50% pipeline collection" : "Available cash ÷ fixed monthly overhead"), accent: runwayAlertLevel === "critical" ? "#DC2626" : runwayAlertLevel === "warning" ? "#F59E0B" : "#059669", alertLevel: runwayAlertLevel, timeBasis: "balance" },
   ];
   const profitabilityMetrics = [
     { label: "Broker Share", value: fmtAED(filteredKpis.brokerShare), sub: "Commission paid to brokers — period", accent: "#D97706", rawValue: filteredKpis.brokerShare, prevValue: priorFilteredKpis.brokerShare, higherIsBetter: false, timeBasis: "period" },
@@ -1081,7 +1078,7 @@ function DealsReportDoc({ deals, periodLabel, settings }) {
         </tr></thead>
         <tbody>
           {rows.map((d, i) => {
-            const pending = d.stage !== "Commission Collected"; // highlight not-yet-collected deals
+            const pending = isOpenDeal(d); // highlight not-yet-collected deals (cancelled ones are not pending)
             return (
             <tr key={d.id || i} style={{ background: pending ? "#FEF3C7" : (i % 2 ? soft : "#fff") }}>
               <td style={{ ...td, whiteSpace: "nowrap" }}>{d.created_at ? fmtDate(d.created_at) : "—"}</td>
@@ -1111,7 +1108,7 @@ function DealsReportDoc({ deals, periodLabel, settings }) {
     </div>
   );
 }
-function DealsPage({ deals, setDeals, customers, brokers, developers, txns, accounts, journal, persistTxn, userRole, userEmail, writeMeta, setInvoiceDeal, setPage, dealStageChanges, settings, cardDealId, setCardDealId }) {
+function DealsPage({ deals, setDeals, customers, brokers, developers, txns, accounts, journal, persistTxn, persistTxnBatch, postWithApproval, userRole, userEmail, writeMeta, setInvoiceDeal, setPage, dealStageChanges, settings, cardDealId, setCardDealId }) {
   const [show, setShow] = useState(false);
   const [edit, setEdit] = useState(null);
   // Filter + sort persist across navigation; default sort = newest deals first.
@@ -1304,13 +1301,20 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
     logAudit("deal_reseed", { inserted: missingPipelineDeals.length }, userRole, userEmail);
   };
   const handleDelete = async (deal) => {
-    const linkedTxns = (txns || []).filter(t => t.deal_id === deal.id && !t.isVoid);
+    if (!isAdminSubject(userRole)) { toast("Only an admin can delete a deal", "error"); return; }
+    // A deal that the ledger or an invoice points at cannot be deleted: its
+    // receipts, broker payments and invoice lines would be orphaned and every
+    // per-deal report would lose them. Mark it Cancelled instead.
+    const linkedTxns = (txns || []).filter(t => !t.isVoid && (t.deal_id === deal.id || (t.lines || []).some(l => l.deal_id === deal.id)));
+    const linkedInvoices = (dealInvoices || []).filter(inv => !invoiceIsCancelled(inv) && (inv.lineItems || []).some(li => li.dealId === deal.id));
+    if (linkedTxns.length || linkedInvoices.length) {
+      toast(`Cannot delete — ${[linkedTxns.length && `${linkedTxns.length} transaction(s)`, linkedInvoices.length && `${linkedInvoices.length} invoice(s)`].filter(Boolean).join(" and ")} reference this deal. Set its stage to Cancelled instead.`, "warning");
+      return;
+    }
     const warningMessage = [
       "Permanently delete this deal from the backend database?",
       `${deal.property_name || "Unnamed deal"}${deal.client_name ? ` | ${deal.client_name}` : ""}`,
-      linkedTxns.length
-        ? `Warning: ${linkedTxns.length} linked transaction(s) will NOT be deleted and may become orphaned.`
-        : "Warning: this action cannot be undone."
+      "Warning: this action cannot be undone."
     ].join("\n\n");
     if (!confirm(warningMessage)) return;
     try {
@@ -1572,7 +1576,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
                     {ci.partiallyInvoiced && <span title={`${fmtAED(ci.totalInvoicedCents)} invoiced${ci.invoiceNumbers.length ? ` (#${ci.invoiceNumbers.join(", #")})` : ""}`} style={{ fontSize: 10.5, color: "#B45309", whiteSpace: "nowrap" }}>{fmtAED(ci.remainingCents)} left</span>}
                   </span>;
                 })()}
-                {hasPermission(userRole, 'finance.create') && d.broker_id && d.stage !== "Cancelled" && (() => {
+                {hasPermission(userRole, 'expenses.create') && d.broker_id && d.stage !== "Cancelled" && (() => {
                   if (brokerPaidDealIds.has(d.id)) return (
                     <span title="Broker payment already recorded for this deal" style={{ fontSize: 11, color: "#7C3AED", padding: "4px 8px", borderRadius: 4, border: "1px solid #DDD6FE", background: "#F5F3FF", whiteSpace: "nowrap", cursor: "default" }}>✓ Broker Paid</span>
                   );
@@ -1585,15 +1589,17 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
                     setBpDeal(d);
                     setBpForm({
                       date: todayStr(),
-                      splitPct: "50", amount: String(fromCents(Math.round(totalC * 0.5))),
+                      // An accrued broker is paid what was accrued (Confirm & Post settles it).
+                      splitPct: d.broker_accrued_amount && totalC ? String(Math.round(d.broker_accrued_amount / totalC * 10000) / 100) : "50",
+                      amount: String(fromCents(d.broker_accrued_amount || Math.round(totalC * 0.5))),
                       managerId: mgrId,
                       managerPct: mgrId ? "5" : "", managerAmount: mgrId ? String(fromCents(Math.round(totalC * 0.05))) : "",
                       paidFromCode: "1002", memo: `Broker commission — ${d.property_name || d.id}`, managerMemo: `Manager override — ${d.property_name || d.id}`
                     });
-                  }}>Pay Broker</button>;
+                  }}>{d.broker_accrued && journal.openBrokerAccrual(d.id, "broker") ? "Pay accrued" : "Pay Broker"}</button>;
                 })()}
                 {hasPermission(userRole, 'sales.edit') && <button style={C.btn("secondary", true)} onClick={e => { e.stopPropagation(); setEdit(d); setShow(true); }}>Edit</button>}
-                {hasPermission(userRole, 'sales.edit') && <button style={C.btn("danger", true)} onClick={e => { e.stopPropagation(); handleDelete(d); }}>Delete</button>}
+                {isAdminSubject(userRole) && <button style={C.btn("danger", true)} onClick={e => { e.stopPropagation(); handleDelete(d); }}>Delete</button>}
               </div>
             </td>
           </tr>)}
@@ -1670,7 +1676,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
       </div>;
     })()}
 
-    {cardDeal && <DealCard deal={cardDeal} txns={txns} accounts={accounts} invoices={dealInvoices} customers={customers} brokers={brokers} developers={developers} dealStageChanges={dealStageChanges} settings={settings} persistTxn={persistTxn} userRole={userRole} onClose={() => setCardDeal(null)} />}
+    {cardDeal && <DealCard userEmail={userEmail} deal={cardDeal} txns={txns} accounts={accounts} invoices={dealInvoices} customers={customers} brokers={brokers} developers={developers} dealStageChanges={dealStageChanges} settings={settings} persistTxn={persistTxn} userRole={userRole} onClose={() => setCardDeal(null)} />}
 
     {/* Pay Broker Modal */}
     {bpDeal && (() => {
@@ -1736,14 +1742,32 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
       const handleConfirmPost = async () => {
         setBpSaving(true);
         try {
-          const brokerTxn = journal.postBrokerPayment({ date: bpForm.date, deal: bpDeal, brokerAmount: brokerAmt, paidFromCode: bpForm.paidFromCode, memo: bpForm.memo, refSuffix: "B", commit: false });
-          await persistTxn(brokerTxn);
+          // Both legs and the deal update go in ONE batch. Posted one by one, a
+          // failure on the manager leg left the broker leg booked, and the retry
+          // booked it a second time.
+          // A leg that was accrued earlier (Accrue · pay later) settles its accrual
+          // instead of booking the commission expense a second time.
+          const brokerAccrual = journal.openBrokerAccrual(bpDeal.id, "broker");
+          const mgrAccrual = journal.openBrokerAccrual(bpDeal.id, "manager");
+          const brokerTxn = journal.postBrokerPayment({ date: bpForm.date, deal: bpDeal, brokerAmount: brokerAmt, paidFromCode: bpForm.paidFromCode, memo: bpForm.memo, refSuffix: "B", settleAccrualTxnId: brokerAccrual ? brokerAccrual.id : "", commit: false });
+          const legs = [brokerTxn];
+          let dealPatch = null;
           if (managerAmt > 0) {
-            const mgrTxn = journal.postBrokerPayment({ date: bpForm.date, deal: bpDeal, managerAmount: managerAmt, manager_id: bpForm.managerId, manager_name: managerName, paidFromCode: bpForm.paidFromCode, memo: bpForm.managerMemo, refSuffix: "M", commit: false });
-            await persistTxn(mgrTxn);
-            const updated = { ...bpDeal, manager_id: bpForm.managerId, manager_name: managerName, manager_paid_amount: toCents(managerAmt), manager_paid_date: bpForm.date };
-            setDeals(prev => prev.map(d => d.id === bpDeal.id ? updated : d));
+            legs.push(journal.postBrokerPayment({ date: bpForm.date, deal: bpDeal, managerAmount: managerAmt, manager_id: bpForm.managerId, manager_name: managerName, paidFromCode: bpForm.paidFromCode, memo: bpForm.managerMemo, refSuffix: "M", settleAccrualTxnId: mgrAccrual ? mgrAccrual.id : "", commit: false }));
+            // A PATCH, merged into the deal as it stands when this posts — an
+            // approval may come days later, after other edits to the deal.
+            dealPatch = { manager_id: bpForm.managerId, manager_name: managerName, manager_paid_amount: toCents(managerAmt), manager_paid_date: bpForm.date };
           }
+          const res = await postWithApproval(legs, { scope: "payments",
+            summary: `Broker payment: ${bpDeal.broker_name || ""} — ${bpDeal.property_name || ""}`.trim(),
+            patches: dealPatch ? [{ col: 'deals', id: bpDeal.id, data: dealPatch }] : [] });
+          if (res.status === "pending") {
+            toast(`Sent for approval — ${fmtAED(approvalAmountCents(legs))} is above your payment limit. It posts once approved (see Approvals).`, "info");
+            closeBp();
+            return;
+          }
+          // Already merged in Firestore by the batch; bring local state along.
+          if (dealPatch) setDeals(prev => prev.map(d => d.id === bpDeal.id ? { ...d, ...dealPatch } : d));
           toast(managerAmt > 0 ? `Posted 2 transfers — broker ${fmtAED(toCents(brokerAmt))}, manager ${fmtAED(toCents(managerAmt))}` : `Broker payment of ${fmtAED(toCents(brokerAmt))} recorded`, "success");
           closeBp();
         } catch (err) {
@@ -1755,12 +1779,22 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
       const handleRecordNoBankPayment = async () => {
         if (!brokerAmt || brokerAmt <= 0) { toast("Enter a valid amount", "error"); return; }
         if (managerAmt > 0 && !bpForm.managerId) { toast("Select a manager for the top-up, or clear the manager amount", "error"); return; }
+        if (journal.openBrokerAccrual(bpDeal.id, "broker")) { toast("This deal already has an unpaid broker accrual — pay it with Confirm & Post", "warning"); return; }
         setBpSaving(true);
         try {
-          const updated = { ...bpDeal, broker_paid_amount: toCents(brokerAmt), broker_paid_date: bpForm.date,
-            ...(managerAmt > 0 ? { manager_id: bpForm.managerId, manager_name: managerName, manager_paid_amount: toCents(managerAmt), manager_paid_date: bpForm.date } : {}) };
-          setDeals(prev => prev.map(d => d.id === bpDeal.id ? updated : d));
-          toast(managerAmt > 0 ? `Broker ${fmtAED(toCents(brokerAmt))} + manager ${fmtAED(toCents(managerAmt))} recorded (no bank transaction)` : `Broker payment of ${fmtAED(toCents(brokerAmt))} recorded (no bank transaction)`, "success");
+          // Book the cost now, owed in Accrued Expenses (2210): the P&L carries the
+          // commission and Pay Broker later settles it. (Before, only the deal
+          // was marked, so the expense never reached the books.)
+          const legs = [journal.postBrokerAccrual({ date: bpForm.date, deal: bpDeal, leg: "broker", amount: brokerAmt, commit: false })];
+          if (managerAmt > 0) legs.push(journal.postBrokerAccrual({ date: bpForm.date, deal: bpDeal, leg: "manager", amount: managerAmt, manager_id: bpForm.managerId, manager_name: managerName, commit: false }));
+          // NOT broker_paid_amount: that marks the deal "✓ Broker Paid" and hides
+          // Pay Broker, which is exactly how this accrual gets settled.
+          const dealPatch = { broker_accrued: true, broker_accrued_amount: toCents(brokerAmt), broker_accrued_date: bpForm.date,
+            ...(managerAmt > 0 ? { manager_id: bpForm.managerId, manager_name: managerName, manager_accrued_amount: toCents(managerAmt) } : {}) };
+          const res = await postWithApproval(legs, { scope: "journal", summary: `Broker accrual — ${bpDeal.property_name || ""}`, patches: [{ col: "deals", id: bpDeal.id, data: dealPatch }] });
+          if (res.status === "posted") setDeals(prev => prev.map(d => d.id === bpDeal.id ? { ...d, ...dealPatch } : d));
+          toast(res.status === "pending" ? "Broker accrual sent for approval"
+            : `${managerAmt > 0 ? "Broker + manager" : "Broker"} commission accrued (${fmtAED(toCents(brokerAmt + (managerAmt || 0)))}) — owed in Accrued Expenses until paid`, res.status === "pending" ? "info" : "success");
           closeBp();
         } catch (err) {
           toast("Save failed: " + err.message, "error");
@@ -1861,7 +1895,7 @@ function DealsPage({ deals, setDeals, customers, brokers, developers, txns, acco
           <div style={C.mftr}>
             {!bpConfirm ? <>
               <button style={C.btn("secondary")} onClick={closeBp} disabled={bpSaving}>Cancel</button>
-              <button style={{ ...C.btn("secondary"), borderColor: "#7C3AED", color: "#7C3AED" }} onClick={handleRecordNoBankPayment} disabled={bpSaving} title="Records the amounts on the deal — no bank transaction created">{bpSaving ? "Saving…" : "Record (No Bank)"}</button>
+              <button style={{ ...C.btn("secondary"), borderColor: "#7C3AED", color: "#7C3AED" }} onClick={handleRecordNoBankPayment} disabled={bpSaving} title="Books the commission as an expense now and owes it in Accrued Expenses (2210) — no bank movement. Pay it later with Confirm & Post, which settles the accrual.">{bpSaving ? "Saving…" : "Accrue (pay later)"}</button>
               <button style={{ ...C.btn(), background: "#7C3AED", borderColor: "#7C3AED" }} onClick={handleReview} disabled={bpSaving}>Record + Bank →</button>
             </> : <>
               <button style={C.btn("secondary")} onClick={() => setBpConfirm(false)} disabled={bpSaving}>← Back</button>
@@ -1948,7 +1982,8 @@ function buildStageTimeline(deal, changes) {
 }
 // Read-only "dossier" for one deal — everything the system knows, with PDF /
 // WhatsApp share. Visible to anyone with Deals access.
-function DealCard({ deal, txns, accounts, invoices, customers, brokers, developers, dealStageChanges, settings, onClose, persistTxn, userRole }) {
+function DealCard({ deal, txns, accounts, invoices, customers, brokers, developers, dealStageChanges, settings, onClose, persistTxn, userRole, userEmail }) {
+  const [showAtt, setShowAtt] = useState(false);   // 📎 deal documents (MOU, SPA, booking form…)
   const [showFull, setShowFull] = useState(false);
   const [busy, setBusy] = useState(false);
   const [linkingId, setLinkingId] = useState("");
@@ -2011,7 +2046,13 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
   const ci = commissionInvoicing(deal, invoices || []);
   const col = dealCollection(deal, txns || [], accounts || []);
   const inst = installmentStatus(deal, col.collectedCents);
-  const brokerPaidFromTxns = linked.filter(t => !t.isVoid && t.txnType === "BP").reduce((s, t) => s + (t.lines || []).reduce((ss, l) => ss + ((acctById.get(l.accountId) || {}).type === "Expense" ? (l.debit || 0) : 0), 0), 0);
+  // Paid = broker-payment lines on the commission expense OR on Accrued
+  // Expenses (2210) — a payment that settles an accrual debits 2210 and only
+  // trues up the difference against the expense.
+  const brokerPaidFromTxns = linked.filter(t => !t.isVoid && t.txnType === "BP").reduce((s, t) => s + (t.lines || []).reduce((ss, l) => {
+    const a = acctById.get(l.accountId) || {};
+    return ss + (a.type === "Expense" || a.code === "2210" ? (l.debit || 0) - (l.credit || 0) : 0);
+  }, 0), 0);
   const brokerPaid = brokerPaidFromTxns > 0 ? brokerPaidFromTxns : (deal.broker_paid_amount || 0);
   const netRetained = col.collectedCents - brokerPaid;
   const margin = col.collectedCents > 0 ? Math.round((netRetained / col.collectedCents) * 100) : null;
@@ -2079,6 +2120,7 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
       <div style={{ ...C.mhdr, flexWrap: "wrap", gap: 8, padding: isMobile ? "12px 16px" : "18px 24px" }}>
         <span style={{ fontWeight: 700, fontSize: isMobile ? 15 : 16, whiteSpace: "nowrap" }}>📋 Deal Card</span>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+          <button style={C.btn("secondary", true)} title="Deal documents — MOU, SPA, booking form, cheques" onClick={() => setShowAtt(true)}>📎 Files</button>
           <button style={C.btn("secondary", true)} disabled={busy} onClick={handleDownload}>{busy ? "…" : "⬇ PDF"}</button>
           <button style={C.btn("secondary", true)} disabled={busy} onClick={handleShare}>{busy ? "…" : (isMobile ? "↗ Share" : "↗ Share / WhatsApp")}</button>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
@@ -2258,7 +2300,7 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
             <tbody>{dealInvoices.map(inv => <tr key={inv.id} style={{ borderTop: "1px solid #F2F4F7" }}>
               <td style={{ padding: "4px 6px", fontFamily: "monospace", color: "#C9A044", fontWeight: 700 }}>{inv.invoiceNumber || "—"}</td>
               <td style={{ padding: "4px 6px" }}>{inv.invoiceDate ? invFmtDate(inv.invoiceDate) : "—"}</td>
-              <td style={{ padding: "4px 6px" }}>{inv.status === "void" ? "Void" : inv.status === "issued" ? "Issued" : "Draft"}</td>
+              <td style={{ padding: "4px 6px" }}>{inv.status === "void" ? "Void" : inv.status === "credited" ? `Credited${inv.creditNoteNumber ? ` (CN ${inv.creditNoteNumber})` : ""}` : inv.status === "claim" ? "Claim" : inv.status === "issued" ? "Issued" : "Draft"}</td>
               <td style={{ padding: "4px 6px" }}>{(() => {
                 const rc = receiptByInvoiceId.get(inv.id);
                 return rc
@@ -2436,6 +2478,7 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
         <div style={{ padding: "9px 44px 18px", fontSize: 8, color: "#B0B5BE", letterSpacing: "0.06em", textAlign: "center" }}>© {new Date().getFullYear()} {(settings?.company || "NASAMA PROPERTIES COMPANY LLC").toUpperCase()} · PRIVATE & CONFIDENTIAL</div>
       </div>
     </div>
+    {showAtt && <AttachmentsModal parentType="deal" parentId={deal.id} title={deal.property_name || "Deal"} userRole={userRole} userEmail={userEmail} onClose={() => setShowAtt(false)} />}
   </div>;
 }
 
@@ -2670,7 +2713,7 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
   const [linkSaving, setLinkSaving] = useState(false);
 
   useEffect(() => {
-    const h = () => { setForm(p => ({ ...p, invoice_id: "", invoice_no: "" })); setShow(true); };
+    const h = () => { setForm(p => ({ ...p, invoice_id: "", invoice_no: "", ar: false })); setShow(true); };
     document.addEventListener("add-receipt", h);
     return () => document.removeEventListener("add-receipt", h);
   }, []);
@@ -2684,10 +2727,12 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
       deal_id:     receiptDraft.deal_id || "",
       date:        receiptDraft.date || todayStr(),
       bankCode:    receiptDraft.bankCode || "1002",
-      vatRate:     receiptDraft.vatRate != null ? receiptDraft.vatRate : 5,
+      vatRate:     receiptDraft.vatRate != null ? receiptDraft.vatRate
+                 : dealReceiptVatRate((deals || []).find(d => d.id === receiptDraft.deal_id)),
       grossAmount: (receiptDraft.grossAmount != null && receiptDraft.grossAmount !== "") ? String(receiptDraft.grossAmount) : "",
       invoice_id:  receiptDraft.invoice_id || "",
       invoice_no:  receiptDraft.invoice_no || "",
+      ar:          !!receiptDraft.ar,
     });
     setShow(true);
     if (clearReceiptDraft) clearReceiptDraft();
@@ -2697,25 +2742,35 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
   const dealById = useMemo(() => new Map((deals || []).map(d => [d.id, d])), [deals]);
   const unlinkedCount = saleReceipts.filter(t => !t.deal_id).length;
 
+  // The form can also open from the quick-add event or an invoice hand-off, so
+  // the permission is checked where the entry is built, not only on the button.
+  const canPostReceipt = hasPermission(userRole, 'accounting.create');
+  // Against an accrual invoice the revenue and VAT were booked at issue, so the
+  // receipt only clears Commission Receivable; otherwise it is the cash-basis
+  // Sale Receipt that books revenue + output VAT.
+  const buildReceiptTxn = (deal, gross) => form.ar
+    ? journal.postInvoiceReceipt({ date: form.date, deal, gross, bankCode: form.bankCode, invoiceId: form.invoice_id, invoiceNo: form.invoice_no, commit: false })
+    : journal.postSaleReceipt({ date: form.date, deal, gross, vatRate: form.vatRate, bankCode: form.bankCode, invoiceId: form.invoice_id, invoiceNo: form.invoice_no, commit: false });
   const handlePreview = () => {
+    if (!canPostReceipt) { toast("Posting a sale receipt needs Accounting · Create permission", "error"); return; }
     const deal = deals.find(d => d.id === form.deal_id);
     if (!deal) { toast("Select a deal first", "warning"); return; }
     const gross = parseFloat(form.grossAmount);
     if (!gross || gross <= 0) { toast("Enter a valid amount", "warning"); return; }
     try {
-      const txn = journal.postSaleReceipt({ date: form.date, deal, gross, vatRate: form.vatRate, bankCode: form.bankCode, invoiceId: form.invoice_id, invoiceNo: form.invoice_no, commit: false });
-      setPreview(txn);
+      setPreview(buildReceiptTxn(deal, gross));
     } catch (err) { toast(err.message, "error"); }
   };
 
   const handleConfirm = async () => {
+    if (!canPostReceipt) { toast("Posting a sale receipt needs Accounting · Create permission", "error"); return; }
     const deal = deals.find(d => d.id === form.deal_id);
     try {
-      const txn = journal.postSaleReceipt({ date: form.date, deal, gross: parseFloat(form.grossAmount), vatRate: form.vatRate, bankCode: form.bankCode, invoiceId: form.invoice_id, invoiceNo: form.invoice_no, commit: false });
+      const txn = { ...buildReceiptTxn(deal, parseFloat(form.grossAmount)), ...fxTxnFields(form.fx) };
       await persistTxn(txn);
       toast(form.invoice_no ? `Sale receipt posted & linked to Invoice #${form.invoice_no}` : "Sale receipt posted!", "success");
       setShow(false); setPreview(null);
-      setForm({ deal_id: "", date: todayStr(), bankCode: "1002", vatRate: 5, grossAmount: "", invoice_id: "", invoice_no: "" });
+      setForm({ deal_id: "", date: todayStr(), bankCode: "1002", vatRate: 5, grossAmount: "", invoice_id: "", invoice_no: "", ar: false, fx: null });
     } catch (err) { toast(err.message, "error"); }
   };
 
@@ -2746,7 +2801,7 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
 
   return <div>
     <PageHeader title="Sale Receipts" sub={`Cash-settled commission collections — ${saleReceipts.length} receipts${unlinkedCount > 0 ? ` • ${unlinkedCount} not linked to a deal` : ""}`}>
-      {hasPermission(userRole, 'sales.create') && <button style={C.btn()} onClick={() => { setForm(p => ({ ...p, invoice_id: "", invoice_no: "" })); setShow(true); }}>+ New Receipt</button>}
+      {hasPermission(userRole, 'accounting.create') && <button style={C.btn()} onClick={() => { setForm(p => ({ ...p, invoice_id: "", invoice_no: "", ar: false })); setShow(true); }}>+ New Receipt</button>}
     </PageHeader>
 
     {unlinkedCount > 0 && <div style={{ ...C.card, padding: "12px 16px", marginBottom: 14, borderLeft: "4px solid #D97706", background: "#FFFBEB", color: "#92400E", fontSize: 13 }}>
@@ -2762,7 +2817,7 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
           <th style={C.th}>Client</th>
           <th style={C.th}>Linked Deal</th>
           <th style={{ ...C.th, textAlign: "right" }}>Gross Amount</th>
-          {hasPermission(userRole, 'sales.edit') && <th style={C.th}>Actions</th>}
+          {hasPermission(userRole, 'accounting.edit') && <th style={C.th}>Actions</th>}
         </tr></thead>
         <tbody>
           {saleReceipts.length === 0 && <tr><td colSpan={7} style={{ ...C.td, textAlign: "center", padding: 40, color: "#9CA3AF" }}>No sale receipts yet. Collect a commission to get started.</td></tr>}
@@ -2772,7 +2827,7 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
             return <tr key={t.id}>
               <td style={C.td}>{fmtDate(t.date)}</td>
               <td style={C.td}><span style={C.badge("success")}>{t.ref}</span></td>
-              <td style={C.td}>{t.description}</td>
+              <td style={C.td}>{t.description}{fxLabel(t) && <div style={{ fontSize: 11, color: "#6B7280" }}>{fxLabel(t)}</div>}</td>
               <td style={C.td}>{t.counterparty || "—"}</td>
               <td style={C.td}>
                 {linkedDeal
@@ -2784,7 +2839,7 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
                 }
               </td>
               <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(gross)}</td>
-              {hasPermission(userRole, 'sales.edit') && <td style={C.td}>
+              {hasPermission(userRole, 'accounting.edit') && <td style={C.td}>
                 {!t.deal_id && <button style={{ ...C.btn("secondary", true), borderColor: "#D97706", color: "#92400E", fontSize: 11 }} onClick={() => { setLinkTxn(t); setLinkDealId(""); }}>Link Deal</button>}
               </td>}
             </tr>;
@@ -2800,15 +2855,28 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
         <div style={C.mbdy}>
           <p style={{ fontSize: 13, color: "#6B7280", marginBottom: 16 }}>Record a commission collected. This posts a single journal entry: DR Bank / CR Revenue / CR Output VAT.</p>
           <div style={C.fg}>
-            <div><label style={C.label}>Deal</label><Sel value={form.deal_id} onChange={e => setForm(p => ({ ...p, deal_id: e.target.value }))}>
+            <div><label style={C.label}>Deal</label><Sel value={form.deal_id} onChange={e => {
+              // VAT follows the deal: a deal marked "No VAT" must not book output VAT.
+              const picked = deals.find(d => d.id === e.target.value);
+              setForm(p => ({ ...p, deal_id: e.target.value, vatRate: picked ? dealReceiptVatRate(picked) : p.vatRate }));
+            }}>
               <option value="">— Select Deal —</option>
               {deals.map(d => <option key={d.id} value={d.id}>{d.property_name} ({d.type})</option>)}
             </Sel></div>
             <div><label style={C.label}>Date</label><Inp type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} /></div>
-            <div><label style={C.label}>Gross Amount (AED)</label><Inp type="number" value={form.grossAmount} onChange={e => setForm(p => ({ ...p, grossAmount: e.target.value }))} placeholder="e.g. 52500" /></div>
+            <FxAmountField label="Gross Amount" aed={form.grossAmount} fx={form.fx} placeholder="e.g. 52500" onChange={({ aed, fx }) => setForm(p => ({ ...p, grossAmount: aed, fx }))} />
+            {form.ar ? <div><label style={C.label}>Accounting</label>
+              <div style={{ fontSize: 12, color: "#065F46", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 8, padding: "8px 10px", lineHeight: 1.5 }}>
+                Clears Commission Receivable for Invoice #{form.invoice_no}. Revenue and VAT were booked when the invoice was issued — none is booked here.
+              </div></div> :
             <div><label style={C.label}>VAT Rate %</label><Sel value={form.vatRate} onChange={e => setForm(p => ({ ...p, vatRate: parseFloat(e.target.value) }))}>
               <option value={5}>5% (Standard)</option><option value={0}>0% (Exempt)</option>
-            </Sel></div>
+            </Sel>
+            {(() => {
+              const d = deals.find(x => x.id === form.deal_id);
+              if (!d || dealReceiptVatRate(d) === form.vatRate) return null;
+              return <div style={{ fontSize: 11, color: "#B45309", marginTop: 4 }}>⚠ This deal is marked {d.vat_applicable ? "VAT 5%" : "No VAT"} — the rate chosen here differs.</div>;
+            })()}</div>}
             <div><label style={C.label}>Receive Into</label><Sel value={form.bankCode} onChange={e => setForm(p => ({ ...p, bankCode: e.target.value }))}>
               {bankAccounts.length > 0 && <optgroup label="Bank Accounts">{bankAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
               {cashAccounts.length  > 0 && <optgroup label="Cash Accounts">{cashAccounts.map(a => <option key={a.code} value={a.code}>{a.name}</option>)}</optgroup>}
@@ -2816,7 +2884,7 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
           </div>
           {form.grossAmount && parseFloat(form.grossAmount) > 0 && <div style={{ marginTop: 16, padding: 14, background: "#F9FAFB", borderRadius: 8, fontSize: 13 }}>
             <div style={{ display: "flex", justifyContent: "space-between" }}><span>Gross:</span><span style={{ fontWeight: 600 }}>AED {parseFloat(form.grossAmount).toLocaleString("en-US", { minimumFractionDigits: 2 })}</span></div>
-            {form.vatRate > 0 && <><div style={{ display: "flex", justifyContent: "space-between", color: "#6B7280" }}><span>Net (excl. VAT):</span><span>AED {(parseFloat(form.grossAmount) / (1 + form.vatRate / 100)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
+            {!form.ar && form.vatRate > 0 && <><div style={{ display: "flex", justifyContent: "space-between", color: "#6B7280" }}><span>Net (excl. VAT):</span><span>AED {(parseFloat(form.grossAmount) / (1 + form.vatRate / 100)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
               <div style={{ display: "flex", justifyContent: "space-between", color: "#6B7280" }}><span>VAT ({form.vatRate}%):</span><span>AED {(parseFloat(form.grossAmount) - parseFloat(form.grossAmount) / (1 + form.vatRate / 100)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div></>}
           </div>}
         </div>
@@ -2870,7 +2938,7 @@ function ReceiptsPage({ accounts, txns, deals, saveTxn, persistTxn, journal, use
 // ╔══════════════════════════════════════════════════╗
 //  PAYMENTS PAGE (replaces Expenses & Bills — cash-settled)
 // ╚══════════════════════════════════════════════════╝
-function PaymentsPage({ accounts, txns, saveTxn, persistTxn, journal, vendors, brokers, userRole }) {
+function PaymentsPage({ accounts, txns, saveTxn, persistTxn, postWithApproval, journal, vendors, brokers, userRole }) {
   const [show, setShow] = useState(false);
   const [preview, setPreview] = useState(null);
   const [form, setForm] = useState({ date: todayStr(), memo: "", gross: "", vatRate: 0, expenseCode: "", paidFromCode: "1002", counterparty: "", broker_id: "" });
@@ -2897,9 +2965,11 @@ function PaymentsPage({ accounts, txns, saveTxn, persistTxn, journal, vendors, b
 
   const handleConfirm = async () => {
     try {
-      const txn = journal.postPayment({ ...form, gross: parseFloat(form.gross), vatRate: parseFloat(form.vatRate), commit: false });
-      await persistTxn(txn);
-      toast("Payment posted!", "success");
+      const txn = { ...journal.postPayment({ ...form, gross: parseFloat(form.gross), vatRate: parseFloat(form.vatRate), commit: false }), ...fxTxnFields(form.fx) };
+      const res = await postWithApproval([txn], { scope: "payments", summary: `Payment: ${form.memo || form.counterparty || "expense"}` });
+      toast(res.status === "pending"
+        ? `Sent for approval — ${fmtAED(approvalAmountCents([txn]))} is above your payment limit. It posts once approved (see Approvals).`
+        : "Payment posted!", res.status === "pending" ? "info" : "success");
       setShow(false); setPreview(null);
       setForm({ date: todayStr(), memo: "", gross: "", vatRate: 0, expenseCode: "", paidFromCode: "1002", counterparty: "", broker_id: "" });
     } catch (err) { toast(err.message, "error"); }
@@ -2917,7 +2987,7 @@ function PaymentsPage({ accounts, txns, saveTxn, persistTxn, journal, vendors, b
           {payments.length === 0 && <tr><td colSpan={6} style={{ ...C.td, textAlign: "center", padding: 40, color: "#9CA3AF" }}>No payments yet.</td></tr>}
           {payments.sort((a, b) => b.date?.localeCompare(a.date)).map(t => {
             const gross = t.lines.reduce((s, l) => s + (l.credit || 0), 0);
-            return <tr key={t.id}><td style={C.td}>{fmtDate(t.date)}</td><td style={C.td}><span style={C.badge("warning")}>{t.ref}</span></td><td style={C.td}>{t.description}</td><td style={C.td}>{t.counterparty || "—"}</td><td style={C.td}><span style={C.badge(t.txnType === "BP" ? "gold" : "neutral")}>{TXN_TYPES[t.txnType]?.label || t.txnType}</span></td><td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(gross)}</td></tr>;
+            return <tr key={t.id}><td style={C.td}>{fmtDate(t.date)}</td><td style={C.td}><span style={C.badge("warning")}>{t.ref}</span></td><td style={C.td}>{t.description}{fxLabel(t) && <div style={{ fontSize: 11, color: "#6B7280" }}>{fxLabel(t)}</div>}</td><td style={C.td}>{t.counterparty || "—"}</td><td style={C.td}><span style={C.badge(t.txnType === "BP" ? "gold" : "neutral")}>{TXN_TYPES[t.txnType]?.label || t.txnType}</span></td><td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(gross)}</td></tr>;
           })}
         </tbody>
       </table>
@@ -2935,7 +3005,7 @@ function PaymentsPage({ accounts, txns, saveTxn, persistTxn, journal, vendors, b
               {expenseAccounts.map(a => <option key={a.code} value={a.code}>{a.code} — {a.name}</option>)}
             </Sel></div>
             <div><label style={C.label}>Description</label><Inp value={form.memo} onChange={e => setForm(p => ({ ...p, memo: e.target.value }))} placeholder="e.g. Office rent March 2026" /></div>
-            <div><label style={C.label}>Gross Amount (AED)</label><Inp type="number" value={form.gross} onChange={e => setForm(p => ({ ...p, gross: e.target.value }))} /></div>
+            <FxAmountField label="Gross Amount" aed={form.gross} fx={form.fx} onChange={({ aed, fx }) => setForm(p => ({ ...p, gross: aed, fx }))} />
             <div><label style={C.label}>VAT Rate %</label><Sel value={form.vatRate} onChange={e => setForm(p => ({ ...p, vatRate: e.target.value }))}>
               <option value={0}>0% (No VAT)</option><option value={5}>5% (Standard)</option>
             </Sel></div>
@@ -3074,7 +3144,9 @@ function VendorsPage(p) {
 // ╔══════════════════════════════════════════════════╗
 //  CHART OF ACCOUNTS
 // ╚══════════════════════════════════════════════════╝
-function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTxn, journal, userRole }) {
+function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTxn, persistTxnBatch, journal, userRole, userEmail, settings }) {
+  const [postBusy, guardPost] = useSubmitGuard(); // one transfer per click
+  const txnById = useMemo(() => new Map((txns || []).map(t => [t.id, t])), [txns]); // O(1) row lookups
   const [showTransfer, setShowTransfer] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showReconcile, setShowReconcile] = useState(false);
@@ -3242,10 +3314,16 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
 
     const mappedCodes = new Set(importAnalysis.categories.map(c => c.accountCode).filter(Boolean));
     const missingAccounts = BANK_IMPORT_REQUIRED_ACCOUNTS.filter(a => mappedCodes.has(a.code) && !accounts.some(x => x.code === a.code));
-    if (missingAccounts.length) setAccounts(prev => mergeImportAccounts([...(prev || []), ...missingAccounts]));
-    setTxns(prev => [...prev, ...importAnalysis.ready.map(r => r.txn)]);
-    toast(`Imported ${importAnalysis.ready.length} bank transactions`, "success");
-    setShowImport(false);
+    const rows = importAnalysis.ready.map(r => r.txn);
+    // Accounts first in the same batch, so no imported line can land before the
+    // account it posts to exists. One batch per 450 records (Firestore limit).
+    persistTxnBatch(rows, missingAccounts.map(a => ({ col: 'accounts', id: a.id, data: a })))
+      .then(() => {
+        if (missingAccounts.length) setAccounts(prev => mergeImportAccounts([...(prev || []), ...missingAccounts]));
+        toast(`Imported ${rows.length} bank transactions`, "success");
+        setShowImport(false);
+      })
+      .catch(err => toast(`Import failed: ${err.message}`, "error"));
   };
   const toggleSort = (key) => {
     setSortKey(prev => {
@@ -3344,9 +3422,10 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
         <tbody>
           {rows.length === 0 && <tr><td colSpan={7} style={{ ...C.td, textAlign: "center", padding: 32, color: "#9CA3AF" }}>{emptyMsg}</td></tr>}
           {rows.map(row => {
-            const origTxn = txns.find(t => t.id === row.id);
+            const origTxn = txnById.get(row.id);
             const isVoided = origTxn?.isVoid;
             const isReversal = origTxn?.ref?.startsWith("REV-");
+            const periodLocked = isTxnLocked(origTxn || row, settings) || isTxnReconciled(origTxn);
             return <tr key={row.id} style={{ opacity: isVoided ? 0.45 : 1, background: isVoided ? "#FEF2F2" : undefined }}>
               <td style={C.td}>{fmtDate(row.date)}</td>
               <td style={C.td}>
@@ -3362,8 +3441,9 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
               <td style={{ ...C.td, textAlign: "right", fontWeight: 600, fontVariantNumeric: "tabular-nums", background: isVoided ? "#FEF2F2" : "#F0FDF4", color: isVoided ? "#9CA3AF" : row.balance >= 0 ? "#065F46" : "#DC2626", whiteSpace: "nowrap" }}>{isVoided ? "—" : fmtAED(row.balance)}</td>
               <td style={C.td}>
                 <div style={{ display: "flex", gap: 6 }}>
-                  {!isVoided && hasPermission(userRole, 'canEditTxns') && <button style={C.btn("secondary", true)} onClick={() => setEditTxnId(row.id)}>Edit</button>}
-                  {hasPermission(userRole, 'canVoidTxns') && <button style={C.btn("danger", true)} onClick={() => handleDeleteTxn(row.id)}>Delete</button>}
+                  {periodLocked && <span title={isTxnReconciled(origTxn) ? `Reconciled to the bank statement ending ${fmtDate(origTxn.statement_to || "")} — undo the reconciliation to change it` : `Closed period — locked through ${fmtDate(periodLockDate(settings))}. Correct it with a reversal in the Journal.`} style={{ fontSize: 12, color: "#6B7280" }}>{isTxnReconciled(origTxn) ? "✔︎ Reconciled" : "🔒 Closed"}</span>}
+                  {!periodLocked && !isVoided && hasPermission(userRole, 'canEditTxns') && <button style={C.btn("secondary", true)} onClick={() => setEditTxnId(row.id)}>Edit</button>}
+                  {!periodLocked && hasPermission(userRole, 'canVoidTxns') && <button style={C.btn("danger", true)} onClick={() => handleDeleteTxn(row.id)}>Delete</button>}
                 </div>
               </td>
             </tr>;
@@ -3570,10 +3650,10 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
     </div>}
 
     {showReconcile && typeof BankReconcileModal !== "undefined" &&
-      <BankReconcileModal accounts={accounts} txns={txns} ledger={ledger} journal={journal} persistTxn={persistTxn} onClose={() => setShowReconcile(false)} />}
+      <BankReconcileModal accounts={accounts} txns={txns} ledger={ledger} journal={journal} persistTxn={persistTxn} userRole={userRole} userEmail={userEmail} onClose={() => setShowReconcile(false)} />}
 
     {showDuplicates && typeof DuplicatesModal !== "undefined" &&
-      <DuplicatesModal txns={txns} accounts={accounts} persistTxn={persistTxn} onClose={() => setShowDuplicates(false)} />}
+      <DuplicatesModal txns={txns} accounts={accounts} persistTxn={persistTxn} userRole={userRole} onClose={() => setShowDuplicates(false)} />}
 
     {showTransfer && <div style={C.modal} onClick={() => setShowTransfer(false)}>
       <div style={C.mbox(460)} onClick={e => e.stopPropagation()}>
@@ -3599,7 +3679,7 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
           </div>
           <div style={{ marginTop: 12 }}><label style={C.label}>Memo</label><Inp value={tf.memo} onChange={e => setTf(p => ({ ...p, memo: e.target.value }))} /></div>
         </div>
-        <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShowTransfer(false)}>Cancel</button><button style={C.btn()} onClick={handleTransfer}>Post Transfer</button></div>
+        <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShowTransfer(false)}>Cancel</button><button style={C.btn()} disabled={postBusy} onClick={() => guardPost(handleTransfer)}>{postBusy ? "⏳ Posting…" : "Post Transfer"}</button></div>
       </div>
     </div>}
 
@@ -3607,9 +3687,72 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
   </div>;
 }
 
-function COAPage({ accounts, setAccounts, ledger, userRole }) {
+// ── Depreciation (Stage 6.1) — straight line per fixed-asset account ──
+function DepreciationModal({ accounts, txns, settings, setSettings, postWithApproval, userRole, onClose }) {
+  const prevMonth = (() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })();
+  const [month, setMonth] = useState(prevMonth);
+  const [cfg, setCfg] = useState(() => JSON.parse(JSON.stringify((settings && settings.depreciation) || {})));
+  const [busy, guard] = useSubmitGuard();
+  const { accounts: chart, missing } = withStage6Accounts(accounts, ["depreciation", "accDepreciation"]);
+  const rows = useMemo(() => /^\d{4}-\d{2}$/.test(month) ? computeDepreciation({ accounts: chart, txns, config: cfg, month }) : [], [chart, txns, cfg, month]);
+  const total = rows.reduce((s, r) => s + r.amount, 0);
+  const canPost = hasPermission(userRole, "accounting.create");
+  const setField = (id, k, v) => setCfg(c => ({ ...c, [id]: { ...(c[id] || {}), [k]: v } }));
+  const saveCfg = () => { setSettings({ ...(settings || {}), depreciation: cfg }); toast("Depreciation settings saved", "success"); };
+  const post = async () => {
+    if (!canPost) { toast("Posting depreciation needs Accounting · Create permission", "error"); return; }
+    if (!total) { toast(`Nothing to depreciate for ${month}`, "info"); return; }
+    try {
+      setSettings({ ...(settings || {}), depreciation: cfg });
+      const txn = buildDepreciationTxn({ accounts: chart, rows, month });
+      const res = await postWithApproval([txn], { scope: "journal", summary: `Depreciation ${month}`, patches: missing.map(a => ({ col: "accounts", id: a.id, data: a })) });
+      toast(res.status === "pending" ? "Depreciation sent for approval" : `Depreciation for ${month} posted — ${fmtAED(total)}`, res.status === "pending" ? "info" : "success");
+      onClose();
+    } catch (e) { toast(e.message, "error"); }
+  };
+  return <div style={C.modal} onClick={onClose}>
+    <div style={{ ...C.mbox(900), maxHeight: "92vh" }} onClick={e => e.stopPropagation()}>
+      <div style={C.mhdr}><span style={{ fontWeight: 700, fontSize: 16 }}>🏷 Depreciation</span><button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
+      <div style={C.mbdy}>
+        <div style={{ fontSize: 12.5, color: "#6B7280", marginBottom: 12, lineHeight: 1.6 }}>
+          Straight-line depreciation for each fixed-asset account: (cost − residual) ÷ useful life, booked monthly as <strong>DR 5610 Depreciation Expense / CR 1590 Accumulated Depreciation</strong>, and never beyond the depreciable amount. A month is posted once.
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
+          <label style={C.label}>Month</label><Inp type="month" value={month} onChange={e => setMonth(e.target.value)} style={{ width: 170 }} />
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead><tr>{["Asset account", "Cost", "Accumulated", "Net book value", "Life (months)", "Residual %", "Start month", `Charge ${month}`].map((h, i) => <th key={h} style={{ ...C.th, textAlign: i > 0 && i < 4 || i === 7 ? "right" : "left" }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {rows.length === 0 && <tr><td colSpan={8} style={{ ...C.td, textAlign: "center", color: "#9CA3AF", padding: 20 }}>No fixed-asset accounts (codes 1500–1589) in the chart.</td></tr>}
+            {rows.map(r => <tr key={r.account.id}>
+              <td style={C.td}>{r.account.code} · {r.account.name}</td>
+              <td style={{ ...C.td, textAlign: "right" }}>{fmtAED(r.cost)}</td>
+              <td style={{ ...C.td, textAlign: "right" }}>{fmtAED(r.accumulated)}</td>
+              <td style={{ ...C.td, textAlign: "right", fontWeight: 600 }}>{fmtAED(r.nbv)}</td>
+              <td style={C.td}><Inp type="number" value={(cfg[r.account.id] || {}).lifeMonths || ""} placeholder="e.g. 36" onChange={e => setField(r.account.id, "lifeMonths", e.target.value)} style={{ width: 80 }} /></td>
+              <td style={C.td}><Inp type="number" value={(cfg[r.account.id] || {}).residualPct || ""} placeholder="0" onChange={e => setField(r.account.id, "residualPct", e.target.value)} style={{ width: 64 }} /></td>
+              <td style={C.td}><Inp type="month" value={(cfg[r.account.id] || {}).startMonth || ""} onChange={e => setField(r.account.id, "startMonth", e.target.value)} style={{ width: 140 }} /></td>
+              <td style={{ ...C.td, textAlign: "right", fontWeight: 700 }}>{r.already ? <span style={{ color: "#047857" }}>✓ posted</span> : !r.configured ? <span style={{ color: "#9CA3AF" }}>set a life</span> : !r.started ? <span style={{ color: "#9CA3AF" }}>not started</span> : fmtAED(r.amount)}</td>
+            </tr>)}
+          </tbody>
+          <tfoot><tr><td colSpan={7} style={{ ...C.td, fontWeight: 800 }}>Total for {month}</td><td style={{ ...C.td, textAlign: "right", fontWeight: 800 }}>{fmtAED(total)}</td></tr></tfoot>
+        </table>
+        {missing.length > 0 && <div style={{ fontSize: 11.5, color: "#6B7280", marginTop: 8 }}>Will create: {missing.map(a => `${a.code} ${a.name}`).join(", ")}.</div>}
+      </div>
+      <div style={C.mftr}>
+        <button style={C.btn("secondary")} onClick={onClose}>Close</button>
+        <button style={C.btn("secondary")} onClick={saveCfg}>Save settings</button>
+        {canPost && <button style={C.btn()} disabled={busy || !total} onClick={() => guard(post)}>{busy ? "Posting…" : `Post depreciation (${fmtAED(total)})`}</button>}
+      </div>
+    </div>
+  </div>;
+}
+
+function COAPage({ accounts, setAccounts, ledger, userRole, txns, settings, setSettings, postWithApproval }) {
+  const [showDep, setShowDep] = useState(false);
   const [show, setShow] = useState(false);
   const [edit, setEdit] = useState(null);
+  const usage = useMemo(() => accountUsage(txns), [txns]);
   const [filter, setFilter] = usePersistedState("coa_filter", "All");
   const empty = { code: "", name: "", type: "Expense", isBank: false, isCash: false, isOutputVAT: false, isInputVAT: false };
 
@@ -3620,14 +3763,25 @@ function COAPage({ accounts, setAccounts, ledger, userRole }) {
   }, []);
 
   const save = (a) => {
-    if (!a.code || !a.name) { toast("Code and name required", "warning"); return; }
-    if (a.id) setAccounts(prev => prev.map(x => x.id === a.id ? a : x));
-    else setAccounts(prev => [...prev, { ...a, id: "a" + a.code }]);
+    const original = a.id ? accounts.find(x => x.id === a.id) || null : null;
+    const draft = { ...a, code: String(a.code || "").trim(), name: String(a.name || "").trim() };
+    const err = validateAccountSave({ draft, original, accounts, usage });
+    if (err) { toast(err, "warning"); return; }
+    if (original) setAccounts(prev => prev.map(x => x.id === draft.id ? draft : x));
+    else {
+      // id "a"+code can still be taken by an account that was renumbered (id a5100,
+      // code 5101): a collision would overwrite that account's Firestore doc.
+      let id = "a" + draft.code;
+      if (accounts.some(x => x.id === id)) id = id + "-" + uid().slice(1);
+      setAccounts(prev => [...prev, { ...draft, id }]);
+    }
     setShow(false); setEdit(null);
     toast("Account saved", "success");
   };
 
   const deleteAccount = (a) => {
+    const err = validateAccountDelete({ account: a, usage });
+    if (err) { toast(err, "warning"); return; }
     if (!confirm(`Delete account "${a.code} — ${a.name}"? This cannot be undone.`)) return;
     setAccounts(prev => prev.filter(x => x.id !== a.id));
     toast("Account deleted", "success");
@@ -3642,8 +3796,10 @@ function COAPage({ accounts, setAccounts, ledger, userRole }) {
         <option value="All">All Types</option>
         {ACCT_TYPES.map(t => <option key={t}>{t}</option>)}
       </Sel>
+      {hasPermission(userRole, 'accounting.read') && <button style={C.btn("secondary")} onClick={() => setShowDep(true)}>🏷 Depreciation</button>}
       {hasPermission(userRole, 'canManageAccounts') && <button style={C.btn()} onClick={() => { setEdit(null); setShow(true); }}>+ Add Account</button>}
     </PageHeader>
+    {showDep && <DepreciationModal accounts={accounts} txns={txns} settings={settings} setSettings={setSettings} postWithApproval={postWithApproval} userRole={userRole} onClose={() => setShowDep(false)} />}
 
     <div style={C.card}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -3661,10 +3817,12 @@ function COAPage({ accounts, setAccounts, ledger, userRole }) {
               <td style={{ ...C.td, whiteSpace: "nowrap" }}>
                 {hasPermission(userRole, 'canManageAccounts') && <>
                   <button style={C.btn("secondary", true)} onClick={() => { setEdit(a); setShow(true); }}>Edit</button>
-                  {bal === 0
-                    ? <button style={{ ...C.btn("danger", true), marginLeft: 6 }} onClick={() => deleteAccount(a)}>Delete</button>
-                    : <button disabled title="Cannot delete: account has a non-zero balance" style={{ ...C.btn("danger", true), marginLeft: 6, opacity: 0.35, cursor: "not-allowed" }}>Delete</button>
-                  }
+                  {(() => {
+                    const why = validateAccountDelete({ account: a, usage });
+                    return !why
+                      ? <button style={{ ...C.btn("danger", true), marginLeft: 6 }} onClick={() => deleteAccount(a)}>Delete</button>
+                      : <button disabled title={why} style={{ ...C.btn("danger", true), marginLeft: 6, opacity: 0.35, cursor: "not-allowed" }}>Delete</button>;
+                  })()}
                 </>}
               </td>
             </tr>;
@@ -3678,9 +3836,19 @@ function COAPage({ accounts, setAccounts, ledger, userRole }) {
         <div style={C.mhdr}><span style={{ fontWeight: 700 }}>{edit?.id ? "Edit" : "New"} Account</span><button onClick={() => setShow(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button></div>
         <div style={C.mbdy}>
           <div style={C.fg}>
-            <div><label style={C.label}>Account Code</label><Inp value={(edit || empty).code} onChange={e => setEdit(p => ({ ...(p || empty), code: e.target.value }))} /></div>
-            <div><label style={C.label}>Account Name</label><Inp value={(edit || empty).name} onChange={e => setEdit(p => ({ ...(p || empty), name: e.target.value }))} /></div>
-            <div><label style={C.label}>Type</label><Sel value={(edit || empty).type} onChange={e => setEdit(p => ({ ...(p || empty), type: e.target.value }))}>{ACCT_TYPES.map(t => <option key={t}>{t}</option>)}</Sel></div>
+            {(() => {
+              // Code and type freeze once lines post to the account (and system codes never renumber).
+              const used = edit?.id ? (usage.get(edit.id) || 0) : 0;
+              const orig = edit?.id ? accounts.find(x => x.id === edit.id) : null;
+              const codeLocked = used > 0 || (orig && ENGINE_ACCOUNT_CODES.includes(orig.code));
+              return <>
+                <div><label style={C.label}>Account Code</label><Inp disabled={codeLocked} value={(edit || empty).code} onChange={e => setEdit(p => ({ ...(p || empty), code: e.target.value }))} />
+                  {codeLocked && <div style={{ fontSize: 11, color: "#6B7280", marginTop: 3 }}>🔒 {used > 0 ? `${used} ledger line(s) post here` : "System account"} — code is fixed.</div>}</div>
+                <div><label style={C.label}>Account Name</label><Inp value={(edit || empty).name} onChange={e => setEdit(p => ({ ...(p || empty), name: e.target.value }))} /></div>
+                <div><label style={C.label}>Type</label><Sel disabled={used > 0} value={(edit || empty).type} onChange={e => setEdit(p => ({ ...(p || empty), type: e.target.value }))}>{ACCT_TYPES.map(t => <option key={t}>{t}</option>)}</Sel>
+                  {used > 0 && <div style={{ fontSize: 11, color: "#6B7280", marginTop: 3 }}>🔒 Type is fixed once entries post here.</div>}</div>
+              </>;
+            })()}
             <div><label style={C.label}>Account Type Flag</label>
               <Sel value={(edit || empty).isBank ? "bank" : (edit || empty).isCash ? "cash" : "none"}
                 onChange={e => setEdit(p => ({ ...(p || empty), isBank: e.target.value === "bank", isCash: e.target.value === "cash" }))}>
@@ -3700,7 +3868,10 @@ function COAPage({ accounts, setAccounts, ledger, userRole }) {
 // ╔══════════════════════════════════════════════════╗
 //  REPORTS PAGE
 // ╚══════════════════════════════════════════════════╝
-function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn, journal, userRole }) {
+function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, postWithApproval, deleteTxn, journal, userRole, userEmail, settings }) {
+  const [postBusy, guardPost] = useSubmitGuard(); // one journal entry per click
+  const attCounts = useAttachmentCounts("txn");
+  const [attFor, setAttFor] = useState(null);
   const [show, setShow] = useState(false);
   const [editTxnId, setEditTxnId] = useState("");
   const [filter, setFilter] = usePersistedState("journal_filter", "All");
@@ -3761,8 +3932,10 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
     if (lines.length < 2) { toast("Need at least 2 lines", "warning"); return; }
     try {
       const txn = journal.post({ date: form.date, description: form.description, ref: `JV-${Date.now().toString(36).toUpperCase()}`, counterparty: form.counterparty, tags: "manual", txnType: "JV", commit: false, lines: lines.map(l => ({ id: uid(), accountId: l.accountId, debit: toCents(l.debit || 0), credit: toCents(l.credit || 0), memo: l.memo || "" })) });
-      await persistTxn(txn);
-      toast("Journal entry posted!", "success");
+      const res = await postWithApproval([txn], { scope: "journal", summary: `Journal: ${form.description || "manual entry"}` });
+      toast(res.status === "pending"
+        ? `Sent for approval — ${fmtAED(approvalAmountCents([txn]))} is above your journal limit. It posts once approved (see Approvals).`
+        : "Journal entry posted!", res.status === "pending" ? "info" : "success");
       setShow(false);
       setForm({ date: todayStr(), description: "", counterparty: "", lines: [{ accountId: "", debit: 0, credit: 0, memo: "" }, { accountId: "", debit: 0, credit: 0, memo: "" }] });
     } catch (err) { toast(err.message, "error"); }
@@ -3770,6 +3943,7 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
 
   const handleReverse = async (txnId) => {
     const target = txns.find(t => t.id === txnId);
+    if (target && (target.txnType === "IN" || target.txnType === "CN")) { toast("Invoice entries are reversed by issuing a credit note on the Invoices page", "warning"); return; }
     if (target && target.reversesTxnId) { toast("This entry is itself a reversal — it can't be reversed", "warning"); return; }
     if (txns.some(t => t.reversesTxnId === txnId && !t.isVoid)) { toast("This transaction has already been reversed", "warning"); return; }
     if (!confirm("Create a reversal entry?\n\nA dated contra entry will be posted that offsets the original. Both stay visible and net to zero.")) return;
@@ -3861,7 +4035,17 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
               const unpaidAccrual = accrualIsUnpaid(t, txns);
               const isReversalRow = t.statusLabel === "Reversal";
               const canEditReverse = t.statusLabel === "Posted";        // Edit / Reverse only on live, un-reversed entries
-              const canDelete = t.statusLabel === "Posted" || isReversalRow; // deleting a reversal cleanly un-offsets the original
+              // Closed period: no edit/delete. Reverse stays — the contra entry is
+              // dated today, in an open period, which is the correct way to fix it.
+              const periodLocked = isTxnLocked(t, settings);
+              // A tax invoice's receivable entry and its credit note's mirror are
+              // owned by the invoice: they change only through the Invoices page
+              // (issue → credit note), or the document and the ledger disagree.
+              const ownedByInvoice = t.txnType === "IN" || t.txnType === "CN";
+              const reconciledRow = isTxnReconciled(t);
+              const canEdit = canEditReverse && !periodLocked && !ownedByInvoice && !reconciledRow;
+              const canReverse = canEditReverse && !ownedByInvoice;
+              const canDelete = (t.statusLabel === "Posted" || isReversalRow) && !periodLocked && !ownedByInvoice && !reconciledRow; // deleting a reversal cleanly un-offsets the original
               const statusBadge = t.statusLabel === "VOID" ? "danger" : t.statusLabel === "Reversed" ? "warning" : t.statusLabel === "Reversal" ? "neutral" : "success";
               return <tr key={t.id} style={{ opacity: (t.isVoid || t.statusLabel === "Reversed") ? 0.5 : 1 }}>
                 <td style={{ ...C.td, ...journalCol.date }}>{fmtDate(t.date)}</td>
@@ -3879,13 +4063,16 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
                 <td style={{ ...C.td, ...journalCol.description }} title={t.description || ""}>{t.description || "—"}</td>
                 <td style={{ ...C.td, ...journalCol.party }} title={t.counterparty || ""}>{t.counterparty || "—"}</td>
                 <td style={{ ...C.td, ...journalCol.amount, color: accrualColor(t, txns), fontWeight: unpaidAccrual ? 700 : undefined }}>{fmtAED(t.totalDr)}</td>
-                <td style={{ ...C.td, ...journalCol.status }}><span style={C.badge(statusBadge)}>{t.statusLabel}</span></td>
+                <td style={{ ...C.td, ...journalCol.status }}><span style={C.badge(statusBadge)}>{t.statusLabel}</span>{periodLocked && <span title={`Closed period — locked through ${fmtDate(periodLockDate(settings))}`} style={{ marginLeft: 4 }}>🔒</span>}{reconciledRow && <span title={`Reconciled to the bank statement ending ${fmtDate(t.statement_to || "")}`} style={{ marginLeft: 4 }}>✔︎🏦</span>}</td>
                 <td style={{ ...C.td, ...journalCol.actions }}>
-                  {canEditReverse && hasPermission(userRole, 'canEditTxns') && <button style={{ ...C.btn("secondary", true), marginRight: 4 }} onClick={() => setEditTxnId(t.id)}>Edit</button>}
+                  {canEdit && hasPermission(userRole, 'canEditTxns') && <button style={{ ...C.btn("secondary", true), marginRight: 4 }} onClick={() => setEditTxnId(t.id)}>Edit</button>}
                   {hasPermission(userRole, 'canVoidTxns') && <>
-                    {canEditReverse && <button style={{ ...C.btn("danger", true), marginRight: 4, background: "#D97706" }} onClick={() => handleReverse(t.id)}>Reverse</button>}
+                    {canReverse && <button style={{ ...C.btn("danger", true), marginRight: 4, background: "#D97706" }} onClick={() => handleReverse(t.id)}>Reverse</button>}
+                    {ownedByInvoice && <span title="Managed from the Invoices page — cancel an invoice with a credit note" style={{ fontSize: 11, color: "#6B7280" }}>🧾 via Invoices</span>}
                     {canDelete && <button style={C.btn("danger", true)} onClick={() => handleDelete(t.id)}>Delete</button>}
                   </>}
+                  {/* Attachments are for everyone who can see the entry — not only users who may void it. */}
+                  <button title="Attachments" style={{ ...C.btn("secondary", true), marginLeft: 4 }} onClick={() => setAttFor(t)}>📎{attCounts.get(t.id) ? ` ${attCounts.get(t.id)}` : ""}</button>
                 </td>
               </tr>;
             })}
@@ -3893,6 +4080,8 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
         </table>
       </div>
     </div>
+
+    {attFor && <AttachmentsModal parentType="txn" parentId={attFor.id} title={`${attFor.ref || ""} ${attFor.description || ""}`.trim()} userRole={userRole} userEmail={userEmail} onClose={() => setAttFor(null)} />}
 
     {show && <div style={C.modal} onClick={() => setShow(false)}>
       <div style={C.mbox(760)} onClick={e => e.stopPropagation()}>
@@ -3929,7 +4118,7 @@ function JournalPageV2({ accounts, txns, setTxns, saveTxn, persistTxn, deleteTxn
             </span>
           </div>
         </div>
-        <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn("success")} onClick={handlePost}>Post Journal</button></div>
+        <div style={C.mftr}><button style={C.btn("secondary")} onClick={() => setShow(false)}>Cancel</button><button style={C.btn("success")} disabled={postBusy} onClick={() => guardPost(handlePost)}>{postBusy ? "⏳ Posting…" : "Post Journal"}</button></div>
       </div>
     </div>}
 
@@ -3949,14 +4138,20 @@ function ReportsPage({ accounts, txns, settings }) {
 
   // Date-filtered transactions and ledger (P&L, TB, GL) — within the from→to range
   const filteredTxns = useMemo(() => txns.filter(t => (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to)), [txns, dateFilter]);
-  const filteredLedger = useMemo(() => buildLedger(filteredTxns, accounts), [filteredTxns, accounts]);
+  // Period ledger (P&L, TB, Equity movement, Notes) leaves out year-end closing
+  // entries, or a closed year would report zero profit. Balances (to-date,
+  // opening) keep them. GL and Cash Flow show every entry.
+  const filteredLedger = useMemo(() => buildLedger(withoutClosing(filteredTxns), accounts), [filteredTxns, accounts]);
 
   // To-date ledger — all transactions UP TO the selected end date (Balance Sheet)
   const toDateTxns = useMemo(() => txns.filter(t => !dateFilter.to || (t.date || "") <= dateFilter.to), [txns, dateFilter.to]);
   const toDateLedger = useMemo(() => buildLedger(toDateTxns, accounts), [toDateTxns, accounts]);
 
   // Opening ledger — all transactions BEFORE the start of the period (for CF, Equity opening balances)
-  const openingTxns = useMemo(() => txns.filter(t => !dateFilter.from || (t.date || "") < dateFilter.from), [txns, dateFilter.from]);
+  // With no start date the period begins at the start of the books, so there is
+  // NOTHING before it. (Previously "no from" kept every txn, so the opening
+  // balance equalled the closing one and the movement was counted twice.)
+  const openingTxns = useMemo(() => dateFilter.from ? txns.filter(t => (t.date || "") < dateFilter.from) : [], [txns, dateFilter.from]);
   const openingLedger = useMemo(() => buildLedger(openingTxns, accounts), [openingTxns, accounts]);
 
   // P&L totals
@@ -3968,12 +4163,13 @@ function ReportsPage({ accounts, txns, settings }) {
   // Comparative period — the corresponding period of the immediately preceding
   // financial year (interim reporting mandates a side-by-side prior-year column,
   // IAS 34). We shift the from/to bounds back one year and re-derive the ledger.
-  const shiftYear = (ds, n) => ds && ds.length >= 4 ? (String(Number(ds.slice(0, 4)) + n) + ds.slice(4)) : ds;
-  const priorFrom = shiftYear(dateFilter.from, -1);
-  const priorTo   = shiftYear(dateFilter.to, -1);
-  const hasComparative = !!(dateFilter.from || dateFilter.to);
-  const priorTxns   = useMemo(() => txns.filter(t => (!priorFrom || (t.date || "") >= priorFrom) && (!priorTo || (t.date || "") <= priorTo)), [txns, priorFrom, priorTo]);
-  const priorLedger = useMemo(() => buildLedger(priorTxns, accounts), [priorTxns, accounts]);
+  // Only a COMPLETE period has a like-for-like prior period. With one bound
+  // missing, the "prior" ledger was cumulative history vs. a bounded current one.
+  const hasComparative = !!(dateFilter.from && dateFilter.to);
+  const priorFrom = hasComparative ? shiftIsoYears(dateFilter.from, -1) : "";
+  const priorTo   = hasComparative ? shiftIsoYears(dateFilter.to, -1) : "";
+  const priorTxns   = useMemo(() => hasComparative ? txns.filter(t => (t.date || "") >= priorFrom && (t.date || "") <= priorTo) : [], [txns, priorFrom, priorTo, hasComparative]);
+  const priorLedger = useMemo(() => buildLedger(withoutClosing(priorTxns), accounts), [priorTxns, accounts]);
   const priorTotalRev = revenues.reduce((s, a) => s + accountBalance(a, priorLedger), 0);
   const priorTotalExp = expenses.reduce((s, a) => s + accountBalance(a, priorLedger), 0);
   const curYearLabel   = (dateFilter.to || dateFilter.from || "").slice(0, 4) || "Current";
@@ -4177,6 +4373,9 @@ function VATPage({ accounts, txns, ledger, settings }) {
   const outputVATA = accounts.find(a => a.isOutputVAT);
   const inputVATA = accounts.find(a => a.isInputVAT);
   const inDateRange = t => (!dateFilter.from || (t.date || "") >= dateFilter.from) && (!dateFilter.to || (t.date || "") <= dateFilter.to);
+  // Memoised: isVATSettlementTxn scans the chart per line, and both lists used to
+  // be rebuilt on every render.
+  const { settlementRows, vatRows } = useMemo(() => {
   const settlementRows = txns
     .filter(t => !t.isVoid && inDateRange(t) && isVATSettlementTxn(t, accounts))
     .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
@@ -4193,6 +4392,8 @@ function VATPage({ accounts, txns, ledger, settings }) {
       const inAmt = (t.lines || []).filter(l => l.accountId === inputVATA?.id).reduce((s, l) => s + (l.debit || 0) - (l.credit || 0), 0);
       return { ...t, outAmt, inAmt };
     });
+  return { settlementRows, vatRows };
+  }, [txns, accounts, dateFilter.from, dateFilter.to, outputVATA, inputVATA]);
   const outputVAT = vatRows.reduce((sum, row) => sum + row.outAmt, 0);
   const inputVAT = vatRows.reduce((sum, row) => sum + row.inAmt, 0);
   const netVAT = outputVAT - inputVAT;
@@ -4220,8 +4421,11 @@ function VATPage({ accounts, txns, ledger, settings }) {
     function numOnly(v) { return fmt(Math.abs(v)).replace(/^AED\s*/, ""); }
 
     // Output / input split rows
-    var outRows = vatRows.filter(function(r) { return r.outAmt > 0; });
-    var inRows  = vatRows.filter(function(r) { return r.inAmt  > 0; });
+    // Non-zero, not positive: a reversal or credit note carries NEGATIVE VAT, and
+    // dropping it from the table while keeping it in the total made the printed
+    // breakdown fail to foot.
+    var outRows = vatRows.filter(function(r) { return r.outAmt !== 0; });
+    var inRows  = vatRows.filter(function(r) { return r.inAmt  !== 0; });
 
     function escHtml(s) {
       return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -4522,7 +4726,7 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
   const totalDeals = deals.length;
   const collected = deals.filter(d => d.stage === "Commission Collected");
   const earned = deals.filter(d => ["Commission Earned", "Commission Collected"].includes(d.stage));
-  const open = deals.filter(d => !["Commission Collected"].includes(d.stage));
+  const open = deals.filter(isOpenDeal);   // excludes Cancelled — it will never pay
   const totalTV = deals.reduce((s, d) => s + (d.transaction_value || 0), 0);
   const totalEC = deals.reduce((s, d) => s + (d.expected_commission_net || 0), 0);
   const collectedEC = collected.reduce((s, d) => s + (d.expected_commission_net || 0), 0);
@@ -4618,28 +4822,42 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
   const topDeals = [...deals].sort((a, b) => (b.expected_commission_net || 0) - (a.expected_commission_net || 0)).slice(0, 6);
 
   // ── Financial P&L from transactions ─────────────
-  const accountById = new Map((accounts || []).map(a => [a.id, a]));
-  const dealPnlMap = new Map();
-  deals.forEach(d => {
-    const dTxns = (txns || []).filter(t => !t.isVoid && t.deal_id === d.id);
-    const cashInFromTxns = dTxns.filter(t => t.txnType === "SR").reduce((s, t) =>
-      s + (t.lines || []).reduce((ss, l) => {
+  // Revenue per deal = the deal's revenue-account lines (credit − debit). That
+  // is NET of VAT (the old figure was the bank receipt, 5% too high against the
+  // net broker cost), it works for cash receipts and accrual invoices alike, and
+  // reversals and credit notes subtract by themselves. One pass, memoised.
+  const accountById = useMemo(() => new Map((accounts || []).map(a => [a.id, a])), [accounts]);
+  const dealPnlMap = useMemo(() => {
+    const revenueByDeal = new Map(), brokerByDeal = new Map();
+    const reversed = reversedTxnIds(txns);
+    (txns || []).forEach(t => {
+      if (t.isVoid) return;
+      const pairSkip = isInReversedPair(t, reversed);
+      (t.lines || []).forEach(l => {
         const a = accountById.get(l.accountId);
-        return ss + (a && (a.isBank || a.isCash || a.code === "1001" || a.code === "1002") ? (l.debit || 0) : 0);
-      }, 0), 0);
-    // No linked receipt? For deals already marked "Commission Collected" the cash
-    // was collected in the past (outside the system), so fall back to the expected
-    // commission — purely a reporting figure, no bank transaction, no double-count.
-    // Mirrors the broker_paid_amount fallback used for Broker Paid just below.
-    const cashIn = cashInFromTxns > 0 ? cashInFromTxns : (d.stage === "Commission Collected" ? (d.expected_commission_net || 0) : 0);
-    const brokerPaidFromTxns = dTxns.filter(t => t.txnType === "BP").reduce((s, t) =>
-      s + (t.lines || []).reduce((ss, l) => {
-        const a = accountById.get(l.accountId);
-        return ss + (a && a.type === "Expense" ? (l.debit || 0) : 0);
-      }, 0), 0);
-    const brokerPaid = brokerPaidFromTxns > 0 ? brokerPaidFromTxns : (d.broker_paid_amount || 0);
-    dealPnlMap.set(d.id, { cashIn, brokerPaid, net: cashIn - brokerPaid });
-  });
+        if (!a) return;
+        const dealId = l.deal_id || t.deal_id;
+        if (!dealId) return;
+        if (a.type === "Revenue") revenueByDeal.set(dealId, (revenueByDeal.get(dealId) || 0) + (l.credit || 0) - (l.debit || 0));
+        // Broker cost = commission-driven expense lines on the deal from ANY entry
+        // (a direct payment, an accrual, a settlement's true-up), reversed pairs
+        // dropped — so an accrued-but-unpaid broker still costs the deal.
+        if (!pairSkip && isVariableCommissionExpense(a)) brokerByDeal.set(dealId, (brokerByDeal.get(dealId) || 0) + (l.debit || 0) - (l.credit || 0));
+      });
+    });
+    const m = new Map();
+    deals.forEach(d => {
+      const fromLedger = revenueByDeal.get(d.id) || 0;
+      // No revenue in the books? For deals marked "Commission Collected" before
+      // the system existed, fall back to the expected (net) commission — a
+      // reporting figure only. Mirrors the broker_paid_amount fallback below.
+      const cashIn = fromLedger > 0 ? fromLedger : (d.stage === "Commission Collected" ? (d.expected_commission_net || 0) : 0);
+      const brokerPaidFromTxns = brokerByDeal.get(d.id) || 0;
+      const brokerPaid = brokerPaidFromTxns > 0 ? brokerPaidFromTxns : (d.broker_paid_amount || 0);
+      m.set(d.id, { cashIn, brokerPaid, net: cashIn - brokerPaid });   // cashIn = revenue excl. VAT
+    });
+    return m;
+  }, [deals, txns, accountById]);
   const topPnlDeals = [...deals]
     .filter(d => d.stage === "Commission Collected")
     .sort((a, b) => (b.expected_commission_net || 0) - (a.expected_commission_net || 0))
@@ -4689,9 +4907,22 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
   const currQ = Math.floor(now.getMonth() / 3) + 1;
   const qBudget = (budgets || []).find(b => b.id === `budget-${now.getFullYear()}-Q${currQ}`);
   const budgetByCode = qBudget ? Object.fromEntries(qBudget.lines.map(l => [l.accountCode, Math.round(l.amount / 3)])) : {};
-  const monthExpByAcc = (accId, prefix) =>
-    (txns || []).filter(t => !t.isVoid && (t.date || "").startsWith(prefix))
-      .reduce((s, t) => s + (t.lines || []).reduce((ss, l) => l.accountId === accId && l.debit > 0 ? ss + l.debit : ss, 0), 0);
+  // Net expense per account per month (debit − credit, so a reversed or credited
+  // expense comes back out), built in ONE pass instead of re-scanning every
+  // transaction for each account × month.
+  const expByAccMonth = useMemo(() => {
+    const m = new Map();
+    (txns || []).forEach(t => {
+      if (t.isVoid || isClosingTxn(t)) return;
+      const month = (t.date || "").slice(0, 7);
+      (t.lines || []).forEach(l => {
+        const k = l.accountId + "|" + month;
+        m.set(k, (m.get(k) || 0) + (l.debit || 0) - (l.credit || 0));
+      });
+    });
+    return m;
+  }, [txns]);
+  const monthExpByAcc = (accId, prefix) => expByAccMonth.get(accId + "|" + prefix) || 0;
   const expenseAccounts = (accounts || []).filter(a => a.type === "Expense").sort((a, b) => a.code.localeCompare(b.code));
   const expenseControl = expenseAccounts.map(acc => {
     const thisM = monthExpByAcc(acc.id, currMonth);
@@ -4930,13 +5161,13 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
       <div style={{ marginBottom: 16 }} />
 
       {/* ── Deal Profitability Table ── */}
-      {sectionCard("Deal Profitability", `All Commission Collected deals (${topPnlDeals.length}) — expected commission vs cash collected vs broker paid vs net retained`,
+      {sectionCard("Deal Profitability", `All Commission Collected deals (${topPnlDeals.length}) — expected commission vs revenue booked (excl. VAT) vs broker paid vs net retained`,
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: "#F9FAFB" }}>
-                {["Property", "Stage", "Broker", "Expected Comm.", "Cash Collected", "Broker Paid", "Net Retained", "Margin"].map(h => (
-                  <th key={h} style={{ ...C.th, textAlign: ["Expected Comm.", "Cash Collected", "Broker Paid", "Net Retained", "Margin"].includes(h) ? "right" : "left" }}>{h}</th>
+                {["Property", "Stage", "Broker", "Expected Comm.", "Revenue (excl. VAT)", "Broker Cost", "Net Retained", "Margin"].map(h => (
+                  <th key={h} style={{ ...C.th, textAlign: ["Expected Comm.", "Revenue (excl. VAT)", "Broker Cost", "Net Retained", "Margin"].includes(h) ? "right" : "left" }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -4964,7 +5195,7 @@ function PerformancePage({ deals: allDeals, txns, accounts, budgets, setPage }) 
         </div>,
         null,
         () => xlsxExport("Deal Profitability", `nasama-deal-profitability-${todayStr()}.xlsx`,
-          [["Property", "Unit", "Stage", "Broker", "Expected Comm. (AED)", "Cash Collected (AED)", "Broker Paid (AED)", "Net Retained (AED)", "Margin %"],
+          [["Property", "Unit", "Stage", "Broker", "Expected Comm. (AED)", "Revenue excl. VAT (AED)", "Broker Cost (AED)", "Net Retained (AED)", "Margin %"],
             ...topPnlDeals.map(d => [d.property_name || "", d.unit_no || "", d.stage || "", d.broker_name || "",
               xAED(d.expected_commission_net || 0), xAED(d.cashIn || 0), xAED(d.brokerPaid || 0), xAED(d.net || 0),
               d.cashIn > 0 ? Math.round((d.net / d.cashIn) * 100) : ""])],
@@ -5163,6 +5394,10 @@ function BudgetPage({ accounts, txns, budgets, setBudgets, userRole, userEmail }
   const [showModal, setShowModal] = useState(false);
 
   const expenseAccounts = accounts.filter(a => a.type === "Expense").sort((a, b) => a.code.localeCompare(b.code));
+  // Budgets can also hold REVENUE targets (Insights › Budget vs actual reads
+  // them); this page stays the expense budget, so revenue lines are left out here.
+  const revenueAccounts = accounts.filter(a => a.type === "Revenue").sort((a, b) => a.code.localeCompare(b.code));
+  const expenseCodes = new Set(expenseAccounts.map(a => a.code));
 
   const quarterRange = (year, q) => ({
     from: `${year}-${String((q - 1) * 3 + 1).padStart(2, "0")}-01`,
@@ -5172,10 +5407,13 @@ function BudgetPage({ accounts, txns, budgets, setBudgets, userRole, userEmail }
   const actualsByAccount = (year, q) => {
     const { from, to } = quarterRange(year, q);
     const byCode = {};
-    txns.filter(t => !t.isVoid && t.date >= from && t.date <= to).forEach(t =>
+    const byId = new Map(accounts.map(a => [a.id, a]));
+    // Net of credits: a reversed or refunded expense no longer counts as spent.
+    txns.filter(t => !t.isVoid && !isClosingTxn(t) && t.date >= from && t.date <= to).forEach(t =>
       (t.lines || []).forEach(l => {
-        const acc = accounts.find(a => a.id === l.accountId);
-        if (acc && acc.type === "Expense") byCode[acc.code] = (byCode[acc.code] || 0) + (l.debit || 0);
+        const acc = byId.get(l.accountId);
+        if (acc && acc.type === "Expense") byCode[acc.code] = (byCode[acc.code] || 0) + (l.debit || 0) - (l.credit || 0);
+        if (acc && acc.type === "Revenue") byCode[acc.code] = (byCode[acc.code] || 0) + (l.credit || 0) - (l.debit || 0);
       })
     );
     return byCode;
@@ -5185,8 +5423,8 @@ function BudgetPage({ accounts, txns, budgets, setBudgets, userRole, userEmail }
   const currentBudget = budgets.find(b => b.id === budgetId) || null;
   const actuals = actualsByAccount(selYear, selQ);
 
-  const totalBudget = currentBudget ? currentBudget.lines.reduce((s, l) => s + (l.amount || 0), 0) : 0;
-  const totalSpent = Object.values(actuals).reduce((s, v) => s + v, 0);
+  const totalBudget = currentBudget ? currentBudget.lines.filter(l => expenseCodes.has(l.accountCode)).reduce((s, l) => s + (l.amount || 0), 0) : 0;
+  const totalSpent = Object.entries(actuals).reduce((s, [code, v]) => expenseCodes.has(code) ? s + v : s, 0);
   const totalRemaining = totalBudget - totalSpent;
   const utilPct = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
 
@@ -5200,7 +5438,7 @@ function BudgetPage({ accounts, txns, budgets, setBudgets, userRole, userEmail }
   const { from: qFrom, to: qTo } = quarterRange(selYear, selQ);
   const qLabel = `Q${selQ} ${selYear} (${fmtDate(qFrom)} — ${fmtDate(qTo)})`;
 
-  const budgetLines = currentBudget ? currentBudget.lines : [];
+  const budgetLines = currentBudget ? currentBudget.lines.filter(l => expenseCodes.has(l.accountCode)) : [];
   const budgetByCode = Object.fromEntries(budgetLines.map(l => [l.accountCode, l.amount]));
 
   const unbudgetedAccounts = expenseAccounts.filter(a => !budgetByCode[a.code] && actuals[a.code] > 0);
@@ -5356,7 +5594,7 @@ function BudgetPage({ accounts, txns, budgets, setBudgets, userRole, userEmail }
 
       {showModal && (
         <BudgetSetupModal
-          accounts={expenseAccounts}
+          accounts={[...revenueAccounts, ...expenseAccounts]}
           txns={txns}
           year={selYear}
           quarter={selQ}
@@ -5412,8 +5650,10 @@ function BudgetSetupModal({ accounts, txns, year, quarter, existing, actualsByAc
     toast(`Q${quarter} ${year} budget saved`, "success");
   };
 
-  const totalBudget = accounts.reduce((s, a) => s + (parseFloat(amounts[a.code]) || 0), 0);
-  const totalLastYear = Object.values(lastYearActuals).reduce((s, v) => s + v, 0) / 100;
+  // Totals are the EXPENSE budget — revenue targets are listed but not added in.
+  const expenseAccts = accounts.filter(a => a.type === "Expense");
+  const totalBudget = expenseAccts.reduce((s, a) => s + (parseFloat(amounts[a.code]) || 0), 0);
+  const totalLastYear = expenseAccts.reduce((s, a) => s + (lastYearActuals[a.code] || 0), 0) / 100;
   const hasLastYearData = Object.values(lastYearActuals).some(v => v > 0);
 
   return (
@@ -5453,7 +5693,7 @@ function BudgetSetupModal({ accounts, txns, year, quarter, existing, actualsByAc
                   const ly = lastYearActuals[a.code] || 0;
                   return (
                     <tr key={a.code}>
-                      <td style={C.td}><span style={{ fontFamily: "monospace", fontWeight: 600, marginRight: 6 }}>{a.code}</span>{a.name}</td>
+                      <td style={C.td}><span style={{ fontFamily: "monospace", fontWeight: 600, marginRight: 6 }}>{a.code}</span>{a.name}{a.type === "Revenue" && <span style={{ ...C.badge("success"), marginLeft: 6 }}>revenue target</span>}</td>
                       <td style={{ ...C.td, textAlign: "right", color: ly > 0 ? "#374151" : "#9CA3AF" }}>
                         {ly > 0 ? fmtAED(ly) : "—"}
                       </td>
@@ -5474,7 +5714,7 @@ function BudgetSetupModal({ accounts, txns, year, quarter, existing, actualsByAc
               </tbody>
               <tfoot>
                 <tr style={{ background: "#F9FAFB" }}>
-                  <td style={{ ...C.td, fontWeight: 700 }}>Total</td>
+                  <td style={{ ...C.td, fontWeight: 700 }}>Total expenses</td>
                   <td style={{ ...C.td, textAlign: "right", fontWeight: 600, color: "#6B7280" }}>{totalLastYear > 0 ? fmtAED(totalLastYear * 100) : "—"}</td>
                   <td style={{ ...C.td, textAlign: "right", fontWeight: 700, color: NAVY }}>{fmtAED(totalBudget * 100)}</td>
                 </tr>
@@ -5491,7 +5731,30 @@ function BudgetSetupModal({ accounts, txns, year, quarter, existing, actualsByAc
   );
 }
 
-function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn, persistTxn }) {
+function SettingsPage({ settings, setSettings, userRole, userEmail, accounts, txns, saveTxn, persistTxn, postWithApproval, deleteTxn }) {
+  // ── Year-end close (Stage 6.4) ──
+  const [closeYear, setCloseYear] = useState(() => String(new Date().getFullYear() - 1));
+  const [closeBusy, guardClose] = useSubmitGuard();
+  const closeTxnFor = y => (txns || []).find(t => !t.isVoid && txnTagList(t).includes(`close-${y}`));
+  const closePreview = useMemo(() => {
+    try { const { accounts: chart } = withStage6Accounts(accounts, ["retained"]); return buildYearEndCloseTxn({ accounts: chart, txns, year: closeYear }); }
+    catch (e) { return { error: e.message }; }
+  }, [accounts, txns, closeYear]);
+  const doClose = async () => {
+    if (!hasPermission(userRole, "canEditSettings")) { toast("Only an admin can close a year", "error"); return; }
+    const { accounts: chart, missing } = withStage6Accounts(accounts, ["retained"]);
+    try {
+      const { txn, profit } = buildYearEndCloseTxn({ accounts: chart, txns, year: closeYear });
+      if (!window.confirm(`Close ${closeYear}?\n\nRevenue and expenses for ${closeYear} are moved to Retained Earnings (${profit >= 0 ? "profit" : "loss"} ${fmtAED(Math.abs(profit))}) by an entry dated ${closeYear}-12-31.\n\nThe ${closeYear} P&L still reports normally — the closing entry is left out of period figures. Lock the period afterwards to protect it.`)) return;
+      const res = await postWithApproval([txn], { scope: "journal", summary: `Year-end close ${closeYear}`, patches: missing.map(a => ({ col: "accounts", id: a.id, data: a })) });
+      toast(res.status === "pending" ? "Year-end close sent for approval" : `${closeYear} closed to Retained Earnings`, res.status === "pending" ? "info" : "success");
+    } catch (e) { toast(e.message, "error"); }
+  };
+  const undoClose = async () => {
+    const t = closeTxnFor(closeYear);
+    if (!t || !window.confirm(`Reopen ${closeYear}? The closing entry ${t.ref} is deleted.`)) return;
+    try { await deleteTxn(t.id); toast(`${closeYear} reopened`, "success"); } catch (e) { toast(e.message, "error"); }
+  };
   const [s, setS] = useState(() => normalizeSettings(settings));
   const [backupStatus, setBackupStatus]     = useState("idle"); // idle | loading | done | error
   const [restorePreview, setRestorePreview] = useState(null);
@@ -5531,8 +5794,51 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
     : null;
   const showBackupWarning = daysSinceBackup === null || daysSinceBackup >= 7;
 
+  // ── Period lock ──
+  const savedLock = periodLockDate(settings);
+  const draftLock = normalizeLockDate(s.lockedThrough);
+
   const save = async () => {
-    const nextSettings = normalizeSettings(s);
+    let nextSettings = normalizeSettings(s);
+    // Period lock: only an admin may move it, and moving it BACK (reopening
+    // closed months) needs an explicit confirmation. Stamp who/when for audit.
+    const newLock = normalizeLockDate(nextSettings.lockedThrough);
+    if (newLock !== savedLock) {
+      if (!canEditOB) { toast("Only an admin can change the period lock", "error"); return; }
+      if (newLock && newLock > todayStr()) { toast("The lock date cannot be in the future", "error"); return; }
+      if (savedLock && (!newLock || newLock < savedLock) && !window.confirm(
+        `Reopen closed periods?
+
+The books are locked through ${fmtDate(savedLock)}. ` +
+        (newLock ? `Moving the lock back to ${fmtDate(newLock)}` : "Removing the lock") +
+        " allows entries in those months to be edited or deleted again. Filed VAT returns and issued reports may stop matching the ledger.")) return;
+      nextSettings = { ...nextSettings, lockedThrough: newLock, lockedBy: userEmail || "", lockedAt: new Date().toISOString() };
+    }
+    // Accrual invoicing changes WHEN revenue and VAT are recognised — an
+    // accounting-policy decision, so admin only, with a start date.
+    const savedAr = invoiceAccrualSettings(settings), draftAr = invoiceAccrualSettings(nextSettings);
+    if (savedAr.enabled !== draftAr.enabled || savedAr.from !== draftAr.from) {
+      if (!canEditOB) { toast("Only an admin can change accrual invoicing", "error"); return; }
+      if (draftAr.enabled && !draftAr.from) { toast("Choose the date accrual invoicing starts from", "error"); return; }
+      if (draftAr.enabled && !window.confirm(
+        `Turn on accrual invoicing from ${fmtDate(draftAr.from)}?\n\n` +
+        "Every tax invoice dated on or after that date will post Commission Receivable, revenue and output VAT when it is ISSUED. " +
+        "Receipts against those invoices will only clear the receivable.\n\n" +
+        "Invoices dated earlier stay on the cash basis. Agree this with your accountant first.")) return;
+      nextSettings = { ...nextSettings, arInvoicing: { enabled: draftAr.enabled, from: draftAr.from, changedBy: userEmail || "", changedAt: new Date().toISOString() } };
+    }
+    // The opening-balance entry is dated at the reporting start, so a lock almost
+    // always covers it. Refuse the rewrite up front, before settings are written.
+    const obTxn = (txns || []).find(t => (t.tags || "").includes("opening-balance") && !t.isVoid);
+    const writesOB = obTxn ? obUnlocked : toCents(nextSettings.openingBalance) > 0;
+    if (writesOB) {
+      const lockFor = { lockedThrough: newLock };
+      const obDate = obTxn ? obTxn.date : nextSettings.openingBalanceDate;
+      if (isDateLocked(obDate, lockFor) || isDateLocked(nextSettings.openingBalanceDate, lockFor)) {
+        toast(`The opening balance is dated inside the closed period (locked through ${fmtDate(newLock)}). Reopen the period first.`, "error");
+        return;
+      }
+    }
     setSettings(nextSettings);
     try {
       const writes = [window.fsSaveSettings(nextSettings)];
@@ -5571,6 +5877,9 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
       }
       await Promise.all(writes);
       setObUnlocked(false);
+      if (newLock !== savedLock && typeof logAudit === "function") {
+        logAudit("periodLockChanged", { from: savedLock || "(none)", to: newLock || "(none)" }, userRole?.roleId || userRole, userEmail).catch(() => {});
+      }
       toast("Settings saved", "success");
     } catch (err) {
       toast("Save failed: " + err.message, "error");
@@ -5733,6 +6042,69 @@ function SettingsPage({ settings, setSettings, userRole, accounts, txns, saveTxn
           </div>
           {canEditOB && <button style={{ ...C.btn("secondary", true), marginTop: 10 }} onClick={handleUnlockOB}>🔓 Unlock to edit (admin)</button>}
         </>}
+      </div>
+      {/* ── Invoicing basis ── */}
+      <div style={{ borderTop: "1px solid #E5E7EB", marginTop: 20, paddingTop: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <span style={{ fontSize: 14, fontWeight: 700 }}>🧾 Invoicing basis</span>
+          {invoiceAccrualSettings(settings).enabled
+            ? <span style={{ fontSize: 11, fontWeight: 700, color: "#047857", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 999, padding: "2px 9px" }}>Accrual from {fmtDate(invoiceAccrualSettings(settings).from)}</span>
+            : <span style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", background: "#F3F4F6", border: "1px solid #E5E7EB", borderRadius: 999, padding: "2px 9px" }}>Cash basis</span>}
+        </div>
+        {canEditOB ? <div style={C.fg}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+            <input type="checkbox" checked={!!(s.arInvoicing && s.arInvoicing.enabled)} onChange={e => setS(p => ({ ...p, arInvoicing: { ...(p.arInvoicing || {}), enabled: e.target.checked } }))} />
+            Book revenue and VAT when a tax invoice is issued
+          </label>
+          <div><label style={C.label}>Starting from invoices dated</label><Inp type="date" value={(s.arInvoicing && s.arInvoicing.from) || ""} onChange={e => setS(p => ({ ...p, arInvoicing: { ...(p.arInvoicing || {}), from: e.target.value } }))} /></div>
+        </div> : <div style={lockedField}>{invoiceAccrualSettings(settings).enabled ? `Accrual from ${fmtDate(invoiceAccrualSettings(settings).from)}` : "Cash basis"}</div>}
+        <div style={{ fontSize: 12, color: "#6B7280", marginTop: 8, lineHeight: 1.6 }}>
+          <strong>Cash basis</strong> (default): revenue and output VAT are booked when the commission is received. <strong>Accrual</strong>: they are booked on the tax invoice date —
+          the UAE VAT tax point — and appear as Commission Receivable (1100) until collected. Only invoices dated on or after the start date use it.
+        </div>
+      </div>
+
+      {/* ── Year-end close ── */}
+      <div style={{ borderTop: "1px solid #E5E7EB", marginTop: 20, paddingTop: 20 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>📕 Year-end close</div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <Sel value={closeYear} onChange={e => setCloseYear(e.target.value)}>
+            {Array.from({ length: 6 }, (_, i) => String(new Date().getFullYear() - i)).map(y => <option key={y} value={y}>{y}</option>)}
+          </Sel>
+          {closeTxnFor(closeYear)
+            ? <><span style={{ fontSize: 12.5, color: "#047857", fontWeight: 700 }}>✓ Closed — {closeTxnFor(closeYear).ref}</span>
+                {hasPermission(userRole, "canEditSettings") && <button style={C.btn("secondary", true)} onClick={undoClose}>Reopen</button>}</>
+            : <>
+                <span style={{ fontSize: 12.5, color: "#6B7280" }}>{closePreview.error ? closePreview.error : `${closePreview.profit >= 0 ? "Profit" : "Loss"} to close: ${fmtAED(Math.abs(closePreview.profit))}`}</span>
+                {hasPermission(userRole, "canEditSettings") && !closePreview.error && <button style={C.btn("secondary", true)} disabled={closeBusy} onClick={() => guardClose(doClose)}>Close {closeYear}</button>}
+              </>}
+        </div>
+        <div style={{ fontSize: 12, color: "#6B7280", marginTop: 8, lineHeight: 1.6 }}>
+          Moves a finished year's profit from the P&amp;L accounts into 3002 Retained Earnings. Reports for that year are unchanged (the closing entry is excluded from period figures); the Balance Sheet then shows the profit inside Retained Earnings.
+        </div>
+      </div>
+
+      {/* ── Period Lock ── */}
+      <div style={{ borderTop: "1px solid #E5E7EB", marginTop: 20, paddingTop: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <span style={{ fontSize: 14, fontWeight: 700 }}>🔒 Period Lock</span>
+          {savedLock
+            ? <span style={{ fontSize: 11, fontWeight: 700, color: "#047857", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 999, padding: "2px 9px" }}>Closed through {fmtDate(savedLock)}</span>
+            : <span style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", background: "#F3F4F6", border: "1px solid #E5E7EB", borderRadius: 999, padding: "2px 9px" }}>No periods closed</span>}
+        </div>
+        {canEditOB ? <>
+          <div style={C.fg}>
+            <div><label style={C.label}>Books closed through</label><Inp type="date" value={draftLock} max={todayStr()} onChange={e => setS(p => ({ ...p, lockedThrough: e.target.value }))} /></div>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+              {draftLock && <button style={C.btn("secondary", true)} onClick={() => setS(p => ({ ...p, lockedThrough: "" }))}>Clear lock</button>}
+            </div>
+          </div>
+        </> : <div style={lockedField}>{savedLock ? fmtDate(savedLock) : "Not set"}</div>}
+        <div style={{ fontSize: 12, color: "#6B7280", marginTop: 8, lineHeight: 1.6 }}>
+          No transaction dated on or before this date can be posted, edited or deleted, from any screen. Correct a closed month with a <strong>reversal</strong> dated in an open period. Set it after each VAT return is filed or each month is closed.
+          {settings?.lockedBy && savedLock && <span> Last changed by {settings.lockedBy}{settings.lockedAt ? ` on ${fmtDate(String(settings.lockedAt).slice(0, 10))}` : ""}.</span>}
+          {!canEditOB && " Only an admin can change it."}
+        </div>
       </div>
       <div style={{ marginTop: 20 }}><button style={C.btn()} onClick={save}>💾 Save Settings</button></div>
 
@@ -6230,7 +6602,9 @@ function AuthGate({ children }) {
     const permissions = roleId === "admin" || legacyRole === "admin"
       ? sanitizeRolePermissions(getDefaultSecurityTemplate("admin")?.permissions || {})
       : sanitizeRolePermissions(sessionUser?.permissions || template?.permissions || {});
-    return { email: normalizeUserEmail(sessionUser?.email), roleId, legacyRole, permissions, templateName: template?.name || roleId };
+    // approvalLimits (AED, per user) drive the approval workflow: blank = no limit.
+    return { email: normalizeUserEmail(sessionUser?.email), roleId, legacyRole, permissions, templateName: template?.name || roleId,
+             approvalLimits: sessionUser?.approvalLimits || {} };
   };
 
   const finishLogin = (sessionUser) => {
@@ -6400,6 +6774,92 @@ function AuthGate({ children }) {
 // ╔══════════════════════════════════════════════════╗
 //  SIDEBAR ICON — Lucide-style 18 × 18, round caps
 // ╚══════════════════════════════════════════════════╝
+// ╔══════════════════════════════════════════════════╗
+//  APPROVALS — payments / journals above a user's posting limit
+// ╚══════════════════════════════════════════════════╝
+function ApprovalsPage({ approvalRequests, approvalPolicies, decideApproval, withdrawApproval, accounts, userRole, userEmail }) {
+  const [tab, setTab] = useState("pending");
+  const [busyId, setBusyId] = useState("");
+  const acctLabel = id => { const a = (accounts || []).find(x => x.id === id); return a ? `${a.code} — ${a.name}` : id; };
+  const me = normalizeUserEmail(userEmail);
+  const all = [...(approvalRequests || [])].sort((a, b) => String(b.requestedAt || "").localeCompare(String(a.requestedAt || "")));
+  const pending = all.filter(r => (r.status || "pending") === "pending");
+  const decided = all.filter(r => (r.status || "pending") !== "pending").slice(0, 100);
+  const canDecide = r => !approvalDecisionBlocker({ access: userRole, email: userEmail, request: r, policies: approvalPolicies });
+  const awaitingMe = pending.filter(canDecide);
+  const mine = pending.filter(r => normalizeUserEmail(r.requestedBy) === me);
+  const rows = tab === "pending" ? pending : decided;
+  const limitsSet = (approvalPolicies || []).some(p => p.active !== false);
+
+  const act = async (r, kind) => {
+    let note = "";
+    if (kind === "reject") { note = window.prompt("Reason for rejecting (sent back to the requester):", "") ?? null; if (note === null) return; }
+    if (kind === "approve" && !window.confirm(`Approve and post ${fmtAED(r.amountCents)}?\n\n${r.summary || ""}\n\nThe entries go straight to the ledger.`)) return;
+    if (kind === "withdraw" && !window.confirm("Withdraw this request? Nothing is posted.")) return;
+    setBusyId(r.id);
+    try {
+      if (kind === "withdraw") await withdrawApproval(r);
+      else await decideApproval(r, kind, note);
+      toast(kind === "approve" ? "Approved — entries posted to the ledger" : kind === "reject" ? "Request rejected" : "Request withdrawn", "success");
+    } catch (e) { toast(e.message, "error"); }
+    finally { setBusyId(""); }
+  };
+  const statusBadge = st => st === "approved" ? "success" : st === "rejected" ? "danger" : st === "withdrawn" ? "neutral" : "warning";
+
+  return <div>
+    <PageHeader title="Approvals" sub={`${pending.length} pending · ${awaitingMe.length} waiting for you · ${mine.length} of yours`} />
+    <div style={{ ...C.card, padding: 14, marginBottom: 14, fontSize: 12.5, color: "#475467", lineHeight: 1.6 }}>
+      Payments, broker payouts and manual journals above the poster's limit wait here and <strong>do not touch the ledger</strong> until approved.
+      Limits are set per user in <strong>User Management</strong> (blank = no limit); who may approve is set by the <strong>Approval Rules</strong> there.
+      Admins can approve anything. Nobody approves their own request.
+      {!limitsSet && <span style={{ color: "#B45309" }}> No approval rules are active yet, so only an admin can approve.</span>}
+    </div>
+    <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+      {[["pending", `Pending (${pending.length})`], ["history", "History"]].map(([k, l]) =>
+        <button key={k} style={C.btn(tab === k ? "primary" : "secondary", true)} onClick={() => setTab(k)}>{l}</button>)}
+    </div>
+    {rows.length === 0 && <div style={{ ...C.card, padding: 32, textAlign: "center", color: "#9CA3AF" }}>{tab === "pending" ? "Nothing waiting for approval." : "No decided requests yet."}</div>}
+    {rows.map(r => {
+      const st = r.status || "pending";
+      const blocker = approvalDecisionBlocker({ access: userRole, email: userEmail, request: r, policies: approvalPolicies });
+      const isMine = normalizeUserEmail(r.requestedBy) === me;
+      const lines = (r.txns || []).flatMap(t => (t.lines || []).map(l => ({ ...l, _ref: t.ref, _date: t.date })));
+      return <div key={r.id} style={{ ...C.card, padding: 16, marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
+          <div>
+            <div style={{ fontWeight: 700, color: NAVY, fontSize: 14 }}>{r.summary || (APPROVAL_SCOPES[r.scope] || {}).label || "Request"}</div>
+            <div style={{ fontSize: 12, color: "#6B7280", marginTop: 3 }}>
+              {(APPROVAL_SCOPES[r.scope] || {}).label || r.scope} · dated {fmtDate((r.txns || [])[0]?.date)} · requested by {r.requestedBy || "—"} on {fmtDate(String(r.requestedAt || "").slice(0, 10))}
+              {isFinite(r.limitCents) && r.limitCents != null && <> · their limit {fmtAED(r.limitCents)}</>}
+            </div>
+            {st !== "pending" && <div style={{ fontSize: 12, color: "#6B7280", marginTop: 3 }}>{st} by {r.decidedBy || "—"} on {fmtDate(String(r.decidedAt || "").slice(0, 10))}{r.note ? ` — “${r.note}”` : ""}</div>}
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>{fmtAED(r.amountCents)}</div>
+            <span style={C.badge(statusBadge(st))}>{st}</span>
+          </div>
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 10 }}>
+          <thead><tr><th style={C.th}>Ref</th><th style={C.th}>Account</th><th style={C.th}>Memo</th><th style={{ ...C.th, textAlign: "right" }}>Debit</th><th style={{ ...C.th, textAlign: "right" }}>Credit</th></tr></thead>
+          <tbody>{lines.map((l, i) => <tr key={i}>
+            <td style={C.td}>{l._ref || "—"}</td><td style={C.td}>{acctLabel(l.accountId)}</td><td style={C.td}>{l.memo || ""}</td>
+            <td style={{ ...C.td, textAlign: "right" }}>{l.debit ? fmtAED(l.debit) : "—"}</td><td style={{ ...C.td, textAlign: "right" }}>{l.credit ? fmtAED(l.credit) : "—"}</td>
+          </tr>)}</tbody>
+        </table>
+        {st === "pending" && <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
+          {blocker && !isMine && <span style={{ fontSize: 12, color: "#9CA3AF" }}>{blocker}</span>}
+          {isMine && <span style={{ fontSize: 12, color: "#6B7280" }}>Waiting for an approver</span>}
+          {isMine && <button style={C.btn("secondary", true)} disabled={busyId === r.id} onClick={() => act(r, "withdraw")}>Withdraw</button>}
+          {!blocker && <>
+            <button style={C.btn("danger", true)} disabled={busyId === r.id} onClick={() => act(r, "reject")}>Reject</button>
+            <button style={C.btn("success", true)} disabled={busyId === r.id} onClick={() => act(r, "approve")}>{busyId === r.id ? "⏳ Posting…" : "✅ Approve & post"}</button>
+          </>}
+        </div>}
+      </div>;
+    })}
+  </div>;
+}
+
 function SidebarIcon({ id, active }) {
   const c = active ? "#C9A044" : "#4E5E8A";
   const p = { width: 18, height: 18, fill: "none", stroke: c, strokeWidth: "1.75", strokeLinecap: "round", strokeLinejoin: "round", viewBox: "0 0 24 24", style: { flexShrink: 0, display: "block" } };
@@ -6425,6 +6885,8 @@ function SidebarIcon({ id, active }) {
     users:          <svg {...p}><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>,
     settings:       <svg {...p}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
     banana2:        <svg {...p}><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>,
+    insights:       <svg {...p}><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 00-4 12.7V17h8v-2.3A7 7 0 0012 2z"/></svg>,
+    approvals:      <svg {...p}><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>,
   };
   return icons[id] || <svg {...p}><circle cx="12" cy="12" r="9"/></svg>;
 }
@@ -6806,11 +7268,66 @@ function App({ userRole, userAccess, userEmail, signOut }) {
 
   const showSync = () => { setSyncing(true); syncCount.current++; const n = syncCount.current; setTimeout(() => { if (syncCount.current === n) setSyncing(false); }, 1800); };
 
+  // Period lock — one guard for every transactions write (see core.jsx PERIOD LOCK).
+  // firebase.js calls window.__periodLockGuard before each set/batch/delete on the
+  // transactions collection; the refs keep it reading the latest settings/txns.
+  const settingsRef = useRef(settings);
+  const txnsRef = useRef(txns);
+  const accessRef = useRef(accessSubject);
+  settingsRef.current = settings;
+  txnsRef.current = txns;
+  accessRef.current = accessSubject;
+  // The same choke point also enforces posting limits (core.jsx APPROVAL
+  // WORKFLOW): an over-limit payment/journal without an approval cannot be
+  // written from any screen. Approved entries are posted by decideApproval in a
+  // Firestore transaction and carry approval_request_id.
+  useEffect(() => {
+    window.__periodLockGuard = ({ id, next, op }) => {
+      const prev = (txnsRef.current || []).find(t => t.id === id) || null;
+      assertPeriodOpen({ prev, next: op === 'delete' ? null : next, settings: settingsRef.current });
+      assertNotReconciled({ prev, next: op === 'delete' ? null : next });
+      if (op !== 'delete') assertWithinPostingLimit({ prev, next, access: accessRef.current });
+    };
+    return () => { delete window.__periodLockGuard; };
+  }, []);
+
+  // ── Approval workflow (2.11) ──
+  const [approvalRequests, setApprovalRequests] = useState([]);
+  const [approvalPolicies, setApprovalPolicies] = useState([]);
+  const approvalPoliciesRef = useRef(approvalPolicies);
+  approvalPoliciesRef.current = approvalPolicies;
+  useEffect(() => {
+    const u1 = db.collection('approval_requests').onSnapshot(
+      snap => setApprovalRequests(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      err => console.error('approval_requests', err));
+    const u2 = db.collection('approval_policies').onSnapshot(
+      snap => setApprovalPolicies(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      err => console.error('approval_policies', err));
+    return () => { try { u1(); } catch { } try { u2(); } catch { } };
+  }, []);
+
   // Firestore write wrappers — doc-level writes to avoid whole-collection overwrites
   const fsUpdate = (col, setter, cacheKey) => (updater) => {
     setter(prev => {
       const next = typeof updater === 'function' ? updater(prev) : updater;
       if (!navigator.onLine) { toast("Offline — changes not saved", "error"); return prev; }
+      // Check the period lock BEFORE the optimistic update, so a refused write
+      // never leaves local state showing a change Firestore will not hold.
+      if (col === 'transactions') {
+        try {
+          const prevById = new Map((prev || []).map(d => [d.id, d]));
+          const nextIds = new Set((next || []).map(d => d.id));
+          (next || []).forEach(d => {
+            const old = prevById.get(d.id);
+            if (!old || JSON.stringify(old) !== JSON.stringify(d)) {
+              assertPeriodOpen({ prev: old || null, next: d, settings: settingsRef.current });
+              assertNotReconciled({ prev: old || null, next: d });
+              assertWithinPostingLimit({ prev: old || null, next: d, access: accessRef.current });
+            }
+          });
+          (prev || []).forEach(d => { if (!nextIds.has(d.id)) { assertPeriodOpen({ prev: d, settings: settingsRef.current }); assertNotReconciled({ prev: d }); } });
+        } catch (e) { toast(e.message, "error"); return prev; }
+      }
       const startedAt = new Date().toISOString();
       setWriteMeta(meta => ({ ...meta, [col]: { status: "saving", startedAt, completedAt: meta[col]?.completedAt || "", error: "" } }));
       ls_set(cacheKey, next); showSync();
@@ -6857,9 +7374,44 @@ function App({ userRole, userAccess, userEmail, signOut }) {
 
   // Ledger & Journal
   const ledger = useMemo(() => buildLedger(txns, accounts), [txns, accounts]);
+  // Writes [{ col, id, data, merge }] and gives every NEW transaction with a
+  // provisional clock ref its sequential number (core.jsx SEQUENTIAL
+  // REFERENCES), all inside one Firestore transaction with the counter doc.
+  // Returns the transaction docs as written (with their final refs). When no
+  // entry needs a number it falls back to a plain batch.
+  // `extra(tx)` lets a caller add reads/writes to the same transaction.
+  const writeTxnOps = async (ops, extra = null) => {
+    const isNew = o => o.col === 'transactions' && !(txnsRef.current || []).some(t => t.id === o.id);
+    const needsNumber = ops.some(o => isNew(o) && provisionalRefPrefix(o.data && o.data.ref));
+    if (!needsNumber && !extra) {
+      await window.fsBatchWrite(ops);
+      return ops.filter(o => o.col === 'transactions').map(o => o.data);
+    }
+    const counterRef = db.collection('meta').doc('txnRefCounters');
+    let written = [];
+    await db.runTransaction(async tx => {
+      if (extra) await extra(tx);          // reads must come before writes
+      const snap = needsNumber ? await tx.get(counterRef) : null;
+      const plan = planSequentialRefs(ops.filter(isNew).map(o => o.data), snap && snap.exists ? snap.data() : {});
+      written = [];
+      ops.forEach(o => {
+        const data = o.col === 'transactions' && plan.refs.has(o.id) ? { ...o.data, ref: plan.refs.get(o.id) } : o.data;
+        const ref = db.collection(o.col).doc(o.id);
+        if (o.merge) tx.set(ref, data, { merge: true }); else tx.set(ref, data);
+        if (o.col === 'transactions') written.push(data);
+      });
+      if (Object.keys(plan.counters).length) tx.set(counterRef, plan.counters, { merge: true });
+    });
+    return written;
+  };
+
   const persistTxn = useCallback(async (txn) => {
     if (!txn?.id) throw new Error("Transaction id is required");
     if (!navigator.onLine) throw new Error("Offline — changes not saved");
+    const prevTxn = (txnsRef.current || []).find(t => t.id === txn.id) || null;
+    assertPeriodOpen({ prev: prevTxn, next: txn, settings: settingsRef.current });
+    assertNotReconciled({ prev: prevTxn, next: txn });
+    assertWithinPostingLimit({ prev: prevTxn, next: txn, access: accessRef.current });
     const cleanTxn = JSON.parse(JSON.stringify(txn));
 
     const startedAt = new Date().toISOString();
@@ -6867,25 +7419,166 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     showSync();
 
     try {
-      await fsSetDoc('transactions', cleanTxn.id, cleanTxn);
+      const isNewTxn = !prevTxn;
+      let saved = cleanTxn;
+      if (isNewTxn && provisionalRefPrefix(cleanTxn.ref)) {
+        [saved] = await writeTxnOps([{ col: 'transactions', id: cleanTxn.id, data: cleanTxn }]);
+      } else {
+        await fsSetDoc('transactions', cleanTxn.id, cleanTxn);   // edits keep merge semantics and their ref
+      }
       setSyncError(false);
       setTxns(prev => {
-        const exists = prev.some(item => item.id === cleanTxn.id);
-        const next = exists ? prev.map(item => item.id === cleanTxn.id ? cleanTxn : item) : [...prev, cleanTxn];
+        const exists = prev.some(item => item.id === saved.id);
+        const next = exists ? prev.map(item => item.id === saved.id ? saved : item) : [...prev, saved];
         ls_set('transactions', next);
         return next;
       });
       setWriteMeta(meta => ({ ...meta, transactions: { status: "saved", startedAt, completedAt: new Date().toISOString(), error: "" } }));
-      return cleanTxn;
+      return saved;
     } catch (e) {
       setSyncError(true);
       setWriteMeta(meta => ({ ...meta, transactions: { status: "error", startedAt, completedAt: meta.transactions?.completedAt || "", error: e.message } }));
       throw e;
     }
   }, []);
+  // Several transactions (plus any other docs, e.g. the deal they update) written
+  // in ONE Firestore batch: all land or none do. Used where a business event is
+  // more than one entry — broker + manager legs of one payout, a bank import —
+  // so a failure half-way can no longer leave half of it posted (and a retry
+  // posting that half again). `otherDocs` = [{ col, id, data }] full documents.
+  // Firestore caps a batch at 500 writes, so very large sets go in chunks of
+  // 450; each chunk is atomic and the error names how many were saved.
+  const persistTxnBatch = useCallback(async (list, otherDocs = []) => {
+    const items = (list || []).filter(Boolean);
+    if (!items.length && !otherDocs.length) return [];
+    if (!navigator.onLine) throw new Error("Offline — changes not saved");
+    items.forEach(t => {
+      if (!t.id) throw new Error("Transaction id is required");
+      const prevT = (txnsRef.current || []).find(x => x.id === t.id) || null;
+      assertPeriodOpen({ prev: prevT, next: t, settings: settingsRef.current });
+      assertNotReconciled({ prev: prevT, next: t });
+      assertWithinPostingLimit({ prev: prevT, next: t, access: accessRef.current });
+    });
+    const clean = items.map(t => JSON.parse(JSON.stringify(t)));
+    const ops = [...clean.map(t => ({ col: 'transactions', id: t.id, data: t })),
+                 ...otherDocs.map(d => ({ col: d.col, id: d.id, data: JSON.parse(JSON.stringify(d.data)), merge: !!d.merge }))];
+    const startedAt = new Date().toISOString();
+    setWriteMeta(meta => ({ ...meta, transactions: { status: "saving", startedAt, completedAt: meta.transactions?.completedAt || "", error: "" } }));
+    showSync();
+    const CHUNK = 450;
+    let written = 0;
+    const savedById = new Map();
+    try {
+      for (let i = 0; i < ops.length; i += CHUNK) {
+        (await writeTxnOps(ops.slice(i, i + CHUNK))).forEach(t => savedById.set(t.id, t));
+        written = Math.min(ops.length, i + CHUNK);
+      }
+    } catch (e) {
+      setSyncError(true);
+      setWriteMeta(meta => ({ ...meta, transactions: { status: "error", startedAt, completedAt: meta.transactions?.completedAt || "", error: e.message } }));
+      throw new Error(written ? `${e.message} — ${written} of ${ops.length} records were saved before the failure` : e.message);
+    }
+    setSyncError(false);
+    const final = clean.map(t => savedById.get(t.id) || t);   // with their sequential refs
+    setTxns(prev => {
+      const byId = new Map(final.map(t => [t.id, t]));
+      const next = prev.map(t => byId.get(t.id) || t);
+      final.forEach(t => { if (!prev.some(x => x.id === t.id)) next.push(t); });
+      ls_set('transactions', next);
+      return next;
+    });
+    setWriteMeta(meta => ({ ...meta, transactions: { status: "saved", startedAt, completedAt: new Date().toISOString(), error: "" } }));
+    return final;
+  }, []);
   const saveTxn = useCallback((txn) => { persistTxn(txn).catch(e => toast(`Save error: ${e.message}`, "error")); }, [persistTxn]);
+
+  // Post `list` now when it is within the user's posting limit; otherwise file
+  // it as a pending approval request (nothing reaches the ledger). Returns
+  // { status: "posted", txns } or { status: "pending", request }.
+  //   patches  — [{ col, id, data }] merged into other docs when it posts
+  //   followUp — { type: "planned_expense_paid", itemId } applied on approval
+  const plannedExpensesRef = useRef(plannedExpenses);
+  plannedExpensesRef.current = plannedExpenses;
+  const postWithApproval = useCallback(async (list, { scope, summary = "", patches = [], followUp = null } = {}) => {
+    const items = (Array.isArray(list) ? list : [list]).filter(Boolean);
+    if (!items.length) throw new Error("Nothing to post");
+    const amountCents = approvalAmountCents(items);
+    const access = accessRef.current;
+    const mergePatches = patches.map(p => ({ ...p, merge: true }));
+    if (!needsApproval({ access, scope, amountCents })) {
+      const saved = items.length === 1 && !mergePatches.length ? [await persistTxn(items[0])] : await persistTxnBatch(items, mergePatches);
+      return { status: "posted", txns: saved };
+    }
+    if (!navigator.onLine) throw new Error("Offline — changes not saved");
+    // Fail now, not at approval time, if the entry is dated in a closed period.
+    items.forEach(t => assertPeriodOpen({ prev: null, next: t, settings: settingsRef.current }));
+    const ref = db.collection('approval_requests').doc();
+    const request = JSON.parse(JSON.stringify({
+      id: ref.id, scope, amountCents, summary,
+      txns: items, patches: patches.map(p => ({ col: p.col, id: p.id, data: p.data })), followUp,
+      status: "pending", requestedBy: userEmail || "", requestedRole: (access && access.roleId) || "",
+      requestedAt: new Date().toISOString(),
+      limitCents: postingLimitCents(access, scope),
+    }));
+    await ref.set(request);
+    logAudit("approval_requested", { requestId: ref.id, scope, amountCents, summary }, accessSubject, userEmail).catch(() => {});
+    return { status: "pending", request };
+  }, [persistTxn, persistTxnBatch, userEmail]);
+
+  // Approve or reject a pending request. Approval re-reads the request INSIDE a
+  // Firestore transaction and posts its entries in that same transaction, so two
+  // approvers clicking at once cannot post it twice.
+  const decideApproval = useCallback(async (request, decision, note = "") => {
+    const blocker = approvalDecisionBlocker({ access: accessRef.current, email: userEmail, request, policies: approvalPoliciesRef.current });
+    if (blocker) throw new Error(blocker);
+    if (!navigator.onLine) throw new Error("Offline — changes not saved");
+    const now = new Date().toISOString();
+    const ref = db.collection('approval_requests').doc(request.id);
+    const stillPending = snap => { if (!snap.exists || (snap.data().status || "pending") !== "pending") throw new Error("This request was already decided by someone else"); };
+    if (decision !== "approve") {
+      await db.runTransaction(async tx => {
+        stillPending(await tx.get(ref));
+        tx.set(ref, { status: "rejected", decidedBy: userEmail || "", decidedAt: now, note: note || "" }, { merge: true });
+      });
+      logAudit("approval_rejected", { requestId: request.id, amountCents: request.amountCents, note }, accessSubject, userEmail).catch(() => {});
+      return;
+    }
+    const posted = (request.txns || []).map(t => JSON.parse(JSON.stringify({ ...t, approval_request_id: request.id, approvedBy: userEmail || "", approvedAt: now })));
+    posted.forEach(t => {
+      if ((txnsRef.current || []).some(x => x.id === t.id)) throw new Error(`Entry ${t.ref || t.id} is already in the ledger`);
+      assertPeriodOpen({ prev: null, next: t, settings: settingsRef.current });
+    });
+    const patches = (request.patches || []).slice();
+    if (request.followUp && request.followUp.type === "planned_expense_paid" && typeof fePaidPatch === "function") {
+      const item = (plannedExpensesRef.current || []).find(e => e.id === request.followUp.itemId);
+      if (item && posted[0]) patches.push({ col: 'planned_expenses', id: item.id, data: fePaidPatch(item, posted[0].id, userEmail, posted[0].date) });
+    }
+    // One transaction: re-check the request is still pending, allocate the
+    // entries' sequential refs, post them, apply the follow-up patches and mark
+    // the request approved — all or nothing.
+    await writeTxnOps([
+      ...posted.map(t => ({ col: 'transactions', id: t.id, data: t })),
+      ...patches.map(p => ({ col: p.col, id: p.id, data: JSON.parse(JSON.stringify(p.data)), merge: true })),
+      { col: 'approval_requests', id: request.id, merge: true,
+        data: { status: "approved", decidedBy: userEmail || "", decidedAt: now, note: note || "", postedTxnIds: posted.map(t => t.id) } },
+    ], async tx => stillPending(await tx.get(ref)));
+    logAudit("approval_approved", { requestId: request.id, amountCents: request.amountCents, postedTxnIds: posted.map(t => t.id) }, accessSubject, userEmail).catch(() => {});
+  }, [userEmail]);
+
+  // The requester may withdraw a request that nobody has decided yet.
+  const withdrawApproval = useCallback(async (request) => {
+    if (normalizeUserEmail(request.requestedBy) !== normalizeUserEmail(userEmail)) throw new Error("Only the requester can withdraw this request");
+    const ref = db.collection('approval_requests').doc(request.id);
+    await db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if (!snap.exists || (snap.data().status || "pending") !== "pending") throw new Error("This request was already decided");
+      tx.set(ref, { status: "withdrawn", decidedBy: userEmail || "", decidedAt: new Date().toISOString() }, { merge: true });
+    });
+  }, [userEmail]);
   const deleteTxn = useCallback(async (txnId) => {
     if (!navigator.onLine) throw new Error("Offline — changes not saved");
+    assertPeriodOpen({ prev: (txnsRef.current || []).find(t => t.id === txnId) || null, settings: settingsRef.current });
+    assertNotReconciled({ prev: (txnsRef.current || []).find(t => t.id === txnId) || null });
     await window.fsDeleteDoc('transactions', txnId);
     setTxns(prev => {
       const next = prev.filter(t => t.id !== txnId);
@@ -6906,7 +7599,8 @@ function App({ userRole, userAccess, userEmail, signOut }) {
     <style>{`@keyframes npLoad{0%{width:0%}60%{width:90%}100%{width:100%}}`}</style>
   </div>;
 
-  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, employees, setEmployees: setEmployeesFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, budgets, setBudgets: setBudgetsFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta, dealStageChanges, setInvoiceDeal, cardDealId, setCardDealId, receiptDraft, clearReceiptDraft: () => setReceiptDraft(null) };
+  const approvalsForMe = (approvalRequests || []).filter(r => !approvalDecisionBlocker({ access: accessSubject, email: userEmail, request: r, policies: approvalPolicies })).length;
+  const shared = { accounts, setAccounts: setAccountsFS, txns, setTxns: setTxnsFS, deals, setDeals: setDealsFS, customers, setCustomers: setCustomersFS, vendors, setVendors: setVendorsFS, brokers, setBrokers: setBrokersFS, employees, setEmployees: setEmployeesFS, developers, setDevelopers: setDevelopersFS, plannedExpenses, setPlannedExpenses: setPlannedExpensesFS, budgets, setBudgets: setBudgetsFS, settings, setSettings: setSettingsFS, ledger, saveTxn, persistTxn, persistTxnBatch, postWithApproval, decideApproval, withdrawApproval, approvalRequests, approvalPolicies, deleteTxn, journal, dark, setDark, setPage, userRole: accessSubject, userEmail, writeMeta, dealStageChanges, setInvoiceDeal, cardDealId, setCardDealId, receiptDraft, clearReceiptDraft: () => setReceiptDraft(null) };
 
   const renderPage = () => {
     if (!canAccessPage(accessSubject, page)) {
@@ -6937,6 +7631,8 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       case "manual": return <ManualPage />;
       case "settings": return <SettingsPage {...shared} />;
       case "futureExpenses": return <FutureExpensesPage {...shared} />;
+      case "approvals": return <ApprovalsPage {...shared} />;
+      case "insights": return <InsightsPage {...shared} />;
       case "users": return <SecurityAdminPage userRole={userRole} userEmail={userEmail} settings={settings} />;
       case "banana2": return <PerformancePage deals={deals} txns={txns} accounts={accounts} budgets={budgets} setPage={setPage} />;
       default: return <div style={{ textAlign: "center", padding: 60, color: "#6B7280" }}>🚧 Coming soon</div>;
@@ -7039,6 +7735,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
               >
                 <SidebarIcon id={item.id} active={active} />
                 <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{item.label}</span>
+                {item.id === "approvals" && approvalsForMe > 0 && <span title={`${approvalsForMe} waiting for your approval`} style={{ minWidth: 20, height: 20, borderRadius: 10, background: "#C9A044", color: NAVY, fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 6px" }}>{approvalsForMe}</span>}
               </div>
             );
           })}

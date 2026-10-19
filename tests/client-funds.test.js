@@ -154,10 +154,12 @@ const K_mixed = kpisOver([RENT, OWN, RCV]);
 eq(K_mixed.cash, 16100000, "total cash = 50,000 own + 121,000 client − 10,000 spent = 161,000");
 eq(K_mixed.clientFundsHeld, 12100000, "121,000 of that is held for clients");
 eq(K_mixed.availableCash, 4000000, "available to the company = 40,000");
-ok(K_mixed.avgMonthlyExpense > 0, "fixture produces a non-zero average monthly expense");
-eq(K_mixed.runwayMonths, K_mixed.availableCash / K_mixed.avgMonthlyExpense,
+// Runway divides by the fixed monthly overhead (complete months, commission-
+// driven costs excluded — see calculateAppKpis); office rent is overhead.
+ok(K_mixed.avgMonthlyFixedOverhead > 0, "fixture produces a non-zero fixed monthly overhead");
+eq(K_mixed.runwayMonths, K_mixed.availableCash / K_mixed.avgMonthlyFixedOverhead,
   "runwayMonths divides availableCash");
-ok(K_mixed.runwayMonths < K_mixed.cash / K_mixed.avgMonthlyExpense,
+ok(K_mixed.runwayMonths < K_mixed.cash / K_mixed.avgMonthlyFixedOverhead,
   "runway is SHORTER than a cash-based runway would report — client money is not runway");
 
 // ── 4. Recognising commission out of held funds ──────────────────────────────

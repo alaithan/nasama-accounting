@@ -30,10 +30,19 @@ const code = babel.transform(fs.readFileSync(path.join(ROOT, "nasama-accounting-
   { presets: ["react", "env"] }).code;
 const NAMES = ["React", "uid", "usePersistedState", "usePersistedDateFilter", "C", "NAVY", "GOLD", "toast",
   "fmtAED", "fmtDate", "toCents", "todayStr", "xlsxExport", "XlsxSignBtn", "xAED", "hasPermission",
-  "PageHeader", "DateFilterBar", "Inp", "Sel", "useState", "useEffect", "useMemo"];
+  "PageHeader", "DateFilterBar", "Inp", "Sel", "useState", "useEffect", "useMemo",
+  "reversedTxnIds", "isInReversedPair", "isOpenDeal"];
+// The reversed-pair helpers are core.jsx globals in the browser; load the real ones.
+const coreCode = babel.transform(fs.readFileSync(path.join(ROOT, "nasama-accounting-v2.core.jsx"), "utf8"),
+  { presets: ["react", "env"] }).code;
+const CORE_NAMES = ["React", "firebase", "db", "auth", "window", "document", "localStorage", "toast", "logAudit", "console"];
+const CORE = new Function(...CORE_NAMES, coreCode + "; return { reversedTxnIds, isInReversedPair, isOpenDeal };")
+  .apply(null, CORE_NAMES.map(n => n === "console" ? console
+    : n === "React" ? { useState: () => [], useEffect: () => {}, useMemo: () => {}, useCallback: () => {}, useRef: () => ({}) }
+    : () => undefined));
 let seq = 0;
 const ENG = new Function(...NAMES, code + "\n; return { buildEmployeeLedger, buildEmployeeRoster, makeEmployeeMatcher, empSkel };")
-  .apply(null, NAMES.map(n => n === "uid" ? (() => "_u" + (++seq)) : (() => undefined)));
+  .apply(null, NAMES.map(n => n === "uid" ? (() => "_u" + (++seq)) : CORE[n] || (() => undefined)));
 
 let passed = 0, failed = 0;
 function eq(actual, expected, msg) {

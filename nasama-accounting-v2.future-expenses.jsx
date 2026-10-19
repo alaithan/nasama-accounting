@@ -135,16 +135,45 @@ const feComputeStatus = (item, today) => {
   return "Planned";
 };
 
+// The day of the month a recurring expense falls due. Stored on the item as
+// dueDay the first time it advances, so a month-end expense keeps returning to
+// the 31st (clamped per month) instead of drifting: Date.setMonth turned
+// 31 Jan into 3 Mar, and a plain clamp would leave it stuck on the 28th.
+const feDueAnchorDay = (item) => {
+  const stored = parseInt(item && item.dueDay, 10);
+  if (stored >= 1 && stored <= 31) return stored;
+  const m = /^\d{4}-\d{2}-(\d{2})$/.exec((item && item.nextDueDate) || "");
+  return m ? parseInt(m[1], 10) : 1;
+};
+
 const feAdvanceNextDueDate = (item) => {
   if (item.expenseType !== "recurring" || !item.nextDueDate) return null;
-  const d = new Date(item.nextDueDate + "T12:00:00");
-  switch (item.frequency) {
-    case "monthly": d.setMonth(d.getMonth() + 1); break;
-    case "quarterly": d.setMonth(d.getMonth() + 3); break;
-    case "yearly": d.setFullYear(d.getFullYear() + 1); break;
-    default: d.setMonth(d.getMonth() + 1); break;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(item.nextDueDate);
+  if (!m) return null;
+  const step = item.frequency === "quarterly" ? 3 : item.frequency === "yearly" ? 12 : 1;
+  const monthIndex = (parseInt(m[2], 10) - 1) + step;            // 0-based, may exceed 11
+  const year = parseInt(m[1], 10) + Math.floor(monthIndex / 12);
+  const month = monthIndex % 12;                                  // 0..11
+  const daysInMonth = new Date(year, month + 1, 0).getDate();     // day 0 of next month
+  const day = Math.min(feDueAnchorDay(item), daysInMonth);
+  return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+};
+
+// The fields a planned expense takes once a payment for it is posted. Pure, so
+// the approval workflow can apply it in the same Firestore transaction that
+// posts an approved payment (App.decideApproval), not only this page.
+const fePaidPatch = (item, txnId, userEmail, paidDate) => {
+  const now = new Date().toISOString();
+  const paid = paidDate || todayStr();
+  if (item.expenseType === "recurring") {
+    return {
+      lastPaidDate: paid, lastPaidTxnId: txnId,
+      nextDueDate: feAdvanceNextDueDate(item), dueDay: feDueAnchorDay(item), status: "Planned",
+      accrualTxnId: "", accruedAt: "",
+      updatedBy: userEmail || "", updatedAt: now,
+    };
   }
-  return d.toISOString().split("T")[0];
+  return { status: "Paid", lastPaidDate: paid, lastPaidTxnId: txnId, updatedBy: userEmail || "", updatedAt: now };
 };
 
 const feComputeMonthlyEquivalent = (item) => {
@@ -157,11 +186,14 @@ const feComputeMonthlyEquivalent = (item) => {
 };
 
 // ── FUTURE EXPENSES PAGE ────────────────────────────
-function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, setPlannedExpenses, txns, journal, persistTxn, userRole, userEmail, dark }) {
+function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, setPlannedExpenses, txns, journal, persistTxn, postWithApproval, approvalRequests, userRole, userEmail, dark }) {
   const [showModal, setShowModal] = useState(false);
   const [showPayModal, setShowPayModal] = useState(false);
   const [editItem, setEditItem] = useState(null);
   const [payItem, setPayItem] = useState(null);
+  // Accrue is a one-click post; its "already accrued" check only flips after the
+  // save lands, so a double-click posted two accruals. Serialise it.
+  const [accrueBusy, guardAccrue] = useSubmitGuard();
   const [filter, setFilter] = useState("Active");
   const [searchText, setSearchText] = useState("");
   const isMobile = window.innerWidth <= 768;
@@ -272,7 +304,12 @@ function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, se
   const handleSave = (item) => {
     const now = new Date().toISOString();
     if (item.id) {
-      setPlannedExpenses(prev => prev.map(e => e.id === item.id ? { ...item, updatedBy: userEmail, updatedAt: now } : e));
+      // A hand-edited due date sets a new anchor day for future cycles.
+      setPlannedExpenses(prev => prev.map(e => {
+        if (e.id !== item.id) return e;
+        const dateChanged = (e.nextDueDate || "") !== (item.nextDueDate || "");
+        return { ...item, ...(dateChanged ? { dueDay: "" } : {}), updatedBy: userEmail, updatedAt: now };
+      }));
       toast("Planned expense updated", "success");
       logAudit("planned_expense_update", { itemId: item.id, title: item.title }, userRole, userEmail);
     } else {
@@ -285,7 +322,16 @@ function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, se
     setEditItem(null);
   };
 
+  // A live accrual is a real liability in 2210. Deleting or skipping the planned
+  // expense removed the only Pay button that can settle it, orphaning the debt.
+  const blockIfAccrued = (item, verb) => {
+    if (!isAccrualLive(item)) return false;
+    toast(`"${item.title || "Untitled"}" has a live accrual in Accrued Expenses Payable. Pay it, or reverse the accrual in Journal Entries, before you ${verb} it.`, "warning");
+    return true;
+  };
+
   const handleDelete = (item) => {
+    if (blockIfAccrued(item, "delete")) return;
     if (!confirm(`Delete "${item.title || "Untitled"}"?\n\nThis removes the planned expense. No accounting entries will be affected.`)) return;
     setPlannedExpenses(prev => prev.filter(e => e.id !== item.id));
     toast("Planned expense deleted", "success");
@@ -293,10 +339,11 @@ function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, se
   };
 
   const handleSkip = (item) => {
+    if (blockIfAccrued(item, "skip")) return;
     const now = new Date().toISOString();
     if (item.expenseType === "recurring") {
       const nextDate = feAdvanceNextDueDate(item);
-      setPlannedExpenses(prev => prev.map(e => e.id === item.id ? { ...e, nextDueDate: nextDate, status: "Planned", updatedBy: userEmail, updatedAt: now } : e));
+      setPlannedExpenses(prev => prev.map(e => e.id === item.id ? { ...e, nextDueDate: nextDate, dueDay: feDueAnchorDay(item), status: "Planned", updatedBy: userEmail, updatedAt: now } : e));
       toast(`Skipped — next due date: ${fmtDate(nextDate)}`, "info");
     } else {
       setPlannedExpenses(prev => prev.map(e => e.id === item.id ? { ...e, status: "Skipped", updatedBy: userEmail, updatedAt: now } : e));
@@ -335,24 +382,12 @@ function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, se
     } catch (err) { toast(err.message, "error"); }
   };
 
-  const handlePaymentComplete = (item, txnId) => {
-    const now = new Date().toISOString();
-    if (item.expenseType === "recurring") {
-      const nextDate = feAdvanceNextDueDate(item);
-      setPlannedExpenses(prev => prev.map(e => e.id === item.id ? {
-        ...e, lastPaidDate: todayStr(), lastPaidTxnId: txnId,
-        nextDueDate: nextDate, status: "Planned",
-        accrualTxnId: "", accruedAt: "",
-        updatedBy: userEmail, updatedAt: now
-      } : e));
-      toast(`Payment recorded — next due: ${fmtDate(nextDate)}`, "success");
-    } else {
-      setPlannedExpenses(prev => prev.map(e => e.id === item.id ? {
-        ...e, status: "Paid", lastPaidDate: todayStr(), lastPaidTxnId: txnId,
-        updatedBy: userEmail, updatedAt: now
-      } : e));
-      toast("Payment recorded — expense marked as Paid", "success");
-    }
+  const handlePaymentComplete = (item, txnId, paidDate) => {
+    const patch = fePaidPatch(item, txnId, userEmail, paidDate);
+    setPlannedExpenses(prev => prev.map(e => e.id === item.id ? { ...e, ...patch } : e));
+    toast(item.expenseType === "recurring"
+      ? `Payment recorded — next due: ${fmtDate(patch.nextDueDate)}`
+      : "Payment recorded — expense marked as Paid", "success");
     logAudit("planned_expense_payment", { itemId: item.id, title: item.title, txnId }, userRole, userEmail);
     setShowPayModal(false);
     setPayItem(null);
@@ -499,10 +534,12 @@ function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, se
               <td style={C.td}>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {hasPermission(userRole, 'expenses.create') && status !== "Paid" && status !== "Cancelled" && !accrued &&
-                    <button style={C.btn("secondary", true)} title="Recognise this unpaid expense now (DR expense / CR accrued payable)" onClick={() => handlePostAccrual(item)}>🧾 Accrue</button>
+                    <button style={C.btn("secondary", true)} title="Recognise this unpaid expense now (DR expense / CR accrued payable)" disabled={accrueBusy} onClick={() => guardAccrue(handlePostAccrual, item)}>🧾 Accrue</button>
                   }
                   {hasPermission(userRole, 'expenses.create') && status !== "Paid" && status !== "Cancelled" &&
-                    <button style={C.btn("success", true)} onClick={() => { setPayItem(item); setShowPayModal(true); }}>💰 Pay</button>
+                    ((approvalRequests || []).some(r => (r.status || "pending") === "pending" && r.followUp && r.followUp.itemId === item.id)
+                      ? <span title="A payment for this item is waiting for an approver — see Approvals" style={{ ...C.badge("warning"), whiteSpace: "nowrap" }}>⏳ Awaiting approval</span>
+                      : <button style={C.btn("success", true)} onClick={() => { setPayItem(item); setShowPayModal(true); }}>💰 Pay</button>)
                   }
                   {hasPermission(userRole, 'planning.edit') && status !== "Paid" &&
                     <button style={C.btn("secondary", true)} onClick={() => handleSkip(item)}>⏭️</button>
@@ -542,9 +579,10 @@ function FutureExpensesPage({ accounts, setAccounts, ledger, plannedExpenses, se
       ledger={ledger}
       journal={journal}
       persistTxn={persistTxn}
+      postWithApproval={postWithApproval}
       userRole={userRole}
       userEmail={userEmail}
-      onComplete={(txnId) => handlePaymentComplete(payItem, txnId)}
+      onComplete={(txnId, paidDate) => handlePaymentComplete(payItem, txnId, paidDate)}
       onClose={() => { setShowPayModal(false); setPayItem(null); }}
     />}
   </div>;
@@ -710,7 +748,7 @@ function FutureExpenseModal({ item, accounts, onSave, onClose }) {
 }
 
 // ── RECORD PAYMENT MODAL ────────────────────────────
-function RecordPaymentModal({ item, isAccrued, accounts, ledger, journal, persistTxn, userRole, userEmail, onComplete, onClose }) {
+function RecordPaymentModal({ item, isAccrued, accounts, ledger, journal, persistTxn, postWithApproval, userRole, userEmail, onComplete, onClose }) {
   const [form, setForm] = useState(() => {
     const rate = item.vatApplicable ? (item.vatRate || 5) : 0;
     // amountExpected is stored NET when the user chose "VAT exclusive", so the
@@ -748,7 +786,10 @@ function RecordPaymentModal({ item, isAccrued, accounts, ledger, journal, persis
         date: form.date, memo: form.memo || item.title,
         gross: parseFloat(form.gross), vatRate: form.vatRate,
         paidFromCode: form.paidFromCode, counterparty: form.counterparty,
-        plannedExpenseId: item.id, commit: false
+        plannedExpenseId: item.id,
+        // Clear exactly what was accrued; any gap is trued up to the expense.
+        accrualTxnId: item.accrualTxnId, expenseCode: item.category !== "OTHER" ? item.category : "",
+        commit: false
       })
     : journal.postPayment({
         date: form.date, memo: form.memo || item.title,
@@ -772,9 +813,19 @@ function RecordPaymentModal({ item, isAccrued, accounts, ledger, journal, persis
     if (isInsufficient) { toast("Cannot post: Insufficient funds", "error"); return; }
     setPosting(true);
     try {
-      const txn = buildTxn();
-      const savedTxn = await persistTxn({ ...txn, planned_expense_id: item.id });
-      onComplete(savedTxn.id);
+      const txn = { ...buildTxn(), planned_expense_id: item.id };
+      // Above the user's payment limit this becomes an approval request; the
+      // planned expense then advances when (and only when) it is approved.
+      const res = postWithApproval
+        ? await postWithApproval([txn], { scope: "payments", summary: `Planned expense: ${item.title || "payment"}`,
+            followUp: { type: "planned_expense_paid", itemId: item.id } })
+        : { status: "posted", txns: [await persistTxn(txn)] };
+      if (res.status === "pending") {
+        toast(`Sent for approval — ${fmtAED(approvalAmountCents([txn]))} is above your payment limit. It posts once approved.`, "info");
+        onClose();
+        return;
+      }
+      onComplete(res.txns[0].id, txn.date);
     } catch (err) {
       toast(err.message, "error");
       setPosting(false);
@@ -793,6 +844,7 @@ function RecordPaymentModal({ item, isAccrued, accounts, ledger, journal, persis
           {isAccrued ? <>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Settling an accrued liability</div>
             <div>This item was already recognised as an expense. This entry <strong>clears the payable</strong> (DR Accrued Expenses Payable / DR Input VAT / CR Bank) — the expense is <strong>not</strong> counted again.</div>
+            <div style={{ marginTop: 6 }}>The payable is cleared by exactly the accrued amount. If the amount paid (net of VAT) differs, the difference is booked to the expense account as a true-up line — check it in the posting preview.</div>
           </> : <>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Converting planned expense to cash payment</div>
             <div>This will create a <strong>real journal entry</strong> (DR Expense / CR Bank) using the existing accounting engine. The planned item will be marked as Paid.</div>

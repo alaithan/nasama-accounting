@@ -68,15 +68,47 @@ function depTs() {
    number: a made-up number can collide with one already issued or jump the
    series forward, and the caller aborts before writing the receipt document, so
    failing loudly leaves the series intact. */
-async function depGenReceiptNumber() {
-  const ref = db.collection("meta").doc("receiptCounter");
-  let num = DEP_RECEIPT_START;
+// Issue a receipt atomically: bump the counter, write the receipt doc and stamp
+// the deposit transaction with it — all in ONE transaction. Done as separate
+// writes, a failure after the counter bump burned a number (a gap in the
+// series) and a failure after the receipt write left a receipt the deposit did
+// not know about. Re-reads the deposit inside the transaction so two people
+// cannot issue two receipts for the same money.
+async function depIssueReceiptInTransaction(txnId, buildDoc) {
+  const counterRef = db.collection("meta").doc("receiptCounter");
+  const txnRef = db.collection("transactions").doc(txnId);
+  const recRef = db.collection("receipts").doc();
+  let issued = null;
   await db.runTransaction(async tx => {
-    const snap = await tx.get(ref);
-    num = snap.exists ? Math.max((snap.data().lastNumber || 0) + 1, DEP_RECEIPT_START) : DEP_RECEIPT_START;
-    tx.set(ref, { lastNumber: num }, { merge: true });
+    const cSnap = await tx.get(counterRef);
+    const tSnap = await tx.get(txnRef);
+    if (!tSnap.exists) throw new Error("The deposit transaction was not found");
+    if (tSnap.data().receipt_id) throw new Error(`A receipt (${tSnap.data().receipt_no || tSnap.data().receipt_id}) was already issued for this deposit`);
+    const num = cSnap.exists ? Math.max((cSnap.data().lastNumber || 0) + 1, DEP_RECEIPT_START) : DEP_RECEIPT_START;
+    const formatted = depPad(num);
+    const doc = { ...buildDoc(formatted), id: recRef.id };
+    tx.set(counterRef, { lastNumber: num }, { merge: true });
+    tx.set(recRef, doc);
+    tx.set(txnRef, { receipt_id: recRef.id, receipt_no: formatted }, { merge: true });
+    issued = doc;
   });
-  return { formatted: depPad(num), raw: num };
+  return issued;
+}
+
+// Void a wrongly issued receipt. It keeps its number for good (the series stays
+// gapless, the void is on record) and the deposit is released so a correct
+// receipt can be issued — with the next number.
+async function depVoidReceiptInTransaction(receipt, reason, userEmail) {
+  const recRef = db.collection("receipts").doc(receipt.id);
+  const txnRef = receipt.txn_id ? db.collection("transactions").doc(receipt.txn_id) : null;
+  await db.runTransaction(async tx => {
+    const rSnap = await tx.get(recRef);
+    const tSnap = txnRef ? await tx.get(txnRef) : null;
+    if (!rSnap.exists) throw new Error("Receipt not found");
+    if (rSnap.data().status === "void") throw new Error("This receipt is already void");
+    tx.set(recRef, { status: "void", voidedAt: new Date().toISOString(), voidedBy: userEmail || "", voidReason: reason || "" }, { merge: true });
+    if (tSnap && tSnap.exists && tSnap.data().receipt_id === receipt.id) tx.set(txnRef, { receipt_id: "", receipt_no: "" }, { merge: true });
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -234,7 +266,7 @@ function DepositReceiptDoc({ receipt, settings, refund }) {
 // ═══════════════════════════════════════════════════════════════════
 //  C. DepositsPage
 // ═══════════════════════════════════════════════════════════════════
-function DepositsPage({ accounts, txns, deals, customers, ledger, journal, persistTxn, settings, userRole }) {
+function DepositsPage({ accounts, txns, deals, customers, ledger, journal, persistTxn, settings, userRole, userEmail }) {
   const [receipts, setReceipts]   = useState([]);
   const [showNew, setShowNew]     = useState(false);
   const [closing, setClosing]     = useState(null);   // the party row being closed out
@@ -345,15 +377,27 @@ function DepositsPage({ accounts, txns, deals, customers, ledger, journal, persi
     if (existing) { setPreview(existing); return; }          // already issued → reprint the same document
     setBusy(true);
     try {
-      const { formatted } = await depGenReceiptNumber();
-      const doc = { ...buildReceiptFrom(txn), receiptNumber: formatted, status: "issued", issuedAt: depTs() };
-      const ref = await db.collection("receipts").add(doc);
-      // Stamp the transaction so the list shows ✓ and a second receipt cannot be
-      // issued for the same money — mirrors the invoice ↔ receipt link.
-      await persistTxn({ ...txn, receipt_id: ref.id, receipt_no: formatted });
-      setPreview({ id: ref.id, ...doc });
-      toast(`Receipt ${formatted} issued`, "success");
+      // The deposit is stamped with the receipt in the same transaction, so the
+      // list shows ✓ and a second receipt cannot be issued for the same money.
+      const doc = await depIssueReceiptInTransaction(txn.id, formatted =>
+        ({ ...buildReceiptFrom(txn), receiptNumber: formatted, status: "issued", issuedAt: depTs(), issuedBy: userEmail || "" }));
+      setPreview(doc);
+      toast(`Receipt ${doc.receiptNumber} issued`, "success");
     } catch (err) { toast("Could not issue receipt: " + err.message, "error"); }
+    finally { setBusy(false); }
+  };
+
+  const handleVoidReceipt = async (rc) => {
+    if (!rc || !rc.id || rc.status === "void") return;
+    const reason = window.prompt(`Void receipt ${rc.receiptNumber}?\n\nIt stays on record marked VOID (its number is never reused), and the deposit can then be receipted again with a new number.\n\nReason:`, "");
+    if (reason === null) return;
+    setBusy(true);
+    try {
+      await depVoidReceiptInTransaction(rc, reason.trim(), userEmail);
+      if (typeof logAudit === "function") logAudit("deposit_receipt_void", { receiptId: rc.id, receiptNumber: rc.receiptNumber, reason }, userRole, userEmail);
+      setPreview({ ...rc, status: "void" });
+      toast(`Receipt ${rc.receiptNumber} voided`, "success");
+    } catch (err) { toast("Could not void receipt: " + err.message, "error"); }
     finally { setBusy(false); }
   };
 
@@ -748,6 +792,8 @@ function DepositsPage({ accounts, txns, deals, customers, ledger, journal, persi
           </div>
         </div>
         <div style={C.mftr}>
+          {preview.id && preview.status !== "void" && canSettle && <button style={{ ...C.btn("secondary"), color: "#DC2626", marginRight: "auto" }} disabled={busy} onClick={() => handleVoidReceipt(preview)}>Void receipt</button>}
+          {preview.status === "void" && <span style={{ marginRight: "auto", fontSize: 12, color: "#B42318", fontWeight: 700 }}>VOID{preview.voidReason ? ` — ${preview.voidReason}` : ""}</span>}
           <button style={C.btn("secondary")} onClick={() => setPreview(null)}>Close</button>
           <button style={C.btn()} onClick={handleExportPDF}>Download PDF</button>
         </div>

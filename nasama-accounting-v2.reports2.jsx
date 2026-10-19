@@ -5,41 +5,11 @@
 
 // ── CASH FLOW HELPERS ─────────────────────────────────
 
-function isCashAccount(a) {
-  return a.type === "Asset" && (
-    /^10/i.test(String(a.code || "")) ||
-    /bank|cash/i.test(a.name || "")
-  );
-}
-
-function isFixedAssetAccount(a) {
-  var c = String(a.code || "");
-  return a.type === "Asset" && (
-    (c >= "1500" && c <= "1599") ||
-    /fixed|equipment|furniture|computer|vehicle|machinery/i.test(a.name || "")
-  );
-}
-
-// Classify a transaction's cash impact into operating / investing / financing
-// Returns { operating, investing, financing } in cents
-function classifyTxnCash(txn, cashIds, fixedAssetIds, equityIds) {
-  var lines = txn.lines || [];
-  var cashLines = lines.filter(function(l) { return cashIds.has(l.accountId); });
-  if (cashLines.length === 0) return null;
-
-  var netCash = cashLines.reduce(function(s, l) {
-    return s + (l.debit || 0) - (l.credit || 0);
-  }, 0);
-  if (netCash === 0) return null;
-
-  var nonCash = lines.filter(function(l) { return !cashIds.has(l.accountId); });
-  var hasInvesting = nonCash.some(function(l) { return fixedAssetIds.has(l.accountId); });
-  var hasFinancing = nonCash.some(function(l) { return equityIds.has(l.accountId); });
-
-  if (hasInvesting) return { operating: 0, investing: netCash, financing: 0 };
-  if (hasFinancing) return { operating: 0, investing: 0, financing: netCash };
-  return { operating: netCash, investing: 0, financing: 0 };
-}
+// Cash = bank + cash accounts only — the same definition as Banking and the
+// Dashboard (core.jsx isMoneyAccount). The old prefix test on "10" counted
+// 1004 Prepaid Expenses as cash. Classification lives in core.jsx
+// computeCashFlow, shared with the print version.
+function isCashAccount(a) { return isMoneyAccount(a); }
 
 /* ════════════════════════════════════════════════════════
    CASH FLOW STATEMENT  (screen)
@@ -54,43 +24,17 @@ function CFReport(props) {
 
   var company = settings.company || "Nasama Properties";
 
-  // Account sets
-  var cashAccounts    = accounts.filter(isCashAccount);
-  var fixedAssetAccts = accounts.filter(isFixedAssetAccount);
-  var equityAccts     = accounts.filter(function(a) { return a.type === "Equity"; });
-
-  var cashIds       = new Set(cashAccounts.map(function(a) { return a.id; }));
-  var fixedAssetIds = new Set(fixedAssetAccts.map(function(a) { return a.id; }));
-  var equityIds     = new Set(equityAccts.map(function(a) { return a.id; }));
-
-  // Opening & closing cash
-  var openingCash = cashAccounts.reduce(function(s, a) {
-    return s + accountBalance(a, openingLedger);
-  }, 0);
-  var closingCash = cashAccounts.reduce(function(s, a) {
-    return s + accountBalance(a, toDateLedger);
-  }, 0);
-
-  // Classify all filtered txns
-  var operating = 0, investing = 0, financing = 0;
-  var opLines = [], invLines = [], finLines = [];
-
-  filteredTxns.forEach(function(txn) {
-    var r = classifyTxnCash(txn, cashIds, fixedAssetIds, equityIds);
-    if (!r) return;
-    operating += r.operating;
-    investing += r.investing;
-    financing += r.financing;
-    if (r.operating !== 0) opLines.push({ ref: txn.ref, memo: txn.memo || txn.lines && txn.lines[0] && txn.lines[0].memo || "", amount: r.operating, date: txn.date });
-    if (r.investing !== 0) invLines.push({ ref: txn.ref, memo: txn.memo || txn.lines && txn.lines[0] && txn.lines[0].memo || "", amount: r.investing, date: txn.date });
-    if (r.financing !== 0) finLines.push({ ref: txn.ref, memo: txn.memo || txn.lines && txn.lines[0] && txn.lines[0].memo || "", amount: r.financing, date: txn.date });
-  });
-
-  var netMovement = operating + investing + financing;
-  var reconcile = openingCash + netMovement;
+  // Voided entries are ignored inside computeCashFlow (they are absent from both
+  // ledgers too), so opening + movements = closing and `difference` is zero.
+  var cf = computeCashFlow({ accounts: accounts, txns: filteredTxns, openingLedger: openingLedger, toDateLedger: toDateLedger });
+  var cashAccounts = cf.cashAccounts;
+  var openingCash = cf.openingCash, closingCash = cf.closingCash, netMovement = cf.netMovement;
+  var operating = cf.sections.operating.total, investing = cf.sections.investing.total;
+  var financing = cf.sections.financing.total, clientFunds = cf.sections.clientFunds.total;
+  var opLines = cf.sections.operating.lines, invLines = cf.sections.investing.lines;
+  var finLines = cf.sections.financing.lines, cfLines = cf.sections.clientFunds.lines;
 
   var hasCashAccounts = cashAccounts.length > 0;
-  var hasTxns = filteredTxns.length > 0;
 
   // KPI cards
   var kpis = [
@@ -172,7 +116,7 @@ function CFReport(props) {
 
     !hasCashAccounts && React.createElement("div", {
       style: { padding: "24px", background: RPT.amberBg, border: "1px solid " + RPT.rule, borderRadius: 8, marginBottom: 18, color: RPT.amber, fontSize: 13 }
-    }, "No cash or bank accounts found. Create Asset accounts with codes starting with 10 (e.g. 1001 — Main Bank Account) to generate this report."),
+    }, "No cash or bank accounts found. Mark an account as a Bank or Cash account in the Chart of Accounts to generate this report."),
 
     React.createElement(RptKPIBar, { cards: kpis }),
 
@@ -200,6 +144,8 @@ function CFReport(props) {
       SectionTable("Operating Activities", RPT.green, opLines, operating, "No operating cash flows in this period"),
       SectionTable("Investing Activities", RPT.blue, invLines, investing, "No investing cash flows in this period"),
       SectionTable("Financing Activities", RPT.purple, finLines, financing, "No financing cash flows in this period"),
+      // Client money passes through our bank but is not the company's cash flow.
+      (cfLines.length > 0 || clientFunds !== 0) && SectionTable("Client Money Held for Others (2230)", RPT.amber, cfLines, clientFunds, "No client money moved in this period"),
 
       // Reconciliation footer
       React.createElement("div", {
@@ -216,7 +162,9 @@ function CFReport(props) {
               { label: "+ Net Cash from Operations",     value: operating,    color: operating  >= 0 ? "#6EE7B7" : "#FCA5A5" },
               { label: "+ Net Cash from Investing",      value: investing,    color: investing  >= 0 ? "#93C5FD" : "#FCA5A5" },
               { label: "+ Net Cash from Financing",      value: financing,    color: financing  >= 0 ? "#C4B5FD" : "#FCA5A5" },
-            ].map(function(row, i) {
+              { label: "+ Client money received / (paid out)", value: clientFunds, color: clientFunds >= 0 ? "#FCD34D" : "#FCA5A5" },
+            ].concat(cf.difference !== 0 ? [{ label: "Unreconciled difference — check for entries on unknown accounts", value: cf.difference, color: "#FCA5A5" }] : [])
+            .map(function(row, i) {
               return React.createElement("tr", { key: i },
                 React.createElement("td", { style: { padding: "5px 0", fontSize: 12, color: "rgba(255,255,255,0.6)" } }, row.label),
                 React.createElement("td", { style: { textAlign: "right", fontVariantNumeric: "tabular-nums", fontSize: 12, fontWeight: 600, color: row.color, whiteSpace: "nowrap" } }, fmtAED(row.value))
@@ -249,42 +197,12 @@ function EquityReport(props) {
   var settings       = props.settings       || {};
 
   var company   = settings.company   || "Nasama Properties";
-  var netIncome = totalRev - totalExp;
-
+  // core.jsx computeEquityStatement — signed rows that add across and down; the
+  // closing total ties to the Balance Sheet (difference shown if it ever does not).
+  var es = computeEquityStatement({ accounts: accounts, openingLedger: openingLedger, filteredLedger: filteredLedger, toDateLedger: toDateLedger });
+  var netIncome = es.periodProfit;
+  var openTotal = es.total.opening, closeTotal = es.total.closing, perCapital = es.capitalIntroduced;
   var equityAccounts = accounts.filter(function(a) { return a.type === "Equity"; });
-
-  // Classify equity accounts
-  function isCapital(a)  { return /capital/i.test(a.name || ""); }
-  function isDrawing(a)  { return /drawing|draw|withdrawal/i.test(a.name || ""); }
-  function isRetained(a) { return /retained|reserve|profit/i.test(a.name || ""); }
-
-  var capitalAccts  = equityAccounts.filter(isCapital);
-  var drawingAccts  = equityAccounts.filter(function(a) { return isDrawing(a) && !isCapital(a); });
-  var retainedAccts = equityAccounts.filter(function(a) { return isRetained(a) && !isCapital(a) && !isDrawing(a); });
-  var otherEquity   = equityAccounts.filter(function(a) { return !isCapital(a) && !isDrawing(a) && !isRetained(a); });
-
-  function sumBalances(accts, ledger) {
-    return accts.reduce(function(s, a) { return s + accountBalance(a, ledger); }, 0);
-  }
-
-  // Opening balances (before period)
-  var openCapital  = sumBalances(capitalAccts,  openingLedger);
-  var openDrawings = sumBalances(drawingAccts,  openingLedger);
-  var openRetained = sumBalances(retainedAccts, openingLedger);
-  var openOther    = sumBalances(otherEquity,   openingLedger);
-  var openTotal    = sumBalances(equityAccounts, openingLedger);
-
-  // Period movements
-  var perCapital  = sumBalances(capitalAccts,  filteredLedger);
-  var perDrawings = sumBalances(drawingAccts,  filteredLedger);
-  var perOther    = sumBalances(otherEquity,   filteredLedger);
-
-  // Closing balances
-  var closeCapital  = sumBalances(capitalAccts,  toDateLedger);
-  var closeDrawings = sumBalances(drawingAccts,  toDateLedger);
-  var closeRetained = sumBalances(retainedAccts, toDateLedger);
-  var closeOther    = sumBalances(otherEquity,   toDateLedger);
-  var closeTotal    = sumBalances(equityAccounts, toDateLedger) + netIncome;
 
   var kpis = [
     { label: "Opening Equity",       value: fmtAED(openTotal),   color: RPT.blue  },
@@ -375,20 +293,11 @@ function EquityReport(props) {
           )
         ),
         React.createElement("tbody", null,
-          capitalAccts.length > 0  && EqRow("Capital / Paid-in Capital", openCapital,  perCapital,  0,          closeCapital),
-          drawingAccts.length > 0  && EqRow("Drawings",                  -openDrawings, -perDrawings, 0,         -closeDrawings),
-          retainedAccts.length > 0 && EqRow("Retained Earnings",         openRetained, 0,            0,          closeRetained),
-          React.createElement("tr", null,
-            React.createElement("td", { style: { padding: "11px 16px", fontSize: 13, color: RPT.textHeavy, borderBottom: "1px solid " + RPT.rule } }, "Net Income / (Loss) for Period"),
-            EqCell(0),
-            EqCell(0),
-            EqCell(netIncome),
-            EqCell(netIncome)
-          ),
-          otherEquity.length > 0 && EqRow("Other Equity",               openOther,    perOther,    0,          closeOther)
+          es.rows.map(function(r) { return React.createElement(React.Fragment, { key: r.key }, EqRow(r.label, r.opening, r.movement, r.ni, r.closing)); })
         ),
         React.createElement("tfoot", null,
-          EqRow("TOTAL EQUITY", openTotal, perCapital - perDrawings + perOther, netIncome, closeTotal, true)
+          EqRow("TOTAL EQUITY", es.total.opening, es.total.movement, es.total.ni, es.total.closing, true),
+          es.difference !== 0 && EqRow("Difference to Balance Sheet equity", 0, 0, 0, es.difference)
         )
       ),
 
@@ -396,7 +305,7 @@ function EquityReport(props) {
       React.createElement("div", { style: { padding: "14px 24px", background: RPT.bgAlt, borderTop: "1px solid " + RPT.rule } },
         React.createElement("div", { style: { fontSize: 11, color: RPT.muted, lineHeight: 1.6 } },
           React.createElement("span", { style: { fontWeight: 700, color: RPT.text } }, "Note: "),
-          "Net income for the period is derived from the Profit & Loss statement and represents the increase in retained earnings before any distribution to owners. Drawings reduce equity directly."
+          "Every figure is signed as it affects equity: drawings are negative. Opening retained earnings include all profit earned before the period that has not been closed to Retained Earnings; the period's net income comes from the Profit & Loss statement. The closing total equals equity on the Balance Sheet."
         )
       )
     )
@@ -658,7 +567,7 @@ function NotesReport(props) {
           trn && InfoRow("Tax Registration No.", trn),
           InfoRow("Reporting Period", periodLabel),
           InfoRow("Report Generated", generated),
-          InfoRow("Total Transactions", filteredTxns.length.toString()),
+          InfoRow("Total Transactions", filteredTxns.filter(function(t) { return !t.isVoid; }).length.toString()),
         ),
         React.createElement("div", null,
           InfoRow("Total Accounts",     accounts.length.toString()),
