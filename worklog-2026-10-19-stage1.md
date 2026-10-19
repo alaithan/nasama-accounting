@@ -28,6 +28,8 @@ Plan rows 1.1–1.8 of `implementation-plan-2026-10-18.md`. Built on branch `rev
 8. **Authentication → Sign-in method:** disable **Anonymous**.
 9. Check: open the site in a private window without signing in — nothing loads; a wrong password is refused; a username you never created a login for cannot get in.
 
+**Logins left behind by the old version.** Anyone who signed in with the previous app may already have a Firebase login under their username (its password was their old access code, or unknown). The app then refuses *First admin setup* / *Create login* with "A login already exists". Fix: Firebase console → Authentication → Users → find the username → ⋮ → **Delete account** (not *Reset password*, which tries to email), reload the app, and create the login again. The red message on the login page only refreshes when you press the button again.
+
 If step 7 locks you out (a mapping missing for your own login, say), roll the rules back in the console (Firestore → Rules → history), fix the mapping, redeploy.
 
 ## Resetting a forgotten password (admin)
