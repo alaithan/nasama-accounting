@@ -51,6 +51,16 @@ gcloud scheduler jobs create http nasama-weekly-backup --location=me-central1 \
 ```
 The service account needs the *Cloud Datastore Import Export Admin* role and write access to the bucket. Restore with `gcloud firestore import gs://…/weekly/<folder>`.
 
+## Google sign-in — done 2026-10-21
+The web client *738071507036-9c76qjrh826rfvm0ic69sugbifo484dg* (Google Cloud console → Google Auth Platform → Clients) is configured:
+
+| List | Entries |
+|---|---|
+| Authorized JavaScript origins | http://localhost, http://localhost:5000, https://nasama-accuntant.firebaseapp.com, https://alaithan.github.io, https://accounting.nasamaproperties.com |
+| Authorized redirect URIs | https://nasama-accuntant.firebaseapp.com/__/auth/handler, https://alaithan.github.io/nasama-accounting/, https://accounting.nasamaproperties.com/ |
+
+Origins take a bare domain (no path, no trailing slash); redirect URIs take the exact app address with the trailing slash. Tested the same evening on an iPhone in Safari: Continue with Google → "Finishing Google sign-in…" → the app opens, and reopening the site later goes straight in. For a new domain, add it to both lists. For testing on another local port, add its origin (e.g. http://localhost:8080) and its redirect (http://localhost:8080/).
+
 ## Known limits
 - **Google sign-in uses Google's own button** (Google Identity Services, loaded from accounts.google.com only on the login page). It hands the app a signed ID token which becomes the Firebase session, so it does not depend on the firebaseapp.com helper page that Safari blocks as a third party. **One-time setup:** Google Cloud console → APIs & Services → Credentials → the web client *Web client (auto created by Google Service)* → *Authorized JavaScript origins* → add every origin the app is served from (https://alaithan.github.io, the Hostinger domain, http://localhost:8080). Without this the button shows "origin is not allowed". **Phones and home-screen icons** do not use the button: the page itself goes to Google and Google returns to the app address with the signed token (OpenID Connect redirect), because Safari drops the pop-up hand-off. For that, on the same web client add the app addresses with their trailing slash under *Authorized redirect URIs*: https://alaithan.github.io/nasama-accounting/ , the Hostinger address, and http://localhost:8080/ . If Google's library cannot load, the old Firebase route is used instead: a pop-up on a computer. On a phone or tablet, or from a home-screen icon, the page itself goes to Google and comes back (a pop-up there opens in a separate tab the app never hears from, so the login form just stayed). The session is kept on the device, so the next visit opens the app without signing in again. One Google address can be linked to one username.
 - Posting limits and role are read at sign-in; after changing a user's limits they sign out and in.
