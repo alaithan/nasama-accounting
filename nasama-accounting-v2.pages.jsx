@@ -6645,6 +6645,41 @@ const GOOGLE_REDIRECT_KEY = "nasama_google_redirect";
 // the login page is shown. It hands the app a signed ID token straight from
 // Google, so sign-in never depends on the Firebase helper page on
 // firebaseapp.com — which Safari treats as a third party and blocks.
+// Phones (and anything run from a home-screen icon): no pop-up and no helper
+// page at all. The page itself goes to Google's sign-in and Google returns to
+// this exact address with a signed ID token in the URL fragment
+// (OpenID Connect implicit flow). readGoogleRedirectToken() picks it up on load
+// and the token becomes the Firebase session with signInWithCredential.
+// The return address must be listed under "Authorized redirect URIs" of the
+// web client — see worklog-2026-10-19-stage1.md.
+const GOOGLE_OAUTH_KEY = "nasama_google_oauth";
+const googleReturnUrl = () => (location.origin + location.pathname).replace(/index\.html$/, "");
+const startGoogleRedirect = () => {
+  const rnd = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const nonce = rnd(), state = rnd();
+  try { sessionStorage.setItem(GOOGLE_OAUTH_KEY, JSON.stringify({ nonce, state })); } catch { }
+  const u = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  u.searchParams.set("client_id", GOOGLE_WEB_CLIENT_ID);
+  u.searchParams.set("redirect_uri", googleReturnUrl());
+  u.searchParams.set("response_type", "id_token");
+  u.searchParams.set("scope", "openid email profile");
+  u.searchParams.set("nonce", nonce);
+  u.searchParams.set("state", state);
+  u.searchParams.set("prompt", "select_account");
+  location.assign(u.toString());
+};
+// Returns { idToken } when the page was just opened by Google's return, { error }
+// when Google refused, or null when this is an ordinary page load.
+const readGoogleRedirectToken = () => {
+  const h = location.hash || "";
+  if (!/(^#|&)(id_token|error)=/.test(h)) return null;
+  const q = new URLSearchParams(h.slice(1));
+  let saved = null; try { saved = JSON.parse(sessionStorage.getItem(GOOGLE_OAUTH_KEY) || "null"); sessionStorage.removeItem(GOOGLE_OAUTH_KEY); } catch { }
+  try { history.replaceState(null, "", location.pathname + location.search); } catch { }
+  if (q.get("error")) return { error: `Google refused the sign-in (${q.get("error")}).` };
+  if (!saved || saved.state !== q.get("state")) return { error: "The Google sign-in did not start from this page. Try again." };
+  return { idToken: q.get("id_token") };
+};
 let _gisLoad = null;
 const loadGoogleIdentity = () => {
   if (window.google && window.google.accounts && window.google.accounts.id) return Promise.resolve(window.google);
@@ -6695,6 +6730,7 @@ function AuthGate({ children }) {
   const [gisState, setGisState] = useState("loading");   // loading | ready | failed
   const gisRef = useRef(null);
   const adopting = useRef(false);
+  const finishingRedirect = useRef(false);   // a Google return is being turned into a session
 
   const resolveUserAccess = async (sessionUser) => {
     const roleId = sessionUser?.roleId || sessionUser?.role || "secretary";
@@ -6775,6 +6811,18 @@ function AuthGate({ children }) {
     // Coming back from Google's page (phones use a redirect, not a pop-up): collect
     // the result so an error is shown instead of a silent return to the login form.
     // onAuthStateChanged then fires with the signed-in account → adoptSession.
+    const back = readGoogleRedirectToken();
+    if (back) {
+      if (back.error) setError(back.error);
+      else {
+        finishingRedirect.current = true;
+        setLoadingMsg("Finishing Google sign-in…");
+        (async () => {
+          try { await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL); } catch { }
+          await auth.signInWithCredential(firebase.auth.GoogleAuthProvider.credential(back.idToken));   // → onAuthStateChanged → adoptSession
+        })().catch(err => { finishingRedirect.current = false; setError(explainAuthError(err)); setLoading(false); });
+      }
+    }
     let pending = false;
     try { pending = sessionStorage.getItem(GOOGLE_REDIRECT_KEY) === "1"; sessionStorage.removeItem(GOOGLE_REDIRECT_KEY); } catch { }
     if (pending && auth.getRedirectResult) {
@@ -6784,6 +6832,8 @@ function AuthGate({ children }) {
       }).catch(err => { setError(explainAuthError(err)); setLoading(false); });
     }
     const unsub = auth.onAuthStateChanged(async fbUser => {
+      if (!fbUser && finishingRedirect.current) return;   // the Google return is still being exchanged — keep "Finishing…"
+      finishingRedirect.current = false;
       if (adopting.current) return;
       adopting.current = true;
       try {
@@ -6826,7 +6876,7 @@ function AuthGate({ children }) {
     await auth.signInWithCredential(firebase.auth.GoogleAuthProvider.credential(resp.credential));
   });
   useEffect(() => {
-    if (loading || user || mode !== "signin" || typeof GOOGLE_WEB_CLIENT_ID === "undefined" || !GOOGLE_WEB_CLIENT_ID) return;
+    if (loading || user || mode !== "signin" || typeof GOOGLE_WEB_CLIENT_ID === "undefined" || !GOOGLE_WEB_CLIENT_ID || isPhoneOrStandalone()) return;
     let cancelled = false;
     loadGoogleIdentity().then(g => {
       const el = gisRef.current;
@@ -6840,6 +6890,7 @@ function AuthGate({ children }) {
   }, [loading, user, mode]);
   // Fallback when Google's library cannot load: the Firebase pop-up / redirect.
   const handleGoogle = () => run(async () => {
+    if (isPhoneOrStandalone() && typeof GOOGLE_WEB_CLIENT_ID !== "undefined" && GOOGLE_WEB_CLIENT_ID) { startGoogleRedirect(); return; }
     const prov = new firebase.auth.GoogleAuthProvider();
     prov.setCustomParameters({ prompt: "select_account" });
     try { await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL); } catch { }
@@ -6921,8 +6972,8 @@ function AuthGate({ children }) {
         </button>
         {mode === "signin" && <>
           <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "14px 0 10px", color: "#9CA3AF", fontSize: 12 }}><div style={{ flex: 1, height: 1, background: "#E5E7EB" }} />or<div style={{ flex: 1, height: 1, background: "#E5E7EB" }} /></div>
-          <div ref={gisRef} style={{ display: gisState === "failed" ? "none" : "flex", justifyContent: "center", minHeight: 44, opacity: authBusy ? .6 : 1, pointerEvents: authBusy ? "none" : "auto" }} />
-          {gisState === "failed" && <button type="button" disabled={authBusy} onClick={handleGoogle} title="Sign in with the Google account an admin linked to your username"
+          <div ref={gisRef} style={{ display: gisState === "failed" || isPhoneOrStandalone() ? "none" : "flex", justifyContent: "center", minHeight: 44, opacity: authBusy ? .6 : 1, pointerEvents: authBusy ? "none" : "auto" }} />
+          {(gisState === "failed" || isPhoneOrStandalone()) && <button type="button" disabled={authBusy} onClick={handleGoogle} title="Sign in with the Google account an admin linked to your username"
             style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, padding: "11px 0", background: "#fff", border: "1px solid #D1D5DB", borderRadius: 8, fontSize: 14, fontWeight: 600, color: "#374151", cursor: authBusy ? "default" : "pointer" }}>
             <GoogleMark /> Continue with Google
           </button>}
