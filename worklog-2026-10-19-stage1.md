@@ -52,7 +52,7 @@ gcloud scheduler jobs create http nasama-weekly-backup --location=me-central1 \
 The service account needs the *Cloud Datastore Import Export Admin* role and write access to the bucket. Restore with `gcloud firestore import gs://…/weekly/<folder>`.
 
 ## Known limits
-- Google sign-in opens a pop-up window; if the browser blocks it the page says so — allow pop-ups for the site. One Google address can be linked to one username.
+- Google sign-in opens a pop-up on a computer. On a phone or tablet, or from a home-screen icon, the page itself goes to Google and comes back (a pop-up there opens in a separate tab the app never hears from, so the login form just stayed). The session is kept on the device, so the next visit opens the app without signing in again. One Google address can be linked to one username.
 - Posting limits and role are read at sign-in; after changing a user's limits they sign out and in.
 - Settings (incl. depreciation lives, VAT period cycle, invoicing basis) are admin-only to save under the new rules; accountants can still read them.
 - The rules were written by hand and could not be run against the Firestore emulator here — step 9 is the test.

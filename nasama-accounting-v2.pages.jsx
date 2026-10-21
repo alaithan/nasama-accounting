@@ -6639,6 +6639,16 @@ function SecurityAdminPage({ userRole, userEmail, settings }) {
   </div>;
 }
 
+const GOOGLE_REDIRECT_KEY = "nasama_google_redirect";
+// Phones and tablets, and any browser running the site from a home-screen icon.
+const isPhoneOrStandalone = () => {
+  try {
+    const ua = navigator.userAgent || "";
+    const touchMac = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;   // iPad
+    const standalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || touchMac || standalone;
+  } catch { return false; }
+};
 function AuthGate({ children }) {
   // ── Login = Firebase Auth behind a USERNAME, two ways in:
   //   • username + password — usernames are not real mailboxes, so nothing
@@ -6662,6 +6672,7 @@ function AuthGate({ children }) {
   const [notice, setNotice] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [mustChange, setMustChange] = useState(false);
+  const [loadingMsg, setLoadingMsg] = useState("Loading…");
   const adopting = useRef(false);
 
   const resolveUserAccess = async (sessionUser) => {
@@ -6740,6 +6751,17 @@ function AuthGate({ children }) {
 
   useEffect(() => {
     if (typeof auth === 'undefined' || !auth || !auth.onAuthStateChanged) { setLoading(false); return; }
+    // Coming back from Google's page (phones use a redirect, not a pop-up): collect
+    // the result so an error is shown instead of a silent return to the login form.
+    // onAuthStateChanged then fires with the signed-in account → adoptSession.
+    let pending = false;
+    try { pending = sessionStorage.getItem(GOOGLE_REDIRECT_KEY) === "1"; sessionStorage.removeItem(GOOGLE_REDIRECT_KEY); } catch { }
+    if (pending && auth.getRedirectResult) {
+      setLoadingMsg("Finishing Google sign-in…");
+      auth.getRedirectResult().then(res => {
+        if (!res || !res.user) setNotice("Google did not return a signed-in account. Press Continue with Google again. If it keeps happening, open the site in Chrome or Safari itself rather than from a home-screen icon.");
+      }).catch(err => { setError(explainAuthError(err)); setLoading(false); });
+    }
     const unsub = auth.onAuthStateChanged(async fbUser => {
       if (adopting.current) return;
       adopting.current = true;
@@ -6770,10 +6792,22 @@ function AuthGate({ children }) {
   // Google: the person picks their Google account in a pop-up; adoptSession then
   // resolves the address through google_logins (linked by an admin). Nothing is
   // created here — an unlinked Google account is simply signed out again.
+  // On a phone, or from a home-screen icon, a pop-up is blocked or opens in a
+  // separate tab the app never hears from — the login form just stays. There the
+  // page itself goes to Google and comes back (signInWithRedirect); the effect
+  // above picks the result up. The session is kept on the device (LOCAL), so the
+  // next visit opens the app without signing in again.
   const handleGoogle = () => run(async () => {
     const prov = new firebase.auth.GoogleAuthProvider();
     prov.setCustomParameters({ prompt: "select_account" });
-    await auth.signInWithPopup(prov);   // onAuthStateChanged → adoptSession
+    try { await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL); } catch { }
+    const viaRedirect = async () => { try { sessionStorage.setItem(GOOGLE_REDIRECT_KEY, "1"); } catch { } await auth.signInWithRedirect(prov); };
+    if (isPhoneOrStandalone()) { await viaRedirect(); return; }
+    try { await auth.signInWithPopup(prov); }   // onAuthStateChanged → adoptSession
+    catch (e) {
+      if (["auth/popup-blocked", "auth/operation-not-supported-in-this-environment", "auth/cancelled-popup-request", "auth/web-storage-unsupported"].includes(e && e.code)) { await viaRedirect(); return; }
+      throw e;
+    }
   });
   // FIRST ADMIN ONLY: before the locked-down rules are deployed, the admin
   // creates their own login here and links it. Once the rules are live this
@@ -6823,7 +6857,7 @@ function AuthGate({ children }) {
 
   if (loading) return <div style={{ position: "fixed", inset: 0, background: NAVY, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20 }}>
     <Logo size={64} /><div style={{ color: GOLD, fontSize: 18, fontWeight: 700 }}>NASAMA PROPERTIES</div>
-    <div style={{ color: "#8B8BA8", fontSize: 13 }}>Loading…</div>
+    <div style={{ color: "#8B8BA8", fontSize: 13 }}>{loadingMsg}</div>
   </div>;
 
   if (!user) {
