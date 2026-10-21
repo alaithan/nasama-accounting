@@ -106,7 +106,7 @@ function DateFilterBar({ dateFilter, setDateFilter }) {
   ];
   return (
     <div style={{ display: "flex", gap: 3, flexWrap: isMobile ? "nowrap" : "wrap", overflowX: isMobile ? "auto" : "visible", WebkitOverflowScrolling: "touch", msOverflowStyle: "none", scrollbarWidth: "none", alignItems: "center", marginBottom: 18, padding: "7px 8px", background: "#ffffff", borderRadius: 12, border: "1px solid #EAECF0", boxShadow: "0 1px 3px rgba(16,24,40,.05)" }}>
-      <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: "#98A2B3", letterSpacing: "0.12em", marginRight: 6, paddingLeft: 6, flexShrink: 0 }}>Period</span>
+      <span style={{ fontSize: 12, fontWeight: 500, color: "#667085", marginRight: 6, paddingLeft: 8, flexShrink: 0 }}>Period</span>
       {PRESETS.map(p => {
         const active = dateFilter.preset === p.id;
         return <button key={p.id} onClick={() => {
@@ -2344,7 +2344,7 @@ function DealCard({ deal, txns, accounts, invoices, customers, brokers, develope
 
     {/* Off-screen A4-styled report — captured for PDF / WhatsApp */}
     <div style={{ position: "fixed", left: -10000, top: 0, zIndex: -1 }} aria-hidden="true">
-      <div id={REPORT_ID} style={{ width: 794, boxSizing: "border-box", background: "#fff", fontFamily: "Inter, Arial, Helvetica, sans-serif", color: "#2B2F3A", WebkitTextSizeAdjust: "100%", textSizeAdjust: "100%" }}>
+      <div id={REPORT_ID} style={{ width: 794, boxSizing: "border-box", background: "#fff", fontFamily: "'IBM Plex Sans', Arial, Helvetica, sans-serif", color: "#2B2F3A", WebkitTextSizeAdjust: "100%", textSizeAdjust: "100%" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "34px 44px 16px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <img src={NASAMA_ICON_SRC} alt="" style={{ width: 42, height: 42, objectFit: "contain" }} />
@@ -3184,6 +3184,7 @@ function VendorsPage(p) {
 // ╚══════════════════════════════════════════════════╝
 function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTxn, persistTxnBatch, journal, userRole, userEmail, settings }) {
   const [postBusy, guardPost] = useSubmitGuard(); // one transfer per click
+  const { isMobile } = useWindowSize();
   const txnById = useMemo(() => new Map((txns || []).map(t => [t.id, t])), [txns]); // O(1) row lookups
   const [showTransfer, setShowTransfer] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -3415,48 +3416,50 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
     });
   }, [txns, allLiquidAccts]);
 
-  // Shared activity table renderer
+  // Shared activity table renderer. Amounts are shown without the "AED" prefix —
+  // the table header says the unit once — so the figures line up on the decimal.
+  const num = c => ((c || 0) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const ActivityTable = (rows, emptyMsg) => (
     <div style={{ overflowX: "auto", overflowY: "visible" }}>
-      <table style={{ width: "100%", minWidth: 1060, borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
+      <table style={{ width: "100%", minWidth: 920, borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
         <colgroup>
-          <col style={{ width: 110 }} /><col style={{ width: 100 }} /><col /><col style={{ width: 140 }} /><col style={{ width: 140 }} /><col style={{ width: 150 }} /><col style={{ width: 120 }} />
+          <col style={{ width: 104 }} /><col style={{ width: 150 }} /><col /><col style={{ width: 124 }} /><col style={{ width: 124 }} /><col style={{ width: 136 }} /><col style={{ width: 132 }} />
         </colgroup>
         <thead><tr>
           <SortTh label="Date"        sortKey={sortKey} activeKey="date"        sortDir={sortDir} onToggle={toggleSort} />
           <SortTh label="Ref"         sortKey={sortKey} activeKey="ref"         sortDir={sortDir} onToggle={toggleSort} />
           <SortTh label="Description" sortKey={sortKey} activeKey="description" sortDir={sortDir} onToggle={toggleSort} />
-          <SortTh label="In (AED)"    sortKey={sortKey} activeKey="in"          sortDir={sortDir} onToggle={toggleSort} align="right" />
-          <SortTh label="Out (AED)"   sortKey={sortKey} activeKey="out"         sortDir={sortDir} onToggle={toggleSort} align="right" />
-          <th style={{ ...C.th, textAlign: "right", background: "#F0FDF4", color: "#065F46", letterSpacing: "0.04em" }}>Balance (AED)</th>
-          <th style={C.th}>Actions</th>
+          <SortTh label="In"          sortKey={sortKey} activeKey="in"          sortDir={sortDir} onToggle={toggleSort} align="right" />
+          <SortTh label="Out"         sortKey={sortKey} activeKey="out"         sortDir={sortDir} onToggle={toggleSort} align="right" />
+          <th style={{ ...C.th, textAlign: "right" }}>Balance</th>
+          <th style={C.th} />
         </tr></thead>
         <tbody>
-          {rows.length === 0 && <tr><td colSpan={7} style={{ ...C.td, textAlign: "center", padding: 32, color: "#9CA3AF" }}>{emptyMsg}</td></tr>}
+          {rows.length === 0 && <tr><td colSpan={7} style={{ ...C.td, textAlign: "center", padding: "36px 16px", color: "#98A2B3" }}>{emptyMsg}</td></tr>}
           {rows.map(row => {
             const origTxn = txnById.get(row.id);
             const isVoided = origTxn?.isVoid;
             const isReversal = origTxn?.ref?.startsWith("REV-");
-            const periodLocked = isTxnLocked(origTxn || row, settings) || isTxnReconciled(origTxn);
-            return <tr key={row.id} style={{ opacity: isVoided ? 0.45 : 1, background: isVoided ? "#FEF2F2" : undefined }}>
-              <td style={C.td}>{fmtDate(row.date)}</td>
-              <td style={C.td}>
-                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <span>{row.ref}</span>
-                  {isVoided && <span style={{ fontSize: 9, fontWeight: 700, color: "#DC2626", background: "#FEE2E2", padding: "1px 4px", borderRadius: 3 }}>VOID</span>}
-                  {isReversal && <span style={{ fontSize: 9, fontWeight: 700, color: "#7C3AED", background: "#EDE9FE", padding: "1px 4px", borderRadius: 3 }}>REV</span>}
-                </div>
+            const reconciled = isTxnReconciled(origTxn);
+            const periodLocked = isTxnLocked(origTxn || row, settings) || reconciled;
+            return <tr key={row.id} className="bk-row" style={{ opacity: isVoided ? 0.5 : 1 }}>
+              <td style={{ ...C.td, color: "#475467", whiteSpace: "nowrap" }}>{fmtDate(row.date)}</td>
+              <td style={{ ...C.td, fontSize: 12, color: "#667085", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={row.ref}>
+                {row.ref}
+                {isVoided && <span style={{ ...C.badge("danger"), marginLeft: 6, fontSize: 10, padding: "0 6px" }}>Void</span>}
+                {isReversal && <span style={{ ...C.badge("purple"), marginLeft: 6, fontSize: 10, padding: "0 6px" }}>Reversal</span>}
               </td>
-              <td style={{ ...C.td, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 0 }} title={row.description}>{row.description}</td>
-              <td style={{ ...C.td, textAlign: "right", color: row.inAmt  > 0 ? "#059669" : "#9CA3AF" }}>{row.inAmt  > 0 ? fmtAED(row.inAmt)  : "—"}</td>
-              <td style={{ ...C.td, textAlign: "right", color: row.outAmt > 0 ? "#DC2626" : "#9CA3AF" }}>{row.outAmt > 0 ? fmtAED(row.outAmt) : "—"}</td>
-              <td style={{ ...C.td, textAlign: "right", fontWeight: 600, fontVariantNumeric: "tabular-nums", background: isVoided ? "#FEF2F2" : "#F0FDF4", color: isVoided ? "#9CA3AF" : row.balance >= 0 ? "#065F46" : "#DC2626", whiteSpace: "nowrap" }}>{isVoided ? "—" : fmtAED(row.balance)}</td>
-              <td style={C.td}>
-                <div style={{ display: "flex", gap: 6 }}>
-                  {periodLocked && <span title={isTxnReconciled(origTxn) ? `Reconciled to the bank statement ending ${fmtDate(origTxn.statement_to || "")} — undo the reconciliation to change it` : `Closed period — locked through ${fmtDate(periodLockDate(settings))}. Correct it with a reversal in the Journal.`} style={{ fontSize: 12, color: "#6B7280" }}>{isTxnReconciled(origTxn) ? "✔︎ Reconciled" : "🔒 Closed"}</span>}
-                  {!periodLocked && !isVoided && hasPermission(userRole, 'canEditTxns') && <button style={C.btn("secondary", true)} onClick={() => setEditTxnId(row.id)}>Edit</button>}
-                  {!periodLocked && hasPermission(userRole, 'canVoidTxns') && <button style={C.btn("danger", true)} onClick={() => handleDeleteTxn(row.id)}>Delete</button>}
-                </div>
+              <td style={{ ...C.td, color: NAVY, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 0 }} title={row.description}>{row.description}</td>
+              <td style={{ ...C.td, textAlign: "right", color: NAVY, whiteSpace: "nowrap" }}>{row.inAmt > 0 ? num(row.inAmt) : ""}</td>
+              <td style={{ ...C.td, textAlign: "right", color: "#B42318", whiteSpace: "nowrap" }}>{row.outAmt > 0 ? "\u2212" + num(row.outAmt) : ""}</td>
+              <td style={{ ...C.td, textAlign: "right", fontWeight: 600, color: isVoided ? "#98A2B3" : row.balance >= 0 ? NAVY : "#B42318", whiteSpace: "nowrap" }}>{isVoided ? "" : num(row.balance)}</td>
+              <td style={{ ...C.td, textAlign: "right", whiteSpace: "nowrap", padding: "6px 10px" }}>
+                {periodLocked
+                  ? <span title={reconciled ? `Reconciled to the bank statement ending ${fmtDate(origTxn.statement_to || "")} — undo the reconciliation to change it` : `Closed period — locked through ${fmtDate(periodLockDate(settings))}. Correct it with a reversal in the Journal.`} style={{ fontSize: 12, color: "#667085" }}>{reconciled ? "Reconciled" : "Closed"}</span>
+                  : <span className="bk-actions" style={{ display: "inline-flex", gap: 2 }}>
+                      {!isVoided && hasPermission(userRole, 'canEditTxns') && <button style={C.btn("ghost", true)} onClick={() => setEditTxnId(row.id)}>Edit</button>}
+                      {hasPermission(userRole, 'canVoidTxns') && <button style={{ ...C.btn("ghost", true), color: "#B42318" }} onClick={() => handleDeleteTxn(row.id)}>Delete</button>}
+                    </span>}
               </td>
             </tr>;
           })}
@@ -3465,67 +3468,82 @@ function BankingPageV2({ accounts, setAccounts, txns, setTxns, ledger, persistTx
     </div>
   );
 
+  // Account panel: the balance as of today, then the money in and out for the
+  // selected period. Bank accounts get the dark brand panel; cash stays quiet.
+  const PERIOD_LABEL = { this_month: "this month", last_month: "last month", last_quarter: "last quarter", last_half: "last 6 months", this_year: "this year", last_year: "last year" };
+  const periodLabel = PERIOD_LABEL[dateFilter.preset] || (dateFilter.from ? `${fmtDate(dateFilter.from)} to ${fmtDate(dateFilter.to)}` : "all time");
+  const periodFlow = (acct) => txns.reduce((acc, t) => {
+    if (t.isVoid) return acc;
+    const d = t.date || "";
+    if ((dateFilter.from && d < dateFilter.from) || (dateFilter.to && d > dateFilter.to)) return acc;
+    (t.lines || []).forEach(l => { if (l.accountId === acct.id) { acc.inC += l.debit || 0; acc.outC += l.credit || 0; } });
+    return acc;
+  }, { inC: 0, outC: 0 });
+  const renderPanel = (acct, tone) => {
+    const dark = tone === "bank";
+    const bal = accountBalance(acct, ledger);
+    const { inC, outC } = periodFlow(acct);
+    const net = inC - outC;
+    const ink = dark ? "#FFFFFF" : NAVY, mute = dark ? "#8C95B9" : "#667085", neg = dark ? "#F97066" : "#B42318";
+    const stat = (label, value, color) => <div style={{ minWidth: 120 }}>
+      <div style={{ fontSize: 12, color: mute }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 500, marginTop: 2, color: color || ink }}>{value}</div>
+    </div>;
+    return <div key={acct.id} style={{ ...C.card, background: dark ? NAVY2 : "#fff", border: dark ? "1px solid #232B4D" : C.card.border, padding: isMobile ? "18px 18px 14px" : "22px 26px 18px", color: ink }}>
+      <div style={{ fontSize: 14, fontWeight: 600 }}>{acct.name}<span style={{ fontWeight: 400, color: mute, marginLeft: 8 }}>{acct.code}</span></div>
+      <div style={{ marginTop: dark ? 16 : 10, display: "flex", alignItems: "baseline", gap: 8 }}>
+        <span style={{ fontSize: 13, fontWeight: 500, color: dark ? GOLD : "#667085" }}>AED</span>
+        <span style={{ fontSize: isMobile ? 30 : dark ? 40 : 28, fontWeight: dark ? 300 : 400, letterSpacing: "-0.02em", lineHeight: 1.1, color: bal < 0 ? neg : ink }}>{num(bal)}</span>
+      </div>
+      <div style={{ height: 1, background: dark ? "rgba(255,255,255,.10)" : "#EAECF0", margin: dark ? "18px 0 12px" : "14px 0 10px" }} />
+      <div style={{ display: "flex", gap: isMobile ? 16 : 28, flexWrap: "wrap" }}>
+        {stat(`Received ${periodLabel}`, num(inC))}
+        {stat("Paid out", outC ? "\u2212" + num(outC) : num(0))}
+        {stat("Net", (net < 0 ? "\u2212" : "+") + num(Math.abs(net)), net < 0 ? neg : undefined)}
+      </div>
+    </div>;
+  };
+  const tableHead = (title, rows) => <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, padding: "14px 18px 12px", borderBottom: "1px solid #E4E7EC" }}>
+    <span style={{ fontSize: 14, fontWeight: 600, color: NAVY }}>{title}</span>
+    <span style={{ fontSize: 12, color: "#667085", whiteSpace: "nowrap" }}>{rows.length} {rows.length === 1 ? "entry" : "entries"}, amounts in AED</span>
+  </div>;
+
   return <div>
-    <PageHeader title="Banking" sub="Bank accounts and cash — kept separate">
+    <PageHeader title="Banking" sub="Bank accounts and cash, kept separate">
       <button style={C.btn("secondary")} onClick={handleExportBankRows}>Export Excel</button>
-      {hasPermission(userRole, 'canCreateTxns') && <button style={C.btn("secondary")} onClick={() => setShowImport(true)}>Import Bank CSV</button>}
-      {hasPermission(userRole, 'accounting.read') && <button style={C.btn("secondary")} onClick={() => setShowReconcile(true)}>🔄 Reconcile</button>}
-      {hasPermission(userRole, 'accounting.read') && <button style={C.btn("secondary")} onClick={() => setShowDuplicates(true)}>⚠ Duplicates</button>}
+      {hasPermission(userRole, 'canCreateTxns') && <button style={C.btn("secondary")} onClick={() => setShowImport(true)}>Import bank CSV</button>}
+      {hasPermission(userRole, 'accounting.read') && <button style={C.btn("secondary")} onClick={() => setShowReconcile(true)}>Reconcile</button>}
+      {hasPermission(userRole, 'accounting.read') && <button style={C.btn("secondary")} onClick={() => setShowDuplicates(true)}>Duplicates</button>}
       {hasPermission(userRole, 'canCreateTxns') && <button style={C.btn()} onClick={() => setShowTransfer(true)}>Transfer</button>}
     </PageHeader>
     <DateFilterBar dateFilter={dateFilter} setDateFilter={setDateFilter} />
 
-
-    {/* ══ BANK ACCOUNTS SECTION ═══════════════════════════════════════ */}
-    <div style={{ marginBottom: 28 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <div style={{ width: 3, height: 20, borderRadius: 2, background: "#1D4ED8" }} />
-        <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "#374151" }}>Bank Accounts</span>
-      </div>
-
+    {/* ══ BANK ACCOUNTS ═══════════════════════════════════════════════ */}
+    <div style={{ marginBottom: 32 }}>
       {bankOnlyAccts.length === 0
-        ? <div style={{ ...C.card, padding: "18px 20px", color: "#9CA3AF", fontSize: 13 }}>No bank accounts found. Go to Chart of Accounts and mark an account as "Bank account".</div>
+        ? <div style={{ ...C.card, padding: "18px 20px", color: "#667085", fontSize: 13 }}>No bank accounts yet. In Chart of Accounts, mark an account as a bank account.</div>
         : <>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 14, marginBottom: 16 }}>
-              {bankOnlyAccts.map(a => {
-                const bal = accountBalance(a, ledger);
-                return <div key={a.id} style={{ ...C.card, padding: "18px 20px", borderLeft: "4px solid #1D4ED8" }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{a.name}</div>
-                  <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 2 }}>Account {a.code}</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8, color: bal >= 0 ? "#059669" : "#DC2626" }}>{fmtAED(bal)}</div>
-                </div>;
-              })}
+            <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(${isMobile ? 260 : 380}px, 1fr))`, gap: 14, marginBottom: 18 }}>
+              {bankOnlyAccts.map(a => renderPanel(a, "bank"))}
             </div>
             <div style={C.card}>
-              <div style={{ padding: "12px 18px", borderBottom: "1px solid #E5E7EB", fontWeight: 600, fontSize: 13, color: "#1D4ED8" }}>Bank Transactions</div>
+              {tableHead("Bank transactions", bankRows)}
               {ActivityTable(bankRows, "No bank transactions in this period.")}
             </div>
           </>
       }
     </div>
 
-    {/* ══ CASH ACCOUNTS SECTION ════════════════════════════════════════ */}
-    <div style={{ marginBottom: 28 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <div style={{ width: 3, height: 20, borderRadius: 2, background: "#D97706" }} />
-        <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "#374151" }}>Cash Accounts</span>
-      </div>
-
+    {/* ══ CASH ACCOUNTS ═══════════════════════════════════════════════ */}
+    <div style={{ marginBottom: 32 }}>
       {cashOnlyAccts.length === 0
-        ? <div style={{ ...C.card, padding: "18px 20px", color: "#9CA3AF", fontSize: 13 }}>No cash accounts found. Go to Chart of Accounts and mark an account as "Cash / Petty Cash".</div>
+        ? <div style={{ ...C.card, padding: "18px 20px", color: "#667085", fontSize: 13 }}>No cash accounts yet. In Chart of Accounts, mark an account as cash or petty cash.</div>
         : <>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 14, marginBottom: 16 }}>
-              {cashOnlyAccts.map(a => {
-                const bal = accountBalance(a, ledger);
-                return <div key={a.id} style={{ ...C.card, padding: "18px 20px", borderLeft: "4px solid #D97706" }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{a.name}</div>
-                  <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 2 }}>Account {a.code}</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8, color: bal >= 0 ? "#059669" : "#DC2626" }}>{fmtAED(bal)}</div>
-                </div>;
-              })}
+            <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(${isMobile ? 260 : 380}px, 1fr))`, gap: 14, marginBottom: 18 }}>
+              {cashOnlyAccts.map(a => renderPanel(a, "cash"))}
             </div>
             <div style={C.card}>
-              <div style={{ padding: "12px 18px", borderBottom: "1px solid #E5E7EB", fontWeight: 600, fontSize: 13, color: "#D97706" }}>Cash Transactions</div>
+              {tableHead("Cash transactions", cashRows)}
               {ActivityTable(cashRows, "No cash transactions in this period.")}
             </div>
           </>
@@ -4443,7 +4461,7 @@ function VATPage({ accounts, txns, ledger, settings }) {
     }
 
     return (
-      '<div style="font-family:Inter,Arial,Helvetica,sans-serif;background:' + SURF + ';padding:18mm 16mm;color:' + INK + ';min-height:100%;box-sizing:border-box;position:relative;">' +
+      '<div style="font-family:"IBM Plex Sans",Arial,Helvetica,sans-serif;background:' + SURF + ';padding:18mm 16mm;color:' + INK + ';min-height:100%;box-sizing:border-box;position:relative;">' +
 
       // Decorative corner
       '<div style="position:absolute;top:0;right:0;width:72px;height:72px;background:rgba(15,28,44,0.06);border-bottom-left-radius:100%;-webkit-print-color-adjust:exact;print-color-adjust:exact;pointer-events:none;"></div>' +
@@ -4584,10 +4602,9 @@ function VATPage({ accounts, txns, ledger, settings }) {
     document.body.appendChild(iframe);
     var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
       '<base href="' + document.baseURI + '">' +
-      '<link rel="preconnect" href="https://fonts.googleapis.com">' +
-      '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,600;14..32,700;14..32,800&display=swap">' +
+      '<style>@font-face{font-family:"IBM Plex Sans";font-style:normal;font-weight:100 700;src:url("./vendor/fonts/ibm-plex-sans-var-latin.woff2") format("woff2");}</style>' +
       '<style>*,*::before,*::after{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;box-sizing:border-box;margin:0;padding:0;}' +
-      'html,body{background:#F7F9FB;color:#191C1E;font-family:"Inter",Arial,Helvetica,sans-serif;}' +
+      'html,body{background:#F7F9FB;color:#191C1E;font-family:"IBM Plex Sans",Arial,Helvetica,sans-serif;}' +
       '@page{margin:0;size:A4 portrait;}' +
       'table{border-collapse:collapse;width:100%;}thead{display:table-header-group;}tfoot{display:table-footer-group;}tr{page-break-inside:avoid;}' +
       '</style></head><body style="margin:0;padding:0;">' +

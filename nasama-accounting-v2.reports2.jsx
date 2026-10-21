@@ -102,7 +102,7 @@ function CFReport(props) {
     );
   }
 
-  return React.createElement("div", { style: { background: "#fff", fontFamily: "Inter, Arial, sans-serif" } },
+  return React.createElement("div", { style: { background: "#fff", fontFamily: "'IBM Plex Sans', Arial, sans-serif" } },
 
     React.createElement(RptHeader, {
       company:  company,
@@ -251,7 +251,7 @@ function EquityReport(props) {
 
   var hasEquity = equityAccounts.length > 0;
 
-  return React.createElement("div", { style: { background: "#fff", fontFamily: "Inter, Arial, sans-serif" } },
+  return React.createElement("div", { style: { background: "#fff", fontFamily: "'IBM Plex Sans', Arial, sans-serif" } },
 
     React.createElement(RptHeader, {
       company:  company,
@@ -546,7 +546,7 @@ function NotesReport(props) {
     );
   }
 
-  return React.createElement("div", { style: { background: "#fff", fontFamily: "Inter, Arial, sans-serif" } },
+  return React.createElement("div", { style: { background: "#fff", fontFamily: "'IBM Plex Sans', Arial, sans-serif" } },
 
     React.createElement(RptHeader, {
       company:  company,

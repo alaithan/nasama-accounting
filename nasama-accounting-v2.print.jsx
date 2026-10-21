@@ -18,7 +18,7 @@ const pFmt = c =>
 const PD = {
   // Typefaces
   serif:  "'Georgia', 'Times New Roman', Times, serif",
-  sans:   "'Inter', Arial, Helvetica, sans-serif",
+  sans:   "'IBM Plex Sans', Arial, Helvetica, sans-serif",
   mono:   "'ui-monospace', 'Courier New', Courier, monospace",
 
   // Ink palette — restrained, almost monochrome

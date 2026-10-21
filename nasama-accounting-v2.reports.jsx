@@ -40,8 +40,7 @@ function rptPrint(landscape) {
     '<html><head>' +
     '<meta charset="UTF-8">' +
     '<base href="' + document.baseURI + '">' +
-    '<link rel="preconnect" href="https://fonts.googleapis.com">' +
-    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700;14..32,800;14..32,900&display=swap">' +
+    '<style>@font-face{font-family:"IBM Plex Sans";font-style:normal;font-weight:100 700;src:url("./vendor/fonts/ibm-plex-sans-var-latin.woff2") format("woff2");}</style>' +
     '<style>' +
     '*, *::before, *::after {' +
     '  -webkit-print-color-adjust: exact !important;' +
@@ -50,7 +49,7 @@ function rptPrint(landscape) {
     '}' +
     'html, body {' +
     '  background: #ffffff; color: #000000;' +
-    '  font-family: "Inter", Arial, Helvetica, sans-serif;' +
+    '  font-family: "IBM Plex Sans", Arial, Helvetica, sans-serif;' +
     '}' +
     '@page {' +
     '  margin: 12mm 15mm 22mm;' +
@@ -664,7 +663,7 @@ function PLReport(props) {
   }
 
   return React.createElement("div", {
-    style: { background: "#fff", fontFamily: "Inter, Arial, sans-serif" }
+    style: { background: "#fff", fontFamily: "'IBM Plex Sans', Arial, sans-serif" }
   },
 
     /* Header */
@@ -873,7 +872,7 @@ function BSReport(props) {
     );
   }
 
-  return React.createElement("div", { style: { background: "#fff", fontFamily: "Inter, Arial, sans-serif" } },
+  return React.createElement("div", { style: { background: "#fff", fontFamily: "'IBM Plex Sans', Arial, sans-serif" } },
     React.createElement(RptHeader, {
       company:  company, title: title,
       subtitle: "Cumulative financial position as of the selected date",
@@ -985,7 +984,7 @@ function TBReport(props) {
   var company = settings.company || "Nasama Properties";
   var title   = "Trial Balance";
 
-  return React.createElement("div", { style: { background: "#fff", fontFamily: "Inter, Arial, sans-serif" } },
+  return React.createElement("div", { style: { background: "#fff", fontFamily: "'IBM Plex Sans', Arial, sans-serif" } },
     React.createElement(RptHeader, {
       company: company, title: title,
       subtitle: "Net account balances for the selected period",
@@ -1160,7 +1159,7 @@ function GLReport(props) {
   var company = settings.company || "Nasama Properties";
   var title   = "General Ledger";
 
-  return React.createElement("div", { style: { background: "#fff", fontFamily: "Inter, Arial, sans-serif" } },
+  return React.createElement("div", { style: { background: "#fff", fontFamily: "'IBM Plex Sans', Arial, sans-serif" } },
     React.createElement(RptHeader, {
       company: company, title: title,
       subtitle: "All transactions grouped by account with running balance",
@@ -1191,7 +1190,7 @@ function GLReport(props) {
             padding: "7px 10px 7px 30px", fontSize: 12.5,
             border: "1px solid " + RPT.rule, borderRadius: 6,
             outline: "none", background: "#fff",
-            fontFamily: "Inter, Arial, sans-serif",
+            fontFamily: "'IBM Plex Sans', Arial, sans-serif",
           }
         })
       ),
@@ -1218,7 +1217,7 @@ function GLReport(props) {
               background: active ? col[0] : "#fff",
               color: active ? (t === "All" ? "#fff" : col[1] === "#fff" ? "#fff" : col[0]) : RPT.subtle,
               transition: "all 0.15s",
-              fontFamily: "Inter, Arial, sans-serif",
+              fontFamily: "'IBM Plex Sans', Arial, sans-serif",
             }
           }, t);
         })
@@ -1236,7 +1235,7 @@ function GLReport(props) {
         style: {
           padding: "6px 10px", fontSize: 12, border: "1px solid " + RPT.rule,
           borderRadius: 6, background: "#fff", color: RPT.textHeavy,
-          flex: "0 1 200px", minWidth: 140, fontFamily: "Inter, Arial, sans-serif",
+          flex: "0 1 200px", minWidth: 140, fontFamily: "'IBM Plex Sans', Arial, sans-serif",
         }
       },
         React.createElement("option", { value: "" }, "Jump to account\u2026"),
@@ -1263,7 +1262,7 @@ function GLReport(props) {
           style: {
             padding: "5px 10px", fontSize: 11.5, border: "1px solid " + RPT.rule,
             borderRadius: 5, background: "#fff", color: RPT.subtle, cursor: "pointer",
-            fontFamily: "Inter, Arial, sans-serif",
+            fontFamily: "'IBM Plex Sans', Arial, sans-serif",
           }
         }, "\u00D7 Clear")
     ),
