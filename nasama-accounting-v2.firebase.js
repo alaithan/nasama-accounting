@@ -1,5 +1,8 @@
 ﻿// ── FIREBASE INIT ─────────────────────────────────
     var db, auth;
+    // Google OAuth web client of this Firebase project (public, like the API key).
+    // Used by Google's sign-in library on the login page — see AuthGate.
+    var GOOGLE_WEB_CLIENT_ID = "738071507036-9c76qjrh826rfvm0ic69sugbifo484dg.apps.googleusercontent.com";
     try {
       const firebaseConfig = {
         apiKey: "AIzaSyDc4SS-bJyGJKo5ZbK0legkZDT3JPFE82A",
