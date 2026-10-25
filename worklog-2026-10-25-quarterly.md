@@ -40,3 +40,4 @@ New page **Quarterly (AR)** under ACCOUNTING: `nasama-accounting-v2.quarterly.js
 - Receivables/payables tab: with "إظهار تفصيل الحسابات" on, the payables line splits by WHAT was accrued (the expense account each 2210 accrual debited: Office Rent, Manager Salary …), open until a settlement naming it (accrual_txn_id) is posted; untraceable 2210 balance shown as "other" so lines tie to the ledger. Also in Excel/PDF and in the narrative (largest item). `qtrPayablesBreakdown`.
 - Every statement tab shows Q1–Q4 of the selected year as columns (selected quarter tinted); Δ/% still vs the comparison quarter.
 - Decision (owner asked): office rent and manager fixed salary stay in opex; only commissions/incentives/override are cost of revenue.
+- Income statement expense rows carry a red «غير مدفوع» tag with the open accrued amount at the quarter end (summary opex / cost-of-revenue rows: «منها غير مدفوع»). Also in the PDF and as an extra Excel column.

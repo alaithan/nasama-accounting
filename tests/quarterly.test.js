@@ -206,6 +206,17 @@ ok(cmpR.detail.payableLines.some(r => r.key === "5100" && r.cur === 3000000 && r
 ok(/أكبر بند: Office Rent/.test(Q.qtrInsights(q2r, q1, cmpR).filter(i => i.section === "aging").map(i => i.text).join()), "narrative names the biggest accrued item");
 eq(Q.qtrRowQuarterValues(cmpR.detail.payableLines.find(r => r.key === "5100"), "aging", Q.computeYearQuarters({ accounts: MOCK.accounts, txns: [...MOCK.txns, rentAcc], year: 2026 })).join(","), "0,3000000,3000000,3000000", "accrued rent per quarter column");
 
+console.log("▸ unpaid (accrued, unsettled) tag on expense rows");
+eq(cmpR.detail.opex.find(r => r.key === "5100").unpaid, 3000000, "rent row tagged with the 30,000 still unpaid");
+eq(cmpR.detail.opex.find(r => r.key === "5110").unpaid, 450000, "June DEWA row tagged 4,500");
+eq(cmpR.detail.opex.find(r => r.key === "5010").unpaid, undefined, "salaries paid in cash carry no tag");
+eq(cmpR.income.find(r => r.key === "opex").unpaid, 3450000, "summary opex row: of which unpaid = 34,500");
+eq(cmpR.income.find(r => r.key === "costOfRevenue").unpaid, undefined, "nothing accrued in cost of revenue");
+eq(cmp.detail.opex.find(r => r.key === "5110").unpaid, 450000, "base book: only the June DEWA accrual is unpaid at Q2 end");
+ok(Q.qtrPrintHtml({ cur: q2r, prev: q1, cmp: cmpR, insights: ins, company: "X" }).includes('class="unpaid">غير مدفوع 30,000.00'), "PDF shows the red unpaid tag");
+eq(Q.qtrTableAoa(cmpR.detail.opex, q2r, q1)[0][6], "منه غير مدفوع (مستحق)", "Excel has the unpaid column");
+eq(Q.qtrTableAoa(cmpR.detail.opex, q2r, q1).find(r => r[0].startsWith("5100"))[6], 30000, "Excel unpaid value in AED");
+
 // ── Part B: seeded random books ──────────────────────────────────────────────
 console.log("▸ seeded random balanced books × quarters — identities");
 function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }

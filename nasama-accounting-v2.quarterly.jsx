@@ -238,6 +238,7 @@ function compareQuarters(cur, prev) {
     const c = qtrSectionOf(cur, section), p = qtrSectionOf(prev, section);
     out[section] = QTR_ROWS[section].map(([key, label, good, kind]) => qtrCompareValue(key, label, p[key] || 0, c[key] || 0, good, kind));
   });
+  // (tagUnpaid is defined below; summary opex / cost-of-revenue rows get "of which unpaid" after the detail map exists)
   // Account-level detail (income statement + balance sheet), union of both quarters' lines.
   const detail = (getLines, goodWhenUp) => {
     const byCode = new Map();
@@ -245,12 +246,20 @@ function compareQuarters(cur, prev) {
     (getLines(cur) || []).forEach(l => { const r = byCode.get(l.code) || { label: `${l.code} · ${l.name}`, prev: 0, cur: 0 }; r.cur = l.amount; byCode.set(l.code, r); });
     return [...byCode.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1).map(([code, r]) => qtrCompareValue(code, r.label, r.prev, r.cur, goodWhenUp, "detail"));
   };
+  // Unpaid tag: the open accrued amount (2210, by expense account) at the current quarter's end.
+  const openByCode = new Map(((cur.aging.lines && cur.aging.lines.payables) || []).filter(l => l.amount > 0).map(l => [l.code, l.amount]));
+  const tagUnpaid = (rows, codesOf) => rows.map(r => {
+    const unpaid = r.kind === "detail" ? (openByCode.get(r.key) || 0) : (codesOf ? codesOf().reduce((t, c) => t + (openByCode.get(c) || 0), 0) : 0);
+    return unpaid > 0 ? { ...r, unpaid } : r;
+  });
+  const codes = group => (cur.income.lines[group] || []).map(l => l.code);
   out.detail = {
-    revenue: detail(s => s.income.lines.revenue, true), costOfRevenue: detail(s => s.income.lines.costOfRevenue, false), opex: detail(s => s.income.lines.opex, false),
+    revenue: detail(s => s.income.lines.revenue, true), costOfRevenue: tagUnpaid(detail(s => s.income.lines.costOfRevenue, false)), opex: tagUnpaid(detail(s => s.income.lines.opex, false)),
     currentAssets: detail(s => s.balance.lines.currentAssets, true), nonCurrentAssets: detail(s => s.balance.lines.nonCurrentAssets, true),
     currentLiabilities: detail(s => s.balance.lines.currentLiabilities, false), longTermLiabilities: detail(s => s.balance.lines.longTermLiabilities, false), equity: detail(s => s.balance.lines.equity, true),
     receivableLines: detail(s => s.aging.lines && s.aging.lines.receivables, false), payableLines: detail(s => s.aging.lines && s.aging.lines.payables, false),
   };
+  out.income = out.income.map(r => r.key === "opex" ? tagUnpaid([r], () => codes("opex"))[0] : r.key === "costOfRevenue" ? tagUnpaid([r], () => codes("costOfRevenue"))[0] : r);
   out.kpis = [
     { key: "grossMargin", label: "هامش مجمل الربح", prev: prev.ratios.grossMargin, cur: cur.ratios.grossMargin, fmt: "pct", goodWhenUp: true,
       hint: "نسبة ما يتبقى من كل درهم إيراد بعد خصم عمولات الوسطاء والتكاليف المباشرة للصفقة." },
@@ -427,8 +436,8 @@ function qtrYearAoa(section, snaps) {
 
 /** Table header + rows for one section — shared by the Excel export and the test. */
 function qtrTableAoa(rows, cur, prev) {
-  const head = ["البند", prev.period.label, cur.period.label, "قيمة التغير", "نسبة التغير %", "الاتجاه"];
-  const body = rows.map(r => [r.label, r.prev / 100, r.cur / 100, r.delta / 100, r.pct == null ? "" : Math.round(r.pct * 1000) / 10, QTR_ARROW[r.direction]]);
+  const head = ["البند", prev.period.label, cur.period.label, "قيمة التغير", "نسبة التغير %", "الاتجاه", "منه غير مدفوع (مستحق)"];
+  const body = rows.map(r => [r.label, r.prev / 100, r.cur / 100, r.delta / 100, r.pct == null ? "" : Math.round(r.pct * 1000) / 10, QTR_ARROW[r.direction], r.unpaid > 0 ? r.unpaid / 100 : ""]);
   return [head, ...body];
 }
 function qtrExportExcel({ cur, prev, cmp, insights, company, yearSnaps, yearInsights }) {
@@ -448,8 +457,8 @@ function qtrExportExcel({ cur, prev, cmp, insights, company, yearSnaps, yearInsi
   const sheet = (name, rows, extra) => {
     const aoa = [...title, ...qtrTableAoa(rows, cur, prev), ...(extra || [])];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = [{ wch: 52 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 14 }, { wch: 8 }];
-    for (let r = title.length + 1; r < aoa.length; r++) [1, 2, 3].forEach(c => { const cell = ws[XLSX.utils.encode_cell({ r, c })]; if (cell && typeof cell.v === "number") cell.z = "#,##0.00;(#,##0.00)"; });
+    ws["!cols"] = [{ wch: 52 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 14 }, { wch: 8 }, { wch: 20 }];
+    for (let r = title.length + 1; r < aoa.length; r++) [1, 2, 3, 6].forEach(c => { const cell = ws[XLSX.utils.encode_cell({ r, c })]; if (cell && typeof cell.v === "number") cell.z = "#,##0.00;(#,##0.00)"; });
     XLSX.utils.book_append_sheet(wb, ws, name);
   };
   const note = section => [[], ["ملخص وتوضيح النتائج ببساطة"], ...insights.filter(i => i.section === section).map(i => [i.text])];
@@ -478,7 +487,8 @@ function qtrPrintHtml({ cur, prev, cmp, insights, company, trn, cmpMode, yearSna
   const cmpLabel = cmpMode === "yoy" ? "بالربع نفسه من العام السابق" : "بالربع السابق مباشرة";
   const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const cls = r => r.kind === "total" ? "total" : r.kind === "subtotal" ? "subtotal" : r.kind === "detail" ? "detail" : r.kind === "opening" ? "opening" : "";
-  const rowHtml = r => `<tr class="${cls(r)}"><td class="lbl">${esc(r.label)}</td><td class="num">${qtrMoney(r.prev)}</td><td class="num">${qtrMoney(r.cur)}</td><td class="num ${r.tone}">${qtrMoney(r.delta)}</td><td class="num ${r.tone}">${qtrPct(r.pct)}</td><td class="arr ${r.tone}">${QTR_ARROW[r.direction]}</td></tr>`;
+  const unpaidTag = r => r.unpaid > 0 ? ` <span class="unpaid">${r.kind === "detail" ? "غير مدفوع" : "منها غير مدفوع"} ${qtrMoney(r.unpaid)}</span>` : "";
+  const rowHtml = r => `<tr class="${cls(r)}"><td class="lbl">${esc(r.label)}${unpaidTag(r)}</td><td class="num">${qtrMoney(r.prev)}</td><td class="num">${qtrMoney(r.cur)}</td><td class="num ${r.tone}">${qtrMoney(r.delta)}</td><td class="num ${r.tone}">${qtrPct(r.pct)}</td><td class="arr ${r.tone}">${QTR_ARROW[r.direction]}</td></tr>`;
   const table = rows => `<table><thead><tr><th class="lbl">البند</th><th>${esc(prev.period.label)}</th><th>${esc(cur.period.label)}</th><th>قيمة التغير</th><th>نسبة التغير</th><th>المؤشر</th></tr></thead><tbody>${rows.map(rowHtml).join("")}</tbody></table>`;
   const notes = section => { const list = insights.filter(i => i.section === section); return list.length ? `<div class="notes"><div class="notes-h">ملخص وتوضيح النتائج ببساطة</div>${list.map(i => `<p class="${i.tone}">${esc(i.text)}</p>`).join("")}</div>` : ""; };
   const withDetail = (summary, groups) => groups.reduce((acc, [heading, rows]) => rows.length ? acc.concat([{ label: heading, prev: 0, cur: 0, delta: 0, pct: null, direction: "flat", tone: "neutral", kind: "group" }], rows) : acc, summary.slice());
@@ -508,6 +518,7 @@ tr.opening td{color:#667085}
 tr.group td{background:#F8F9FB;color:#475467;font-weight:600;font-size:8.5pt;padding-top:6pt}
 tr.detail td{color:#475467;font-size:8.8pt}tr.detail td.lbl{padding-right:18pt}
 .good{color:#027A48}.bad{color:#B42318}.neutral{color:#475467}.warn{color:#B54708}
+.unpaid{display:inline-block;margin-right:5pt;padding:0 5pt;border:0.6pt solid #FECDCA;border-radius:8pt;background:#FEF3F2;color:#B42318;font-size:7.5pt;font-weight:700;direction:rtl;white-space:nowrap}
 .notes{background:#F8F9FB;border:0.75pt solid #E4E7EC;border-radius:6pt;padding:8pt 11pt;margin:4pt 0 10pt;page-break-inside:avoid}
 .notes-h{font-weight:700;font-size:10pt;margin-bottom:4pt;color:#0C0F1E}.notes p{margin:3pt 0;font-size:9.5pt}
 .notes p.warn{background:#FFFAEB;border-right:3pt solid #F79009;padding:3pt 6pt;border-radius:3pt}
@@ -566,7 +577,7 @@ function QtrCompareTable({ rows, cur, prev, groups, snaps, section }) {
   const rowStyle = r => r.kind === "total" ? { fontWeight: 700, borderTop: `1.5px solid ${GOLD}` } : r.kind === "subtotal" ? { fontWeight: 600 } : r.kind === "opening" ? { color: "#667085" } : r.kind === "detail" ? { color: "#475467", fontSize: 12.5 } : {};
   const cellBg = (s, r) => same(s, cur) ? CUR_BG : same(s, prev) ? PREV_BG : r.kind === "total" ? "#FCFCFD" : undefined;
   const Row = r => { const vals = qtrRowQuarterValues(r, section, quarters); return <tr key={r.key} style={rowStyle(r)}>
-    <td style={{ ...C.td, textAlign: "right", paddingRight: r.kind === "detail" ? 28 : 14, background: r.kind === "total" ? "#FCFCFD" : undefined }}>{r.label}</td>
+    <td style={{ ...C.td, textAlign: "right", paddingRight: r.kind === "detail" ? 28 : 14, background: r.kind === "total" ? "#FCFCFD" : undefined }}>{r.label}{r.unpaid > 0 && <QtrUnpaidTag amount={r.unpaid} summary={r.kind !== "detail"} />}</td>
     {showPrevCol && <td style={{ ...C.td, ...R, background: PREV_BG }}>{qtrMoney(r.prev)}</td>}
     {quarters.map((s, i) => <td key={i} style={{ ...C.td, ...R, background: cellBg(s, r), fontWeight: same(s, cur) && r.kind !== "detail" ? 600 : undefined }}>{qtrMoney(vals[i])}</td>)}
     <td style={{ ...C.td, ...R, color: QTR_TONE_COLOR[r.tone] }}>{qtrMoney(r.delta)}</td>
@@ -587,6 +598,11 @@ function QtrCompareTable({ rows, cur, prev, groups, snaps, section }) {
       {(groups || []).map(([heading, list]) => list.length ? [<tr key={"g" + heading}><td colSpan={nCols} style={{ ...C.td, background: "#F8F9FB", color: "#475467", fontWeight: 600, fontSize: 12, textAlign: "right" }}>{heading}</td></tr>, ...list.map(Row)] : null)}
     </tbody>
   </table></div>;
+}
+/** Red "unpaid" tag: the part of this expense that was accrued and is still owed at the quarter end. */
+function QtrUnpaidTag({ amount, summary }) {
+  return <span title="مبلغ مُثبت كمصروف في هذا الربع لكنه ما زال في المصروفات المستحقة (2210) ولم يُدفع بعد" style={{ display: "inline-block", marginRight: 8, padding: "1px 8px", borderRadius: 999, background: "#FEF3F2", color: "#B42318", border: "1px solid #FECDCA", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", verticalAlign: "middle" }}>
+    {summary ? "منها غير مدفوع" : "غير مدفوع"} <span style={{ direction: "ltr", unicodeBidi: "isolate" }}>{qtrMoney(amount)}</span></span>;
 }
 function QtrInsightsBox({ items }) {
   if (!items.length) return null;
