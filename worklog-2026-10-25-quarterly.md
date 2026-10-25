@@ -33,3 +33,7 @@ New page **Quarterly (AR)** under ACCOUNTING: `nasama-accounting-v2.quarterly.js
 ## Not done / to verify in the browser
 - Visual check in the live app (RTL inside the LTR shell, print dialog on Chrome/Edge, Excel RTL view).
 - Not committed / not pushed.
+
+## Follow-up (same day)
+- Comparison mode selector: previous quarter (QoQ) or the same quarter last year (YoY) — `qtrCompareTarget`.
+- New tab «السنة كاملة (4 أرباع)»: all four statements with Q1–Q4 columns; income/cash flow total across the year, balance sheet/receivables show the year-end column. Year narrative `qtrYearInsights`. Added to the Excel workbook (sheet "السنة كاملة") and appended to the PDF on a new page.
