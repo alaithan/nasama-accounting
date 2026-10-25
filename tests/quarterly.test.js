@@ -162,7 +162,7 @@ eq(yrow(yBal, "totalAssets").total, ys[3].balance.totalAssets, "year-end total a
 eq(yrow(yCash, "openingCash").total, ys[0].cashflow.openingCash, "year opening cash = Q1 opening");
 eq(yrow(yCash, "closingCash").total, ys[3].cashflow.closingCash, "year closing cash = Q4 closing");
 eq(yrow(yCash, "netChange").total, ys[3].cashflow.closingCash - ys[0].cashflow.openingCash, "annual net change ties opening to closing");
-eq(yrow(yCash, "operating").total, 11240000 - 18205000, "annual operating cash = Q1 + Q2");
+eq(yrow(yCash, "operating").total, 11240000 - 18205000, "annual operating cash = Q1 + Q2 (Q3 has client money only)");
 const yT = Q.qtrYearTotals(ys);
 ok(Math.abs(yT.grossMargin - (90000000 - 34500000) / 90000000) < 1e-12, "annual gross margin from annual totals");
 const yI = Q.qtrYearInsights(ys, 2026);
@@ -180,7 +180,7 @@ ok(emptyYear.length === 1 && /لا توجد قيود/.test(emptyYear[0].text), "
 console.log("▸ per-quarter columns inside the comparison tables");
 eq(Q.qtrRowQuarterValues(row("income", "revenue"), "income", ys).join(","), "33000000,57000000,0,0", "summary row: four quarter values");
 eq(Q.qtrRowQuarterValues(cmp.detail.revenue.find(r => r.key === "4010"), "income", ys).join(","), "0,15000000,0,0", "detail row: account 4010 per quarter");
-eq(Q.qtrRowQuarterValues(cmp.detail.currentLiabilities.find(r => r.key === "2230"), "balance", ys).join(","), "0,5000000,5000000,5000000", "balance detail: client deposits carry forward");
+eq(Q.qtrRowQuarterValues(cmp.detail.currentLiabilities.find(r => r.key === "2230"), "balance", ys).join(","), "0,5000000,0,0", "balance detail: client deposit held at Q2 end, refunded in Q3");
 eq(Q.qtrLineAmount(ys[1], "income", "9999"), 0, "unknown account → 0");
 eq(Q.qtrRowQuarterValues(row("cashflow", "operating"), "cashflow", ys).join(","), "11240000,-18205000,0,0", "cash flow row per quarter");
 
@@ -216,6 +216,17 @@ eq(cmp.detail.opex.find(r => r.key === "5110").unpaid, 450000, "base book: only 
 ok(Q.qtrPrintHtml({ cur: q2r, prev: q1, cmp: cmpR, insights: ins, company: "X" }).includes('class="unpaid">غير مدفوع 30,000.00'), "PDF shows the red unpaid tag");
 eq(Q.qtrTableAoa(cmpR.detail.opex, q2r, q1)[0][6], "منه غير مدفوع (مستحق)", "Excel has the unpaid column");
 eq(Q.qtrTableAoa(cmpR.detail.opex, q2r, q1).find(r => r[0].startsWith("5100"))[6], 30000, "Excel unpaid value in AED");
+
+console.log("▸ client money: gross in / out, not just net");
+const q3 = Q.computeQuarterSnapshot({ accounts: MOCK.accounts, txns: MOCK.txns, year: 2026, quarter: 3 });
+eq(q3.cashflow.clientFundsIn, 6300000, "Q3: 63,000 received"); eq(q3.cashflow.clientFundsOut, -11300000, "Q3: 50,000 refund + 63,000 passed on");
+eq(q3.cashflow.clientFunds, -5000000, "Q3 net = −50,000"); eq(q3.cashflow.difference, 0, "Q3 cash flow still reconciles");
+eq(q2.cashflow.clientFundsIn, 5000000, "Q2: 50,000 received"); eq(q2.cashflow.clientFundsOut, 0, "Q2: nothing out");
+eq(q3.balance.lines.currentLiabilities.find(l => l.code === "2230"), undefined, "Q3 end: no client money held");
+const cmp3 = Q.compareQuarters(q3, q2);
+eq(cmp3.cashflow.map(r => r.key).join(","), "openingCash,operating,investing,financing,clientFundsIn,clientFundsOut,clientFunds,netChange,closingCash", "cash flow rows incl. gross client lines");
+ok(/63,000/.test(Q.qtrInsights(q3, q2, cmp3).filter(i => i.section === "cashflow").map(i => i.text).join()), "narrative states the 63,000 received");
+eq(q3.income.revenue, 0, "client money is never revenue");
 
 // ── Part B: seeded random books ──────────────────────────────────────────────
 console.log("▸ seeded random balanced books × quarters — identities");

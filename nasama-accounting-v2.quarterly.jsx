@@ -154,9 +154,12 @@ function computeQuarterSnapshot({ accounts, txns, year, quarter, invoices }) {
 
   // Cash flow — the same engine as the English statement
   const cf = computeCashFlow({ accounts: A, txns: inPeriod, openingLedger: opening, toDateLedger: toDate });
+  const cfLines = cf.sections.clientFunds.lines || [];
   const cashflow = {
     operating: cf.sections.operating.total, investing: cf.sections.investing.total,
     financing: cf.sections.financing.total, clientFunds: cf.sections.clientFunds.total,
+    clientFundsIn: cfLines.reduce((t, l) => l.amount > 0 ? t + l.amount : t, 0),
+    clientFundsOut: cfLines.reduce((t, l) => l.amount < 0 ? t + l.amount : t, 0),
     netChange: cf.netMovement, openingCash: cf.openingCash, closingCash: cf.closingCash, difference: cf.difference,
   };
 
@@ -215,7 +218,9 @@ const QTR_ROWS = {
   cashflow: [
     ["openingCash", "النقدية أول الفترة", true, "opening"],
     ["operating", "التدفقات النقدية من الأنشطة التشغيلية", true], ["investing", "التدفقات النقدية من الأنشطة الاستثمارية", true],
-    ["financing", "التدفقات النقدية من الأنشطة التمويلية", true], ["clientFunds", "حركة أمانات العملاء (أموال محتجزة)", true],
+    ["financing", "التدفقات النقدية من الأنشطة التمويلية", true],
+    ["clientFundsIn", "أمانات عملاء مستلمة خلال الربع (ليست إيراداً)", true, "detail"], ["clientFundsOut", "أمانات عملاء مردودة أو مصروفة خلال الربع", true, "detail"],
+    ["clientFunds", "صافي حركة أمانات العملاء (أموال محتجزة)", true],
     ["netChange", "صافي التغير في النقدية", true, "subtotal"], ["closingCash", "النقدية آخر الفترة", true, "total"],
   ],
   aging: [
@@ -381,7 +386,7 @@ function qtrInsights(cur, prev, cmp) {
   push("cashflow", CF.netChange >= 0 ? "good" : "bad", `${dir(CF.netChange, "زادت", "نقصت")} النقدية خلال الربع بمقدار ${qtrFmtAr(CF.netChange)} لتصبح ${qtrFmtAr(CF.closingCash)} في ${cur.period.to.slice(8, 10)}/${cur.period.to.slice(5, 7)}/${cur.period.year}` +
     (CF.investing < 0 ? `، منها ${qtrFmtAr(CF.investing)} أُنفقت على شراء أصول ثابتة` : "") +
     (CF.financing !== 0 ? `، و${CF.financing > 0 ? "دخلت" : "خرجت"} ${qtrFmtAr(CF.financing)} عبر أنشطة التمويل (رأس مال، قروض، مسحوبات)` : "") +
-    (CF.clientFunds !== 0 ? `. كما ${CF.clientFunds > 0 ? "استُلمت" : "رُدَّت"} أمانات عملاء بقيمة ${qtrFmtAr(CF.clientFunds)} وهي ليست من أموال الشركة` : "") + ".");
+    (CF.clientFundsIn || CF.clientFundsOut ? `. كما استُلمت أمانات عملاء بقيمة ${qtrFmtAr(CF.clientFundsIn)} ورُدَّت أو صُرفت منها ${qtrFmtAr(CF.clientFundsOut)} (صافي ${qtrFmtAr(CF.clientFunds)})، وهي أموال محتجزة لصالح العملاء وليست من أموال الشركة` : "") + ".");
 
   // ── Balance sheet
   const cr = cur.ratios.currentRatio;
