@@ -500,19 +500,20 @@ function qtrPrint(html) {
 
 // ── 7. PAGE ────────────────────────────────────────
 function QtrCompareTable({ rows, cur, prev, groups }) {
-  const R = { textAlign: "left", direction: "ltr", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" };
-  const th = { ...C.th, textAlign: "center", fontSize: 12 };
+  // Figures: LTR digits, right-aligned under a right-aligned header, fixed column width so the label column takes the slack.
+  const R = { textAlign: "right", direction: "ltr", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", width: 150 };
+  const th = { ...C.th, textAlign: "right", fontSize: 12, width: 150 };
   const rowStyle = r => r.kind === "total" ? { fontWeight: 700, background: "#FFF8E6", borderTop: `1.5px solid ${GOLD}` } : r.kind === "subtotal" ? { fontWeight: 600, background: "#FCFCFD" } : r.kind === "opening" ? { color: "#667085" } : r.kind === "detail" ? { color: "#475467", fontSize: 12.5 } : {};
   const Row = r => <tr key={r.key} style={rowStyle(r)}>
     <td style={{ ...C.td, textAlign: "right", paddingRight: r.kind === "detail" ? 28 : 14 }}>{r.label}</td>
     <td style={{ ...C.td, ...R }}>{qtrMoney(r.prev)}</td>
     <td style={{ ...C.td, ...R, fontWeight: r.kind === "detail" ? 400 : 600 }}>{qtrMoney(r.cur)}</td>
     <td style={{ ...C.td, ...R, color: QTR_TONE_COLOR[r.tone] }}>{qtrMoney(r.delta)}</td>
-    <td style={{ ...C.td, ...R, color: QTR_TONE_COLOR[r.tone] }}>{qtrPct(r.pct)}</td>
-    <td style={{ ...C.td, textAlign: "center" }}><span title={r.direction === "up" ? "ارتفاع" : r.direction === "down" ? "انخفاض" : "بدون تغيير"} style={{ display: "inline-block", minWidth: 28, padding: "2px 6px", borderRadius: 999, fontSize: 12, fontWeight: 700, color: QTR_TONE_COLOR[r.tone], background: r.tone === "good" ? "#ECFDF3" : r.tone === "bad" ? "#FEF3F2" : "#F2F4F7" }}>{QTR_ARROW[r.direction]}</span></td>
+    <td style={{ ...C.td, ...R, width: 110, color: QTR_TONE_COLOR[r.tone] }}>{qtrPct(r.pct)}</td>
+    <td style={{ ...C.td, textAlign: "center", width: 70 }}><span title={r.direction === "up" ? "ارتفاع" : r.direction === "down" ? "انخفاض" : "بدون تغيير"} style={{ display: "inline-block", minWidth: 28, padding: "2px 6px", borderRadius: 999, fontSize: 12, fontWeight: 700, color: QTR_TONE_COLOR[r.tone], background: r.tone === "good" ? "#ECFDF3" : r.tone === "bad" ? "#FEF3F2" : "#F2F4F7" }}>{QTR_ARROW[r.direction]}</span></td>
   </tr>;
   return <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
-    <thead><tr><th style={{ ...th, textAlign: "right" }}>البند</th><th style={th}>{prev.period.label}</th><th style={th}>{cur.period.label}</th><th style={th}>قيمة التغير</th><th style={th}>نسبة التغير %</th><th style={th}>المؤشر</th></tr></thead>
+    <thead><tr><th style={{ ...th, width: "auto" }}>البند</th><th style={th}>{prev.period.label}</th><th style={th}>{cur.period.label}</th><th style={th}>قيمة التغير</th><th style={{ ...th, width: 110 }}>نسبة التغير %</th><th style={{ ...th, textAlign: "center", width: 70 }}>المؤشر</th></tr></thead>
     <tbody>
       {rows.map(Row)}
       {(groups || []).map(([heading, list]) => list.length ? [<tr key={"g" + heading}><td colSpan={6} style={{ ...C.td, background: "#F8F9FB", color: "#475467", fontWeight: 600, fontSize: 12, textAlign: "right" }}>{heading}</td></tr>, ...list.map(Row)] : null)}
@@ -532,8 +533,8 @@ function QtrKpiCard({ k }) {
   const tone = k.delta == null || k.delta === 0 ? "neutral" : (k.delta > 0) === k.goodWhenUp ? "good" : "bad";
   return <div style={{ ...C.card, padding: "14px 18px", display: "flex", flexDirection: "column", gap: 4 }}>
     <div style={{ fontSize: 12.5, color: "#667085", fontWeight: 600 }}>{k.label}</div>
-    <div style={{ display: "flex", alignItems: "baseline", gap: 10, direction: "ltr", justifyContent: "flex-end" }}>
-      <span style={{ fontSize: 24, fontWeight: 700, color: NAVY, fontVariantNumeric: "tabular-nums" }}>{qtrKpiText(k.cur, k.fmt)}</span>
+    <div style={{ display: "flex", alignItems: "baseline", gap: 10, justifyContent: "flex-start" }}>
+      <span style={{ fontSize: 24, fontWeight: 700, color: NAVY, fontVariantNumeric: "tabular-nums", direction: "ltr", unicodeBidi: "isolate" }}>{qtrKpiText(k.cur, k.fmt)}</span>
       {k.delta != null && <span style={{ fontSize: 12, fontWeight: 700, color: QTR_TONE_COLOR[tone] }}>{QTR_ARROW[k.delta > 0 ? "up" : k.delta < 0 ? "down" : "flat"]} {k.fmt === "x" ? Math.abs(k.delta).toLocaleString("en-US", { maximumFractionDigits: 2 }) + "x" : (Math.abs(k.delta) * 100).toLocaleString("en-US", { maximumFractionDigits: 1 }) + " نقطة"}</span>}
     </div>
     <div style={{ fontSize: 11.5, color: "#98A2B3" }}>الربع السابق: <span style={{ direction: "ltr", display: "inline-block" }}>{qtrKpiText(k.prev, k.fmt)}</span></div>
@@ -544,11 +545,12 @@ function QtrKpiCard({ k }) {
 function QtrYearTable({ section, snaps }) {
   const flow = QTR_FLOW_SECTIONS.includes(section);
   const rows = qtrYearRows(section, snaps);
-  const R = { textAlign: "left", direction: "ltr", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" };
-  const th = { ...C.th, textAlign: "center", fontSize: 12 };
+  // Figures: LTR digits, right-aligned under a right-aligned header, fixed column width so the label column takes the slack.
+  const R = { textAlign: "right", direction: "ltr", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", width: 150 };
+  const th = { ...C.th, textAlign: "right", fontSize: 12, width: 150 };
   const rowStyle = r => r.kind === "total" ? { fontWeight: 700, background: "#FFF8E6", borderTop: `1.5px solid ${GOLD}` } : r.kind === "subtotal" ? { fontWeight: 600, background: "#FCFCFD" } : r.kind === "opening" ? { color: "#667085" } : {};
   return <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
-    <thead><tr><th style={{ ...th, textAlign: "right" }}>البند</th>{snaps.map(s => <th key={s.period.quarter} style={th}>{QTR_LABELS_AR[s.period.quarter - 1]}<div style={{ fontWeight: 400, color: "#98A2B3", fontSize: 11 }}>{s.period.months.replace(` ${s.period.year}`, "")}</div></th>)}<th style={{ ...th, background: "#FFF8E6" }}>{flow ? "إجمالي السنة" : "نهاية السنة"}</th></tr></thead>
+    <thead><tr><th style={{ ...th, width: "auto" }}>البند</th>{snaps.map(s => <th key={s.period.quarter} style={th}>{QTR_LABELS_AR[s.period.quarter - 1]}<div style={{ fontWeight: 400, color: "#98A2B3", fontSize: 11 }}>{s.period.months.replace(` ${s.period.year}`, "")}</div></th>)}<th style={{ ...th, background: "#FFF8E6", width: 160 }}>{flow ? "إجمالي السنة" : "نهاية السنة"}</th></tr></thead>
     <tbody>{rows.map(r => <tr key={r.key} style={rowStyle(r)}>
       <td style={{ ...C.td, textAlign: "right" }}>{r.label}</td>
       {r.values.map((v, i) => <td key={i} style={{ ...C.td, ...R }}>{qtrMoney(v)}</td>)}
