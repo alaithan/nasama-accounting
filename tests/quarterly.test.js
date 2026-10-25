@@ -28,7 +28,7 @@ const CORE = new Function(...CORE_NAMES, compile("nasama-accounting-v2.core.jsx"
 const Q_NAMES = ["React", "useState", "useEffect", "useMemo", "C", "NAVY", "GOLD", "toast", "todayStr", "usePersistedState", "ls_get", "db", "XLSX", "document", "console",
   "buildLedger", "accountBalance", "computeCashFlow", "withoutClosing", "AR_ACCOUNT_CODE", "DEFAULT_REPORTING_START_DATE"];
 const Q = new Function(...Q_NAMES, compile("nasama-accounting-v2.quarterly.jsx") +
-  "; return { qtrRange, qtrPrevOf, qtrOfDate, qtrListYears, computeQuarterSnapshot, compareQuarters, qtrInsights, qtrTableAoa, qtrPrintHtml, qtrMoney, qtrPct, QTR_ROWS, qtrCompareTarget, computeYearQuarters, qtrYearRows, qtrYearTotals, qtrYearInsights, qtrYearAoa };")
+  "; return { qtrRange, qtrPrevOf, qtrOfDate, qtrListYears, computeQuarterSnapshot, compareQuarters, qtrInsights, qtrTableAoa, qtrPrintHtml, qtrMoney, qtrPct, QTR_ROWS, qtrCompareTarget, computeYearQuarters, qtrYearRows, qtrYearTotals, qtrYearInsights, qtrYearAoa, qtrRowQuarterValues, qtrLineAmount };")
   .apply(null, Q_NAMES.map(n => n === "React" ? REACT_STUB : n === "console" ? console : n in CORE ? CORE[n] : n === "C" ? {} : () => undefined));
 
 const MOCK = require(path.join(ROOT, "tools", "quarterly-mock-data.js"));
@@ -176,6 +176,13 @@ ok(htmlY.includes("الأرباع الأربعة جنباً إلى جنب") && h
 ok(htmlY.includes("بالربع نفسه من العام السابق"), "PDF header names the year-on-year mode");
 const emptyYear = Q.qtrYearInsights(Q.computeYearQuarters({ accounts: MOCK.accounts, txns: MOCK.txns, year: 2024 }), 2024);
 ok(emptyYear.length === 1 && /لا توجد قيود/.test(emptyYear[0].text), "empty year: single 'no entries' line");
+
+console.log("▸ per-quarter columns inside the comparison tables");
+eq(Q.qtrRowQuarterValues(row("income", "revenue"), "income", ys).join(","), "33000000,57000000,0,0", "summary row: four quarter values");
+eq(Q.qtrRowQuarterValues(cmp.detail.revenue.find(r => r.key === "4010"), "income", ys).join(","), "0,15000000,0,0", "detail row: account 4010 per quarter");
+eq(Q.qtrRowQuarterValues(cmp.detail.currentLiabilities.find(r => r.key === "2230"), "balance", ys).join(","), "0,5000000,5000000,5000000", "balance detail: client deposits carry forward");
+eq(Q.qtrLineAmount(ys[1], "income", "9999"), 0, "unknown account → 0");
+eq(Q.qtrRowQuarterValues(row("cashflow", "operating"), "cashflow", ys).join(","), "11240000,-18205000,0,0", "cash flow row per quarter");
 
 // ── Part B: seeded random books ──────────────────────────────────────────────
 console.log("▸ seeded random balanced books × quarters — identities");

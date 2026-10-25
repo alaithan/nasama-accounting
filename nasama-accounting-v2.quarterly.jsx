@@ -499,24 +499,49 @@ function qtrPrint(html) {
 }
 
 // ── 7. PAGE ────────────────────────────────────────
-function QtrCompareTable({ rows, cur, prev, groups }) {
+/** Amount of one account line (detail row) in a quarter snapshot, searched across the section's line groups. */
+function qtrLineAmount(snap, section, code) {
+  const groups = section === "income" ? snap.income.lines : section === "balance" ? snap.balance.lines : null;
+  if (!groups) return 0;
+  for (const k in groups) { const l = (groups[k] || []).find(x => x.code === code); if (l) return l.amount; }
+  return 0;
+}
+/** Per-quarter values for a comparison row: summary rows read the section figure, detail rows read the account line. */
+function qtrRowQuarterValues(row, section, snaps) {
+  return (snaps || []).map(s => row.kind === "detail" ? qtrLineAmount(s, section, row.key) : (qtrSectionOf(s, section)[row.key] || 0));
+}
+// Columns: label · [comparison quarter when it is outside the displayed year] · Q1 · Q2 · Q3 · Q4 · Δ · % · arrow.
+// The selected quarter's column is tinted; Δ/% compare it with the comparison quarter.
+function QtrCompareTable({ rows, cur, prev, groups, snaps, section }) {
   // Figures: LTR digits, right-aligned under a right-aligned header, fixed column width so the label column takes the slack.
   const R = { textAlign: "right", direction: "ltr", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", width: 150 };
   const th = { ...C.th, textAlign: "right", fontSize: 12, width: 150 };
-  const rowStyle = r => r.kind === "total" ? { fontWeight: 700, background: "#FFF8E6", borderTop: `1.5px solid ${GOLD}` } : r.kind === "subtotal" ? { fontWeight: 600, background: "#FCFCFD" } : r.kind === "opening" ? { color: "#667085" } : r.kind === "detail" ? { color: "#475467", fontSize: 12.5 } : {};
-  const Row = r => <tr key={r.key} style={rowStyle(r)}>
-    <td style={{ ...C.td, textAlign: "right", paddingRight: r.kind === "detail" ? 28 : 14 }}>{r.label}</td>
-    <td style={{ ...C.td, ...R }}>{qtrMoney(r.prev)}</td>
-    <td style={{ ...C.td, ...R, fontWeight: r.kind === "detail" ? 400 : 600 }}>{qtrMoney(r.cur)}</td>
+  const quarters = snaps && snaps.length === 4 ? snaps : [cur];
+  const same = (a, b) => a.period.year === b.period.year && a.period.quarter === b.period.quarter;
+  const showPrevCol = !quarters.some(s => same(s, prev));
+  const CUR_BG = "#FFF8E6", PREV_BG = "#F8F9FB";
+  const rowStyle = r => r.kind === "total" ? { fontWeight: 700, borderTop: `1.5px solid ${GOLD}` } : r.kind === "subtotal" ? { fontWeight: 600 } : r.kind === "opening" ? { color: "#667085" } : r.kind === "detail" ? { color: "#475467", fontSize: 12.5 } : {};
+  const cellBg = (s, r) => same(s, cur) ? CUR_BG : same(s, prev) ? PREV_BG : r.kind === "total" ? "#FCFCFD" : undefined;
+  const Row = r => { const vals = qtrRowQuarterValues(r, section, quarters); return <tr key={r.key} style={rowStyle(r)}>
+    <td style={{ ...C.td, textAlign: "right", paddingRight: r.kind === "detail" ? 28 : 14, background: r.kind === "total" ? "#FCFCFD" : undefined }}>{r.label}</td>
+    {showPrevCol && <td style={{ ...C.td, ...R, background: PREV_BG }}>{qtrMoney(r.prev)}</td>}
+    {quarters.map((s, i) => <td key={i} style={{ ...C.td, ...R, background: cellBg(s, r), fontWeight: same(s, cur) && r.kind !== "detail" ? 600 : undefined }}>{qtrMoney(vals[i])}</td>)}
     <td style={{ ...C.td, ...R, color: QTR_TONE_COLOR[r.tone] }}>{qtrMoney(r.delta)}</td>
     <td style={{ ...C.td, ...R, width: 110, color: QTR_TONE_COLOR[r.tone] }}>{qtrPct(r.pct)}</td>
     <td style={{ ...C.td, textAlign: "center", width: 70 }}><span title={r.direction === "up" ? "ارتفاع" : r.direction === "down" ? "انخفاض" : "بدون تغيير"} style={{ display: "inline-block", minWidth: 28, padding: "2px 6px", borderRadius: 999, fontSize: 12, fontWeight: 700, color: QTR_TONE_COLOR[r.tone], background: r.tone === "good" ? "#ECFDF3" : r.tone === "bad" ? "#FEF3F2" : "#F2F4F7" }}>{QTR_ARROW[r.direction]}</span></td>
-  </tr>;
+  </tr>; };
+  const sub = (t, c) => <div style={{ fontWeight: 400, color: c || "#98A2B3", fontSize: 11 }}>{t}</div>;
+  const nCols = 4 + (showPrevCol ? 1 : 0) + quarters.length;
   return <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
-    <thead><tr><th style={{ ...th, width: "auto" }}>البند</th><th style={th}>{prev.period.label}</th><th style={th}>{cur.period.label}</th><th style={th}>قيمة التغير</th><th style={{ ...th, width: 110 }}>نسبة التغير %</th><th style={{ ...th, textAlign: "center", width: 70 }}>المؤشر</th></tr></thead>
+    <thead><tr>
+      <th style={{ ...th, width: "auto" }}>البند</th>
+      {showPrevCol && <th style={{ ...th, background: PREV_BG }}>{prev.period.label}{sub("الربع المقارن")}</th>}
+      {quarters.map((s, i) => <th key={i} style={{ ...th, background: same(s, cur) ? CUR_BG : same(s, prev) ? PREV_BG : undefined }}>{QTR_LABELS_AR[s.period.quarter - 1]} {s.period.year}{same(s, cur) ? sub("الربع الحالي", "#B54708") : same(s, prev) ? sub("الربع المقارن") : sub(s.period.months.replace(` ${s.period.year}`, ""))}</th>)}
+      <th style={th}>قيمة التغير{sub("الحالي − المقارن")}</th><th style={{ ...th, width: 110 }}>نسبة التغير %</th><th style={{ ...th, textAlign: "center", width: 70 }}>المؤشر</th>
+    </tr></thead>
     <tbody>
       {rows.map(Row)}
-      {(groups || []).map(([heading, list]) => list.length ? [<tr key={"g" + heading}><td colSpan={6} style={{ ...C.td, background: "#F8F9FB", color: "#475467", fontWeight: 600, fontSize: 12, textAlign: "right" }}>{heading}</td></tr>, ...list.map(Row)] : null)}
+      {(groups || []).map(([heading, list]) => list.length ? [<tr key={"g" + heading}><td colSpan={nCols} style={{ ...C.td, background: "#F8F9FB", color: "#475467", fontWeight: 600, fontSize: 12, textAlign: "right" }}>{heading}</td></tr>, ...list.map(Row)] : null)}
     </tbody>
   </table></div>;
 }
@@ -634,9 +659,9 @@ function QuarterlyReportsPage({ accounts, txns, settings }) {
     </div> : <div style={{ ...C.card, padding: 0, overflow: "hidden" }}>
       <div style={{ padding: "14px 18px", borderBottom: "1px solid #EAECF0", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontWeight: 700, color: NAVY, fontSize: 15 }}>{QTR_SECTION_TITLE[tab]}</div>
-        <div style={{ fontSize: 12, color: "#98A2B3" }}>{tab === "balance" || tab === "aging" ? `أرصدة نهاية الفترة · ${prev.period.to} مقابل ${cur.period.to}` : `حركة الفترة · ${cur.period.from} إلى ${cur.period.to}`}</div>
+        <div style={{ fontSize: 12, color: "#98A2B3" }}>{tab === "balance" || tab === "aging" ? `أرصدة نهاية كل ربع في ${year} · التغير يقارن ${cur.period.to} بـ${prev.period.to}` : `حركة كل ربع في ${year} · التغير يقارن ${cur.period.label} بـ${prev.period.label}`}</div>
       </div>
-      <QtrCompareTable rows={cmp[tab]} cur={cur} prev={prev} groups={groups} />
+      <QtrCompareTable rows={cmp[tab]} cur={cur} prev={prev} groups={groups} snaps={yearSnaps} section={tab} />
       {tab === "balance" && Math.abs(cur.balance.check) > 0 && <div style={{ ...C.err, margin: 14 }}>الميزانية غير متوازنة بفارق {qtrMoney(cur.balance.check)} — راجع دفتر اليومية.</div>}
       {tab === "cashflow" && Math.abs(cur.cashflow.difference) > 0 && <div style={{ ...C.err, margin: 14 }}>قائمة التدفقات لا تتطابق مع أرصدة النقدية بفارق {qtrMoney(cur.cashflow.difference)}.</div>}
       {tab === "aging" && <div style={{ padding: "12px 18px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, borderTop: "1px solid #EAECF0" }}>
