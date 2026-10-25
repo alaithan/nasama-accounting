@@ -28,7 +28,7 @@ const CORE = new Function(...CORE_NAMES, compile("nasama-accounting-v2.core.jsx"
 const Q_NAMES = ["React", "useState", "useEffect", "useMemo", "C", "NAVY", "GOLD", "toast", "todayStr", "usePersistedState", "ls_get", "db", "XLSX", "document", "console",
   "buildLedger", "accountBalance", "computeCashFlow", "withoutClosing", "reversedTxnIds", "AR_ACCOUNT_CODE", "DEFAULT_REPORTING_START_DATE"];
 const Q = new Function(...Q_NAMES, compile("nasama-accounting-v2.quarterly.jsx") +
-  "; return { qtrRange, qtrPrevOf, qtrOfDate, qtrListYears, computeQuarterSnapshot, compareQuarters, qtrInsights, qtrTableAoa, qtrPrintHtml, qtrMoney, qtrPct, QTR_ROWS, qtrCompareTarget, computeYearQuarters, qtrYearRows, qtrYearTotals, qtrYearInsights, qtrYearAoa, qtrRowQuarterValues, qtrLineAmount, qtrPayablesBreakdown };")
+  "; return { qtrRange, qtrPrevOf, qtrOfDate, qtrListYears, computeQuarterSnapshot, compareQuarters, qtrInsights, qtrTableAoa, qtrPrintHtml, qtrMoney, qtrPct, QTR_ROWS, qtrCompareTarget, computeYearQuarters, qtrYearRows, qtrYearTotals, qtrYearInsights, qtrYearAoa, qtrRowQuarterValues, qtrLineAmount, qtrPayablesBreakdown, qtrCodeOf, QTR_PERIOD_ORDER };")
   .apply(null, Q_NAMES.map(n => n === "React" ? REACT_STUB : n === "console" ? console : n in CORE ? CORE[n] : n === "C" ? {} : () => undefined));
 
 const MOCK = require(path.join(ROOT, "tools", "quarterly-mock-data.js"));
@@ -173,7 +173,7 @@ eq(yAoa[0].length, 6, "year sheet: label + 4 quarters + total"); eq(yAoa[0][5], 
 eq(Q.qtrYearAoa("balance", ys)[0][5], "نهاية السنة", "position header says year end");
 const htmlY = Q.qtrPrintHtml({ cur: q2, prev: q1, cmp, insights: ins, company: "X", cmpMode: "yoy", yearSnaps: ys, yearInsights: yI });
 ok(htmlY.includes("الأرباع الأربعة جنباً إلى جنب") && htmlY.includes("page-break-before:always"), "PDF appends the four-quarter section on a new page");
-ok(htmlY.includes("بالربع نفسه من العام السابق"), "PDF header names the year-on-year mode");
+ok(htmlY.includes("بالفترة نفسها من العام السابق"), "PDF header names the year-on-year mode");
 const emptyYear = Q.qtrYearInsights(Q.computeYearQuarters({ accounts: MOCK.accounts, txns: MOCK.txns, year: 2024 }), 2024);
 ok(emptyYear.length === 1 && /لا توجد قيود/.test(emptyYear[0].text), "empty year: single 'no entries' line");
 
@@ -227,6 +227,34 @@ const cmp3 = Q.compareQuarters(q3, q2);
 eq(cmp3.cashflow.map(r => r.key).join(","), "openingCash,operating,investing,financing,clientFundsIn,clientFundsOut,clientFunds,netChange,closingCash", "cash flow rows incl. gross client lines");
 ok(/63,000/.test(Q.qtrInsights(q3, q2, cmp3).filter(i => i.section === "cashflow").map(i => i.text).join()), "narrative states the 63,000 received");
 eq(q3.income.revenue, 0, "client money is never revenue");
+
+console.log("▸ half-year and full-year periods");
+eq(Q.qtrRange(2026, "H1").from + ".." + Q.qtrRange(2026, "H1").to, "2026-01-01..2026-06-30", "H1 range"); eq(Q.qtrRange(2026, "H1").days, 181, "H1 2026 days");
+eq(Q.qtrRange(2026, "H2").from + ".." + Q.qtrRange(2026, "H2").to, "2026-07-01..2026-12-31", "H2 range");
+eq(Q.qtrRange(2026, "FY").from + ".." + Q.qtrRange(2026, "FY").to, "2026-01-01..2026-12-31", "FY range"); eq(Q.qtrRange(2026, "FY").days, 365, "FY days");
+eq(Q.qtrRange(2026, "H1").label, "النصف الأول 2026", "H1 label"); eq(Q.qtrRange(2026, "FY").label, "السنة كاملة 2026", "FY label");
+eq(Q.qtrRange(2026, "Q3").quarter, 3, "code Q3 → quarter 3"); eq(Q.qtrRange(2026, 3).code, "Q3", "quarter 3 → code Q3"); eq(Q.qtrRange(2026, "H2").quarters.join(","), "3,4", "H2 spans Q3, Q4");
+eq(Q.qtrCodeOf(2), "Q2", "codeOf number"); eq(Q.qtrCodeOf("H1"), "H1", "codeOf code"); eq(Q.qtrCodeOf("junk"), "Q1", "codeOf junk → Q1");
+eq(JSON.stringify(Q.qtrCompareTarget(2026, "H1", "qoq")), JSON.stringify({ year: 2025, quarter: "H2" }), "H1 vs H2 of last year");
+eq(JSON.stringify(Q.qtrCompareTarget(2026, "H2", "qoq")), JSON.stringify({ year: 2026, quarter: "H1" }), "H2 vs H1 same year");
+eq(JSON.stringify(Q.qtrCompareTarget(2026, "FY", "qoq")), JSON.stringify({ year: 2025, quarter: "FY" }), "FY vs last FY");
+eq(JSON.stringify(Q.qtrCompareTarget(2026, "H1", "yoy")), JSON.stringify({ year: 2025, quarter: "H1" }), "H1 vs H1 last year");
+eq(JSON.stringify(Q.qtrCompareTarget(2026, "Q3", "qoq")), JSON.stringify({ year: 2026, quarter: 2 }), "code Q3 qoq → quarter 2 (number)");
+eq(Q.QTR_PERIOD_ORDER.join(","), "Q1,Q2,Q3,Q4,H1,H2,FY", "selector order");
+const h1 = Q.computeQuarterSnapshot({ accounts: MOCK.accounts, txns: MOCK.txns, year: 2026, quarter: "H1" });
+const fy = Q.computeQuarterSnapshot({ accounts: MOCK.accounts, txns: MOCK.txns, year: 2026, quarter: "FY" });
+eq(h1.income.revenue, q1.income.revenue + q2.income.revenue, "H1 revenue = Q1 + Q2");
+eq(h1.income.netProfit, q1.income.netProfit + q2.income.netProfit, "H1 net profit = Q1 + Q2");
+eq(h1.cashflow.operating, q1.cashflow.operating + q2.cashflow.operating, "H1 operating cash = Q1 + Q2");
+eq(h1.cashflow.openingCash, q1.cashflow.openingCash, "H1 opens with Q1 opening"); eq(h1.cashflow.closingCash, q2.cashflow.closingCash, "H1 closes with Q2 closing");
+eq(h1.balance.equity, q2.balance.equity, "H1 balance sheet = Q2 position"); eq(h1.balance.check, 0, "H1 balances"); eq(h1.cashflow.difference, 0, "H1 cash reconciles");
+eq(fy.income.revenue, ys.reduce((t, x) => t + x.income.revenue, 0), "FY revenue = four quarters"); eq(fy.balance.totalAssets, ys[3].balance.totalAssets, "FY position = Q4");
+eq(fy.cashflow.clientFundsIn, 5000000 + 6300000, "FY client money received = Q2 + Q3");
+eq(h1.aging.dso, Math.round(h1.aging.receivables / h1.income.revenue * 181), "H1 DSO uses 181 days");
+const cmpH = Q.compareQuarters(h1, Q.computeQuarterSnapshot({ accounts: MOCK.accounts, txns: MOCK.txns, year: 2025, quarter: "H2" }));
+eq(cmpH.income.find(r => r.key === "revenue").pct, null, "H1 2026 vs empty H2 2025: no %");
+ok(Q.qtrInsights(h1, Q.computeQuarterSnapshot({ accounts: MOCK.accounts, txns: MOCK.txns, year: 2025, quarter: "H1" }), cmpH).every(i => !/undefined|NaN/.test(i.text)), "H1 narrative clean");
+ok(Q.qtrPrintHtml({ cur: fy, prev: Q.computeQuarterSnapshot({ accounts: MOCK.accounts, txns: MOCK.txns, year: 2025, quarter: "FY" }), cmp: Q.compareQuarters(fy, fy), insights: [], company: "X", cmpMode: "qoq" }).includes("السنة كاملة 2026"), "PDF titles the full year");
 
 // ── Part B: seeded random books ──────────────────────────────────────────────
 console.log("▸ seeded random balanced books × quarters — identities");

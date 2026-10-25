@@ -40,23 +40,44 @@
 const QTR_LABELS_AR = ["الربع الأول", "الربع الثاني", "الربع الثالث", "الربع الرابع"];
 const QTR_MONTHS_AR = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"];
 function qtrYmd(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
-/** Calendar quarter `q` (1–4) of `year` → { year, quarter, from, to, label, short, days }. */
+// Selectable periods. A period is a quarter number (1–4) or a code; `quarters` lists the calendar quarters it spans.
+const QTR_PERIODS = {
+  Q1: { quarters: [1], label: "الربع الأول" }, Q2: { quarters: [2], label: "الربع الثاني" }, Q3: { quarters: [3], label: "الربع الثالث" }, Q4: { quarters: [4], label: "الربع الرابع" },
+  H1: { quarters: [1, 2], label: "النصف الأول" }, H2: { quarters: [3, 4], label: "النصف الثاني" }, FY: { quarters: [1, 2, 3, 4], label: "السنة كاملة" },
+};
+const QTR_PERIOD_ORDER = ["Q1", "Q2", "Q3", "Q4", "H1", "H2", "FY"];
+/** "Q2" | "H1" | "FY" … from a code or a quarter number. */
+const qtrCodeOf = q => (typeof q === "string" && QTR_PERIODS[q]) ? q : "Q" + Math.min(4, Math.max(1, Number(q) || 1));
+/** Period `q` (quarter 1–4, or "H1"/"H2"/"FY") of `year` → { year, quarter (first quarter), code, quarters, from, to, label, months, short, days }. */
 function qtrRange(year, q) {
-  year = Number(year); q = Math.min(4, Math.max(1, Number(q) || 1));
-  const m0 = (q - 1) * 3;
-  const s = new Date(year, m0, 1), e = new Date(year, m0 + 3, 0);
+  year = Number(year);
+  const code = qtrCodeOf(q), def = QTR_PERIODS[code];
+  const q0 = def.quarters[0], q1 = def.quarters[def.quarters.length - 1];
+  const s = new Date(year, (q0 - 1) * 3, 1), e = new Date(year, q1 * 3, 0);
   return {
-    year, quarter: q, from: qtrYmd(s), to: qtrYmd(e),
-    label: `${QTR_LABELS_AR[q - 1]} ${year}`,
-    months: `${QTR_MONTHS_AR[m0]} – ${QTR_MONTHS_AR[m0 + 2]} ${year}`,
-    short: `Q${q} ${year}`,
+    year, quarter: q0, code, quarters: def.quarters, from: qtrYmd(s), to: qtrYmd(e),
+    label: `${def.label} ${year}`,
+    months: `${QTR_MONTHS_AR[(q0 - 1) * 3]} – ${QTR_MONTHS_AR[q1 * 3 - 1]} ${year}`,
+    short: `${code} ${year}`,
     days: Math.round((e - s) / 86400000) + 1,
   };
 }
 function qtrPrevOf(year, q) { return Number(q) === 1 ? { year: Number(year) - 1, quarter: 4 } : { year: Number(year), quarter: Number(q) - 1 }; }
-/** The quarter to compare against: "qoq" = the previous quarter, "yoy" = the same quarter one year earlier. */
-const QTR_CMP_MODES = [["qoq", "الربع السابق مباشرة"], ["yoy", "الربع نفسه من العام السابق"]];
-function qtrCompareTarget(year, q, mode) { return mode === "yoy" ? { year: Number(year) - 1, quarter: Number(q) } : qtrPrevOf(year, q); }
+/**
+ * The period to compare against. "yoy" = the same period one year earlier.
+ * "qoq" = the like period immediately before: Q→previous quarter, H1→H2 of the
+ * prior year, H2→H1 of the same year, FY→prior year. The returned `quarter` has
+ * the same shape as the input (number for quarters, code for H1/H2/FY).
+ */
+const QTR_CMP_MODES = [["qoq", "الفترة السابقة مباشرة (من نفس الطول)"], ["yoy", "الفترة نفسها من العام السابق"]];
+function qtrCompareTarget(year, q, mode) {
+  year = Number(year); const code = qtrCodeOf(q);
+  if (mode === "yoy") return { year: year - 1, quarter: q };
+  if (code === "H1") return { year: year - 1, quarter: "H2" };
+  if (code === "H2") return { year, quarter: "H1" };
+  if (code === "FY") return { year: year - 1, quarter: "FY" };
+  return qtrPrevOf(year, Number(code.slice(1)));
+}
 function qtrOfDate(ymd) { const [y, m] = String(ymd || qtrYmd(new Date())).split("-").map(Number); return { year: y, quarter: Math.floor((m - 1) / 3) + 1 }; }
 /** Years offered in the filter: from the earliest posted entry (or reporting start) to this year. */
 function qtrListYears(txns, settings) {
@@ -219,7 +240,7 @@ const QTR_ROWS = {
     ["openingCash", "النقدية أول الفترة", true, "opening"],
     ["operating", "التدفقات النقدية من الأنشطة التشغيلية", true], ["investing", "التدفقات النقدية من الأنشطة الاستثمارية", true],
     ["financing", "التدفقات النقدية من الأنشطة التمويلية", true],
-    ["clientFundsIn", "أمانات عملاء مستلمة خلال الربع (ليست إيراداً)", true, "detail"], ["clientFundsOut", "أمانات عملاء مردودة أو مصروفة خلال الربع", true, "detail"],
+    ["clientFundsIn", "أمانات عملاء مستلمة خلال الفترة (ليست إيراداً)", true, "detail"], ["clientFundsOut", "أمانات عملاء مردودة أو مصروفة خلال الفترة", true, "detail"],
     ["clientFunds", "صافي حركة أمانات العملاء (أموال محتجزة)", true],
     ["netChange", "صافي التغير في النقدية", true, "subtotal"], ["closingCash", "النقدية آخر الفترة", true, "total"],
   ],
@@ -344,7 +365,7 @@ function qtrInsights(cur, prev, cmp) {
   const push = (section, tone, text) => out.push({ section, tone, text });
   const I = cur.income, P = prev.income, CF = cur.cashflow, B = cur.balance, AG = cur.aging;
   const dir = (delta, up = "ارتفع", down = "انخفض", same = "لم يتغير") => delta > 0 ? up : delta < 0 ? down : same;
-  const pctOr = (row) => row.pct != null ? `بنسبة ${qtrFmtPctAr(row.pct)}` : (row.prev === 0 && row.cur !== 0 ? "مقارنةً بصفر في الربع السابق" : "");
+  const pctOr = (row) => row.pct != null ? `بنسبة ${qtrFmtPctAr(row.pct)}` : (row.prev === 0 && row.cur !== 0 ? "مقارنةً بصفر في الفترة المقارنة" : "");
 
   // ── Profitability
   const rNP = cmp.income.find(r => r.key === "netProfit"), rRev = cmp.income.find(r => r.key === "revenue"), rOpex = cmp.income.find(r => r.key === "opex"), rCOR = cmp.income.find(r => r.key === "costOfRevenue");
@@ -368,12 +389,12 @@ function qtrInsights(cur, prev, cmp) {
       push("income", "warn", `تنبيه: المصروفات التشغيلية نمت (${qtrFmtPctAr(rOpex.pct)}) أسرع من نمو الإيرادات (${qtrFmtPctAr(rRev.pct)})؛ إذا استمر هذا النمط سيتآكل هامش الربح في الأرباع القادمة.`);
     if (cur.ratios.grossMargin != null)
       push("income", "neutral", `هامش مجمل الربح ${qtrFmtPctAr(cur.ratios.grossMargin)}: من كل 100 درهم عمولة تحصّلها الشركة يبقى لها ${Math.round(cur.ratios.grossMargin * 100)} درهماً بعد دفع حصص الوسطاء والحوافز.` +
-        (prev.ratios.grossMargin != null ? ` كان الهامش ${qtrFmtPctAr(prev.ratios.grossMargin)} في الربع السابق.` : ""));
+        (prev.ratios.grossMargin != null ? ` كان الهامش ${qtrFmtPctAr(prev.ratios.grossMargin)} في الفترة المقارنة.` : ""));
   }
 
   // ── Liquidity: book profit vs. operating cash
   if (I.netProfit > 0 && CF.operating < I.netProfit * 0.5)
-    push("cashflow", "warn", `ملاحظة: الشركة تحقق أرباحاً دفترية ${I.netProfit > 0 && CF.operating < 0 ? "جيدة" : "ممتازة"} (${qtrFmtAr(I.netProfit)})، لكن السيولة النقدية المحصلة من التشغيل ${CF.operating < 0 ? `سالبة (${qtrFmtAr(CF.operating)} خرجت)` : `أقل بكثير (${qtrFmtAr(CF.operating)})`} بسبب تأخر تحصيل مستحقات العملاء أو زيادة المدفوعات خلال الربع.` +
+    push("cashflow", "warn", `ملاحظة: الشركة تحقق أرباحاً دفترية ${I.netProfit > 0 && CF.operating < 0 ? "جيدة" : "ممتازة"} (${qtrFmtAr(I.netProfit)})، لكن السيولة النقدية المحصلة من التشغيل ${CF.operating < 0 ? `سالبة (${qtrFmtAr(CF.operating)} خرجت)` : `أقل بكثير (${qtrFmtAr(CF.operating)})`} بسبب تأخر تحصيل مستحقات العملاء أو زيادة المدفوعات خلال الفترة.` +
       (AG.receivables > 0 ? ` يوجد حالياً ${qtrFmtAr(AG.receivables)} مستحقة لدى العملاء لم تُحصَّل بعد.` : ""));
   else if (I.netProfit > 0 && CF.operating >= I.netProfit)
     push("cashflow", "good", `الأرباح تتحول إلى نقد فعلي: التدفق النقدي التشغيلي (${qtrFmtAr(CF.operating)}) يساوي أو يفوق صافي الربح الدفتري (${qtrFmtAr(I.netProfit)})، وهو مؤشر صحي على جودة التحصيل.`);
@@ -382,8 +403,8 @@ function qtrInsights(cur, prev, cmp) {
   else if (I.netProfit <= 0 && CF.operating > 0)
     push("cashflow", "neutral", `رغم أن النتيجة الدفترية ${I.netProfit < 0 ? "خسارة" : "صفر"}، فإن التشغيل ولّد نقداً موجباً (${qtrFmtAr(CF.operating)})، غالباً من تحصيل مستحقات أرباع سابقة.`);
   else if (I.netProfit < 0 && CF.operating < 0)
-    push("cashflow", "bad", `الربع خاسر دفترياً ونقدياً معاً: خرج من التشغيل ${qtrFmtAr(CF.operating)} وبلغت الخسارة ${qtrFmtAr(I.netProfit)}. يُنصح بمراجعة المصروفات الثابتة وتسريع التحصيل.`);
-  push("cashflow", CF.netChange >= 0 ? "good" : "bad", `${dir(CF.netChange, "زادت", "نقصت")} النقدية خلال الربع بمقدار ${qtrFmtAr(CF.netChange)} لتصبح ${qtrFmtAr(CF.closingCash)} في ${cur.period.to.slice(8, 10)}/${cur.period.to.slice(5, 7)}/${cur.period.year}` +
+    push("cashflow", "bad", `الفترة خاسرة دفترياً ونقدياً معاً: خرج من التشغيل ${qtrFmtAr(CF.operating)} وبلغت الخسارة ${qtrFmtAr(I.netProfit)}. يُنصح بمراجعة المصروفات الثابتة وتسريع التحصيل.`);
+  push("cashflow", CF.netChange >= 0 ? "good" : "bad", `${dir(CF.netChange, "زادت", "نقصت")} النقدية خلال الفترة بمقدار ${qtrFmtAr(CF.netChange)} لتصبح ${qtrFmtAr(CF.closingCash)} في ${cur.period.to.slice(8, 10)}/${cur.period.to.slice(5, 7)}/${cur.period.year}` +
     (CF.investing < 0 ? `، منها ${qtrFmtAr(CF.investing)} أُنفقت على شراء أصول ثابتة` : "") +
     (CF.financing !== 0 ? `، و${CF.financing > 0 ? "دخلت" : "خرجت"} ${qtrFmtAr(CF.financing)} عبر أنشطة التمويل (رأس مال، قروض، مسحوبات)` : "") +
     (CF.clientFundsIn || CF.clientFundsOut ? `. كما استُلمت أمانات عملاء بقيمة ${qtrFmtAr(CF.clientFundsIn)} ورُدَّت أو صُرفت منها ${qtrFmtAr(CF.clientFundsOut)} (صافي ${qtrFmtAr(CF.clientFunds)})، وهي أموال محتجزة لصالح العملاء وليست من أموال الشركة` : "") + ".");
@@ -394,8 +415,8 @@ function qtrInsights(cur, prev, cmp) {
     const level = cr < 1 ? ["bad", "أقل من 1، أي أن الالتزامات قصيرة الأجل تفوق الأصول المتداولة؛ قد تواجه الشركة ضغطاً في السداد إذا طُلبت كل الالتزامات دفعة واحدة"]
       : cr < 1.5 ? ["neutral", "في النطاق المقبول؛ الشركة قادرة على سداد التزاماتها القريبة لكن دون هامش أمان كبير"]
         : ["good", "مريحة؛ لكل درهم التزام قصير الأجل يوجد ما يزيد على درهم ونصف من الأصول المتداولة"];
-    push("balance", level[0], `نسبة التداول ${cr.toLocaleString("en-US", { maximumFractionDigits: 2 })}x وهي ${level[1]}.` + (prev.ratios.currentRatio != null ? ` كانت ${prev.ratios.currentRatio.toLocaleString("en-US", { maximumFractionDigits: 2 })}x في الربع السابق.` : ""));
-  } else if (B.currentLiabilities === 0) push("balance", "good", "لا توجد التزامات قصيرة الأجل قائمة في نهاية الربع.");
+    push("balance", level[0], `نسبة التداول ${cr.toLocaleString("en-US", { maximumFractionDigits: 2 })}x وهي ${level[1]}.` + (prev.ratios.currentRatio != null ? ` كانت ${prev.ratios.currentRatio.toLocaleString("en-US", { maximumFractionDigits: 2 })}x في الفترة المقارنة.` : ""));
+  } else if (B.currentLiabilities === 0) push("balance", "good", "لا توجد التزامات قصيرة الأجل قائمة في نهاية الفترة.");
   const rEq = cmp.balance.find(r => r.key === "equity");
   push("balance", rEq.delta >= 0 ? "good" : "bad", `${dir(rEq.delta, "ارتفعت", "انخفضت")} حقوق الملكية ${pctOr(rEq)} لتصل إلى ${qtrFmtAr(B.equity)}؛ وهي تمثل صافي ما يملكه الشركاء بعد سداد كل الالتزامات (إجمالي الأصول ${qtrFmtAr(B.totalAssets)} ناقص الالتزامات ${qtrFmtAr(B.totalLiabilities)}).`);
   if (B.longTermLiabilities > 0) push("balance", "neutral", `الالتزامات طويلة الأجل (قروض ومخصصات نهاية الخدمة) تبلغ ${qtrFmtAr(B.longTermLiabilities)} وتمثل ${qtrFmtPctAr(B.longTermLiabilities / (B.totalAssets || 1), 0)} من إجمالي الأصول.`);
@@ -405,17 +426,17 @@ function qtrInsights(cur, prev, cmp) {
   const rAR = cmp.aging.find(r => r.key === "receivables"), rAP = cmp.aging.find(r => r.key === "payables");
   if (AG.receivables > 0 || rAR.prev > 0) {
     let s = `مستحقات العملاء ${dir(rAR.delta, "ارتفعت", "انخفضت", "ثابتة")} ${pctOr(rAR)} وتبلغ ${qtrFmtAr(AG.receivables)}`;
-    if (AG.dso != null) s += `، أي ما يعادل نحو ${AG.dso} يوماً من إيرادات الربع (كلما قلّ هذا الرقم كان التحصيل أسرع)`;
+    if (AG.dso != null) s += `، أي ما يعادل نحو ${AG.dso} يوماً من إيرادات الفترة (كلما قلّ هذا الرقم كان التحصيل أسرع)`;
     if (AG.buckets && AG.buckets.d90p > 0) s += `. منها ${qtrFmtAr(AG.buckets.d90p)} متأخرة أكثر من 90 يوماً وتحتاج متابعة عاجلة`;
     push("aging", rAR.delta > 0 && AG.dso != null && AG.dso > 60 ? "warn" : rAR.delta > 0 ? "neutral" : "good", s + ".");
-  } else push("aging", "good", "لا توجد مستحقات قائمة لدى العملاء في نهاية الربع؛ كل الإيرادات المسجلة حُصِّلت.");
+  } else push("aging", "good", "لا توجد مستحقات قائمة لدى العملاء في نهاية الفترة؛ كل الإيرادات المسجلة حُصِّلت.");
   const apLines = (AG.lines && AG.lines.payables) || [];
   const apTop = apLines.length ? apLines.slice().sort((a, b) => b.amount - a.amount)[0] : null;
   if (AG.payables > 0 || rAP.prev > 0)
     push("aging", rAP.delta > 0 ? "neutral" : "good", `مستحقات الموردين والمصروفات المستحقة ${dir(rAP.delta, "ارتفعت", "انخفضت", "ثابتة")} ${pctOr(rAP)} إلى ${qtrFmtAr(AG.payables)}` +
       (apTop && apTop.amount > 0 && apLines.length > 1 ? ` (أكبر بند: ${apTop.name.replace(" (مستحق غير مدفوع)", "")} بمبلغ ${qtrFmtAr(apTop.amount)})` : apTop && apTop.amount > 0 ? ` (كلها ${apTop.name.replace(" (مستحق غير مدفوع)", "")})` : "") +
       (AG.cash >= AG.payables ? `، والنقدية المتوفرة (${qtrFmtAr(AG.cash)}) تغطيها بالكامل.` : `، وهي تفوق النقدية المتوفرة (${qtrFmtAr(AG.cash)})؛ يلزم تحصيل جزء من مستحقات العملاء قبل السداد.`));
-  else push("aging", "good", "لا توجد مصروفات مستحقة أو ذمم دائنة قائمة في نهاية الربع.");
+  else push("aging", "good", "لا توجد مصروفات مستحقة أو ذمم دائنة قائمة في نهاية الفترة.");
   return out;
 }
 
@@ -489,7 +510,7 @@ function qtrPrintHtml({ cur, prev, cmp, insights, company, trn, cmpMode, yearSna
     const notes = (yearInsights || []).length ? `<div class="notes"><div class="notes-h">ملخص وتوضيح النتائج ببساطة</div>${yearInsights.map(i => `<p class="${i.tone}">${esc2(i.text)}</p>`).join("")}</div>` : "";
     return `<h2 style="page-break-before:always">القوائم المالية للسنة ${yearSnaps[0].period.year} — الأرباع الأربعة جنباً إلى جنب</h2>${["income", "balance", "cashflow", "aging"].map(tbl).join("")}${notes}`;
   })();
-  const cmpLabel = cmpMode === "yoy" ? "بالربع نفسه من العام السابق" : "بالربع السابق مباشرة";
+  const cmpLabel = cmpMode === "yoy" ? "بالفترة نفسها من العام السابق" : "بالفترة السابقة مباشرة";
   const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const cls = r => r.kind === "total" ? "total" : r.kind === "subtotal" ? "subtotal" : r.kind === "detail" ? "detail" : r.kind === "opening" ? "opening" : "";
   const unpaidTag = r => r.unpaid > 0 ? ` <span class="unpaid">${r.kind === "detail" ? "غير مدفوع" : "منها غير مدفوع"} ${qtrMoney(r.unpaid)}</span>` : "";
@@ -499,7 +520,7 @@ function qtrPrintHtml({ cur, prev, cmp, insights, company, trn, cmpMode, yearSna
   const withDetail = (summary, groups) => groups.reduce((acc, [heading, rows]) => rows.length ? acc.concat([{ label: heading, prev: 0, cur: 0, delta: 0, pct: null, direction: "flat", tone: "neutral", kind: "group" }], rows) : acc, summary.slice());
   const groupAware = rows => rows.map(r => r.kind === "group" ? `<tr class="group"><td colspan="6">${esc(r.label)}</td></tr>` : rowHtml(r)).join("");
   const tableG = rows => `<table><thead><tr><th class="lbl">البند</th><th>${esc(prev.period.label)}</th><th>${esc(cur.period.label)}</th><th>قيمة التغير</th><th>نسبة التغير</th><th>المؤشر</th></tr></thead><tbody>${groupAware(rows)}</tbody></table>`;
-  const kpis = `<div class="kpis">${cmp.kpis.map(k => `<div class="kpi"><div class="k-l">${esc(k.label)}</div><div class="k-v">${qtrKpiText(k.cur, k.fmt)}</div><div class="k-p">الربع السابق: ${qtrKpiText(k.prev, k.fmt)}</div><div class="k-h">${esc(k.hint)}</div></div>`).join("")}</div>`;
+  const kpis = `<div class="kpis">${cmp.kpis.map(k => `<div class="kpi"><div class="k-l">${esc(k.label)}</div><div class="k-v">${qtrKpiText(k.cur, k.fmt)}</div><div class="k-p">الفترة المقارنة: ${qtrKpiText(k.prev, k.fmt)}</div><div class="k-h">${esc(k.hint)}</div></div>`).join("")}</div>`;
   const generated = new Date().toLocaleString("en-GB", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
   return `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><title>${esc(company)} — التقرير ربع السنوي ${esc(cur.period.short)}</title>
 <style>
@@ -533,7 +554,7 @@ tr.detail td{color:#475467;font-size:8.8pt}tr.detail td.lbl{padding-right:18pt}
 .sign{margin-top:22pt;display:flex;justify-content:space-between;page-break-inside:avoid}.sign div{width:30%;border-top:0.75pt solid #98A2B3;padding-top:4pt;font-size:8.5pt;color:#475467;text-align:center}
 .basis{font-size:8pt;color:#667085;margin-top:10pt}
 </style></head><body>
-<div class="hdr"><div><div class="co">${esc(company)}</div><div class="ti">التقرير المالي ربع السنوي المقارن — ${esc(cur.period.label)} مقارنةً بـ${esc(prev.period.label)} (${cmpLabel})</div><div class="ti" style="font-size:9.5pt;color:#667085">الفترة من ${esc(cur.period.from)} إلى ${esc(cur.period.to)} · الربع المقارن من ${esc(prev.period.from)} إلى ${esc(prev.period.to)}</div></div>
+<div class="hdr"><div><div class="co">${esc(company)}</div><div class="ti">التقرير المالي الدوري المقارن — ${esc(cur.period.label)} مقارنةً بـ${esc(prev.period.label)} (${cmpLabel})</div><div class="ti" style="font-size:9.5pt;color:#667085">الفترة من ${esc(cur.period.from)} إلى ${esc(cur.period.to)} · الربع المقارن من ${esc(prev.period.from)} إلى ${esc(prev.period.to)}</div></div>
 <div class="meta">${trn ? `الرقم الضريبي: ${esc(trn)}<br>` : ""}العملة: درهم إماراتي (AED)<br>تاريخ الإعداد: ${esc(generated)}</div></div>
 <h2>المؤشرات المالية الرئيسية</h2>${kpis}
 <h2>${QTR_SECTION_TITLE.income}</h2>${tableG(withDetail(cmp.income, [["تفصيل الإيرادات", cmp.detail.revenue], ["تفصيل تكلفة الإيرادات", cmp.detail.costOfRevenue], ["تفصيل المصروفات التشغيلية والإدارية", cmp.detail.opex]]))}${notes("income")}
@@ -576,26 +597,31 @@ function QtrCompareTable({ rows, cur, prev, groups, snaps, section }) {
   const R = { textAlign: "right", direction: "ltr", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", width: 150 };
   const th = { ...C.th, textAlign: "right", fontSize: 12, width: 150 };
   const quarters = snaps && snaps.length === 4 ? snaps : [cur];
-  const same = (a, b) => a.period.year === b.period.year && a.period.quarter === b.period.quarter;
-  const showPrevCol = !quarters.some(s => same(s, prev));
+  // `same(sel, s)`: quarter column s lies inside the selected period sel (same year, quarter spanned).
+  const same = (sel, s) => s.period.year === sel.period.year && (sel.period.quarters || [sel.period.quarter]).includes(s.period.quarter);
+  const spans = sel => (sel.period.quarters || [sel.period.quarter]).length;
+  const showPrevCol = spans(prev) > 1 || !quarters.some(s => same(prev, s));
+  const showCurCol = spans(cur) > 1;
   const CUR_BG = "#FFF8E6", PREV_BG = "#F8F9FB";
   const rowStyle = r => r.kind === "total" ? { fontWeight: 700, borderTop: `1.5px solid ${GOLD}` } : r.kind === "subtotal" ? { fontWeight: 600 } : r.kind === "opening" ? { color: "#667085" } : r.kind === "detail" ? { color: "#475467", fontSize: 12.5 } : {};
-  const cellBg = (s, r) => same(s, cur) ? CUR_BG : same(s, prev) ? PREV_BG : r.kind === "total" ? "#FCFCFD" : undefined;
+  const cellBg = (s, r) => same(cur, s) ? CUR_BG : same(prev, s) ? PREV_BG : r.kind === "total" ? "#FCFCFD" : undefined;
   const Row = r => { const vals = qtrRowQuarterValues(r, section, quarters); return <tr key={r.key} style={rowStyle(r)}>
     <td style={{ ...C.td, textAlign: "right", paddingRight: r.kind === "detail" ? 28 : 14, background: r.kind === "total" ? "#FCFCFD" : undefined }}>{r.label}{r.unpaid > 0 && <QtrUnpaidTag amount={r.unpaid} summary={r.kind !== "detail"} />}</td>
     {showPrevCol && <td style={{ ...C.td, ...R, background: PREV_BG }}>{qtrMoney(r.prev)}</td>}
-    {quarters.map((s, i) => <td key={i} style={{ ...C.td, ...R, background: cellBg(s, r), fontWeight: same(s, cur) && r.kind !== "detail" ? 600 : undefined }}>{qtrMoney(vals[i])}</td>)}
+    {quarters.map((s, i) => <td key={i} style={{ ...C.td, ...R, background: cellBg(s, r), fontWeight: same(cur, s) && r.kind !== "detail" ? 600 : undefined }}>{qtrMoney(vals[i])}</td>)}
+    {showCurCol && <td style={{ ...C.td, ...R, background: CUR_BG, fontWeight: r.kind !== "detail" ? 700 : 600 }}>{qtrMoney(r.cur)}</td>}
     <td style={{ ...C.td, ...R, color: QTR_TONE_COLOR[r.tone] }}>{qtrMoney(r.delta)}</td>
     <td style={{ ...C.td, ...R, width: 110, color: QTR_TONE_COLOR[r.tone] }}>{qtrPct(r.pct)}</td>
     <td style={{ ...C.td, textAlign: "center", width: 70 }}><span title={r.direction === "up" ? "ارتفاع" : r.direction === "down" ? "انخفاض" : "بدون تغيير"} style={{ display: "inline-block", minWidth: 28, padding: "2px 6px", borderRadius: 999, fontSize: 12, fontWeight: 700, color: QTR_TONE_COLOR[r.tone], background: r.tone === "good" ? "#ECFDF3" : r.tone === "bad" ? "#FEF3F2" : "#F2F4F7" }}>{QTR_ARROW[r.direction]}</span></td>
   </tr>; };
   const sub = (t, c) => <div style={{ fontWeight: 400, color: c || "#98A2B3", fontSize: 11 }}>{t}</div>;
-  const nCols = 4 + (showPrevCol ? 1 : 0) + quarters.length;
+  const nCols = 4 + (showPrevCol ? 1 : 0) + (showCurCol ? 1 : 0) + quarters.length;
   return <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
     <thead><tr>
       <th style={{ ...th, width: "auto" }}>البند</th>
-      {showPrevCol && <th style={{ ...th, background: PREV_BG }}>{prev.period.label}{sub("الربع المقارن")}</th>}
-      {quarters.map((s, i) => <th key={i} style={{ ...th, background: same(s, cur) ? CUR_BG : same(s, prev) ? PREV_BG : undefined }}>{QTR_LABELS_AR[s.period.quarter - 1]} {s.period.year}{same(s, cur) ? sub("الربع الحالي", "#B54708") : same(s, prev) ? sub("الربع المقارن") : sub(s.period.months.replace(` ${s.period.year}`, ""))}</th>)}
+      {showPrevCol && <th style={{ ...th, background: PREV_BG }}>{prev.period.label}{sub(spans(prev) > 1 ? "الفترة المقارنة (إجمالي)" : "الفترة المقارنة")}</th>}
+      {quarters.map((s, i) => <th key={i} style={{ ...th, background: same(cur, s) ? CUR_BG : same(prev, s) ? PREV_BG : undefined }}>{QTR_LABELS_AR[s.period.quarter - 1]} {s.period.year}{same(cur, s) ? sub(spans(cur) > 1 ? "ضمن الفترة الحالية" : "الفترة الحالية", "#B54708") : same(prev, s) ? sub(spans(prev) > 1 ? "ضمن الفترة المقارنة" : "الفترة المقارنة") : sub(s.period.months.replace(` ${s.period.year}`, ""))}</th>)}
+      {showCurCol && <th style={{ ...th, background: CUR_BG }}>{cur.period.label}{sub("الفترة الحالية (إجمالي)", "#B54708")}</th>}
       <th style={th}>قيمة التغير{sub("الحالي − المقارن")}</th><th style={{ ...th, width: 110 }}>نسبة التغير %</th><th style={{ ...th, textAlign: "center", width: 70 }}>المؤشر</th>
     </tr></thead>
     <tbody>
@@ -626,7 +652,7 @@ function QtrKpiCard({ k }) {
       <span style={{ fontSize: 24, fontWeight: 700, color: NAVY, fontVariantNumeric: "tabular-nums", direction: "ltr", unicodeBidi: "isolate" }}>{qtrKpiText(k.cur, k.fmt)}</span>
       {k.delta != null && <span style={{ fontSize: 12, fontWeight: 700, color: QTR_TONE_COLOR[tone] }}>{QTR_ARROW[k.delta > 0 ? "up" : k.delta < 0 ? "down" : "flat"]} {k.fmt === "x" ? Math.abs(k.delta).toLocaleString("en-US", { maximumFractionDigits: 2 }) + "x" : (Math.abs(k.delta) * 100).toLocaleString("en-US", { maximumFractionDigits: 1 }) + " نقطة"}</span>}
     </div>
-    <div style={{ fontSize: 11.5, color: "#98A2B3" }}>الربع السابق: <span style={{ direction: "ltr", display: "inline-block" }}>{qtrKpiText(k.prev, k.fmt)}</span></div>
+    <div style={{ fontSize: 11.5, color: "#98A2B3" }}>الفترة المقارنة: <span style={{ direction: "ltr", display: "inline-block" }}>{qtrKpiText(k.prev, k.fmt)}</span></div>
     <div style={{ fontSize: 12, color: "#475467", lineHeight: 1.6, marginTop: 2 }}>{k.hint}</div>
   </div>;
 }
@@ -652,7 +678,7 @@ function QuarterlyReportsPage({ accounts, txns, settings }) {
   const today = qtrOfDate(todayStr());
   const defaultSel = qtrPrevOf(today.year, today.quarter);  // the last COMPLETED quarter
   const [year, setYear] = usePersistedState("qtr_year", defaultSel.year);
-  const [quarter, setQuarter] = usePersistedState("qtr_quarter", defaultSel.quarter);
+  const [period, setPeriod] = usePersistedState("qtr_period", "Q" + defaultSel.quarter);
   const [cmpMode, setCmpMode] = usePersistedState("qtr_cmp_mode", "qoq");
   const [tab, setTab] = usePersistedState("qtr_tab", "income");
   const [showDetail, setShowDetail] = usePersistedState("qtr_detail", true);
@@ -663,14 +689,15 @@ function QuarterlyReportsPage({ accounts, txns, settings }) {
     return () => unsub();
   }, []);
   const years = useMemo(() => qtrListYears(txns, settings), [txns, settings]);
-  const prevSel = qtrCompareTarget(year, quarter, cmpMode);
+  const prevSel = qtrCompareTarget(year, period, cmpMode);
   const { cur, prev, cmp, insights, yearSnaps, yearInsights } = useMemo(() => {
     const yearSnaps = computeYearQuarters({ accounts, txns, year, invoices });
-    const cur = yearSnaps[quarter - 1];
-    const prev = prevSel.year === year ? yearSnaps[prevSel.quarter - 1] : computeQuarterSnapshot({ accounts, txns, year: prevSel.year, quarter: prevSel.quarter, invoices });
+    // Single quarters of the displayed year come from yearSnaps; anything else is computed for its own range.
+    const snapOf = (y, q) => { const c = qtrCodeOf(q); return y === year && c[0] === "Q" ? yearSnaps[Number(c[1]) - 1] : computeQuarterSnapshot({ accounts, txns, year: y, quarter: q, invoices }); };
+    const cur = snapOf(year, period), prev = snapOf(prevSel.year, prevSel.quarter);
     const cmp = compareQuarters(cur, prev);
     return { cur, prev, cmp, insights: qtrInsights(cur, prev, cmp), yearSnaps, yearInsights: qtrYearInsights(yearSnaps, year) };
-  }, [accounts, txns, year, quarter, cmpMode, invoices]);
+  }, [accounts, txns, year, period, cmpMode, invoices]);
   const exportArgs = { cur, prev, cmp, insights, cmpMode, yearSnaps, yearInsights };
   const company = (settings && settings.company) || "Nasama Properties";
   const trn = settings && settings.trn;
@@ -685,8 +712,8 @@ function QuarterlyReportsPage({ accounts, txns, settings }) {
   return <div dir="rtl" lang="ar" style={{ fontFamily: '"Segoe UI", Tahoma, "Noto Sans Arabic", "Noto Naskh Arabic", "Geeza Pro", Arial, sans-serif', textAlign: "right" }}>
     <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
       <div>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: NAVY }}>التقارير المالية ربع السنوية المقارنة</h1>
-        <div style={{ color: "#667085", fontSize: 13, marginTop: 4 }}>مقارنة {cur.period.label} <span style={{ color: "#98A2B3" }}>({cur.period.months})</span> {cmpMode === "yoy" ? "بالربع نفسه من العام السابق" : "بالربع السابق له"} {prev.period.label} — الأرقام مستخرجة تلقائياً من دفتر الأستاذ العام بالدرهم الإماراتي. تبويب «السنة كاملة» يعرض الأرباع الأربعة جنباً إلى جنب.</div>
+        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: NAVY }}>التقارير المالية الدورية المقارنة (ربع · نصف سنة · سنة)</h1>
+        <div style={{ color: "#667085", fontSize: 13, marginTop: 4 }}>مقارنة {cur.period.label} <span style={{ color: "#98A2B3" }}>({cur.period.months})</span> {cmpMode === "yoy" ? "بالفترة نفسها من العام السابق" : "بالفترة السابقة لها"} {prev.period.label} — الأرقام مستخرجة تلقائياً من دفتر الأستاذ العام بالدرهم الإماراتي. تبويب «السنة كاملة» يعرض الأرباع الأربعة جنباً إلى جنب.</div>
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button style={C.btn("secondary")} onClick={() => qtrExportExcel({ ...exportArgs, company })}>📗 تصدير Excel</button>
@@ -696,9 +723,9 @@ function QuarterlyReportsPage({ accounts, txns, settings }) {
 
     <div style={{ ...C.card, padding: "14px 18px", marginBottom: 18, display: "flex", gap: 18, alignItems: "flex-end", flexWrap: "wrap" }}>
       <div><label style={C.label}>السنة المالية</label><select style={selStyle} value={year} onChange={e => setYear(Number(e.target.value))}>{years.map(y => <option key={y} value={y}>{y}</option>)}</select></div>
-      <div><label style={C.label}>الربع الحالي</label><select style={selStyle} value={quarter} onChange={e => setQuarter(Number(e.target.value))}>{[1, 2, 3, 4].map(q => <option key={q} value={q}>{QTR_LABELS_AR[q - 1]} ({qtrRange(year, q).months.replace(` ${year}`, "")})</option>)}</select></div>
+      <div><label style={C.label}>الفترة الحالية</label><select style={selStyle} value={qtrCodeOf(period)} onChange={e => setPeriod(e.target.value)}>{QTR_PERIOD_ORDER.map(c => <option key={c} value={c}>{QTR_PERIODS[c].label} ({qtrRange(year, c).months.replace(` ${year}`, "")})</option>)}</select></div>
       <div><label style={C.label}>أسلوب المقارنة</label><select style={selStyle} value={cmpMode} onChange={e => setCmpMode(e.target.value)}>{QTR_CMP_MODES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></div>
-      <div><label style={C.label}>الربع المقارن به (تلقائياً)</label><div style={{ ...C.input, width: "auto", minWidth: 190, background: "#F8F9FB", color: "#475467" }}>{prev.period.label} · {prev.period.months}</div></div>
+      <div><label style={C.label}>الفترة المقارن بها (تلقائياً)</label><div style={{ ...C.input, width: "auto", minWidth: 190, background: "#F8F9FB", color: "#475467" }}>{prev.period.label} · {prev.period.months}</div></div>
       <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#344054", paddingBottom: 8, cursor: "pointer" }}><input type="checkbox" checked={!!showDetail} onChange={e => setShowDetail(e.target.checked)} /> إظهار تفصيل الحسابات</label>
     </div>
 
@@ -724,7 +751,7 @@ function QuarterlyReportsPage({ accounts, txns, settings }) {
     </div> : <div style={{ ...C.card, padding: 0, overflow: "hidden" }}>
       <div style={{ padding: "14px 18px", borderBottom: "1px solid #EAECF0", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontWeight: 700, color: NAVY, fontSize: 15 }}>{QTR_SECTION_TITLE[tab]}</div>
-        <div style={{ fontSize: 12, color: "#98A2B3" }}>{tab === "balance" || tab === "aging" ? `أرصدة نهاية كل ربع في ${year} · التغير يقارن ${cur.period.to} بـ${prev.period.to}` : `حركة كل ربع في ${year} · التغير يقارن ${cur.period.label} بـ${prev.period.label}`}</div>
+        <div style={{ fontSize: 12, color: "#98A2B3" }}>{tab === "balance" || tab === "aging" ? `أرصدة نهاية كل ربع في ${year} · التغير يقارن ${cur.period.to} بـ${prev.period.to}` : `حركة كل ربع في ${year} · التغير يقارن ${cur.period.label} (${cur.period.from} → ${cur.period.to}) بـ${prev.period.label}`}</div>
       </div>
       <QtrCompareTable rows={cmp[tab]} cur={cur} prev={prev} groups={groups} snaps={yearSnaps} section={tab} />
       {tab === "balance" && Math.abs(cur.balance.check) > 0 && <div style={{ ...C.err, margin: 14 }}>الميزانية غير متوازنة بفارق {qtrMoney(cur.balance.check)} — راجع دفتر اليومية.</div>}

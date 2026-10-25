@@ -42,3 +42,4 @@ New page **Quarterly (AR)** under ACCOUNTING: `nasama-accounting-v2.quarterly.js
 - Decision (owner asked): office rent and manager fixed salary stay in opex; only commissions/incentives/override are cost of revenue.
 - Income statement expense rows carry a red «غير مدفوع» tag with the open accrued amount at the quarter end (summary opex / cost-of-revenue rows: «منها غير مدفوع»). Also in the PDF and as an extra Excel column.
 - Cash flow: client money shown gross — «أمانات عملاء مستلمة» / «مردودة أو مصروفة» / «صافي» — so money that came in and went out inside one quarter is visible instead of netting to 0. Mock gains Q3 client-money entries (50,000 refund; 63,000 in and passed on).
+- Period selector now offers Q1–Q4, H1, H2 and FY (`QTR_PERIODS`, `qtrCodeOf`); like-period comparison: H1→H2 of prior year, H2→H1, FY→prior FY, or the same period last year. Multi-quarter periods add an «إجمالي» column beside the tinted quarter columns.
