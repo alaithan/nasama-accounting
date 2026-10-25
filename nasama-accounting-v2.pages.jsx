@@ -7868,6 +7868,7 @@ function App({ userRole, userAccess, userEmail, signOut }) {
       case "coa": return <COAPage {...shared} />;
       case "journal": return <JournalPageV2 {...shared} />;
       case "reports": return <ReportsPage {...shared} />;
+      case "quarterly": return <QuarterlyReportsPage {...shared} />;
       case "vat": return <VATPage {...shared} />;
       case "budget": return <BudgetPage {...shared} />;
       case "manual": return <ManualPage />;

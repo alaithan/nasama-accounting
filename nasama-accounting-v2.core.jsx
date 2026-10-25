@@ -490,6 +490,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       journal:        "accounting.read",
       coa:            "accounting.read",
       reports:        "accounting.read",
+      quarterly:      "accounting.read",   // Arabic quarter-on-quarter statements — same audience as Reports
       vat:            "accounting.read",
       budget:         "accounting.read",
       insights:       "accounting.read",   // cash forecast, receivables, VAT return — same audience as Reports
@@ -534,6 +535,7 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
         developers: ['admin', 'accountant', 'secretary'], payments: ['admin', 'accountant'],
         vendors: ['admin', 'accountant'], banking: ['admin', 'accountant'],
         reports: ['admin', 'accountant'], vat: ['admin', 'accountant'],
+        quarterly: ['admin', 'accountant'],
         budget: ['admin', 'accountant'], insights: ['admin', 'accountant'],
         manual: ['admin', 'accountant', 'secretary'],
         settings: ['admin', 'accountant'], users: ['admin'],
@@ -3765,6 +3767,6 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
       // line and falls through to false for every other role. Do not register it in either map.
       { s: "PEOPLE" }, { id: "employees", label: "Employees", icon: "🧑‍💼" },
       { s: "EXPENSES" }, { id: "payments", label: "Payments", icon: "💳" }, { id: "vendors", label: "Vendors", icon: "🏭" }, { id: "futureExpenses", label: "Future Expenses", icon: "📅" },
-      { s: "ACCOUNTING" }, { id: "approvals", label: "Approvals", icon: "✅" }, { id: "banking", label: "Banking", icon: "🏦" }, { id: "journal", label: "Journal Entries", icon: "📒" }, { id: "coa", label: "Chart of Accounts", icon: "🗂" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "vat", label: "VAT / Taxes", icon: "🧾" }, { id: "budget", label: "Budget", icon: "🎯" },
+      { s: "ACCOUNTING" }, { id: "approvals", label: "Approvals", icon: "✅" }, { id: "banking", label: "Banking", icon: "🏦" }, { id: "journal", label: "Journal Entries", icon: "📒" }, { id: "coa", label: "Chart of Accounts", icon: "🗂" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "quarterly", label: "Quarterly (AR)", icon: "📆" }, { id: "vat", label: "VAT / Taxes", icon: "🧾" }, { id: "budget", label: "Budget", icon: "🎯" },
       { s: "SYSTEM" }, { id: "users", label: "User Management", icon: "👥" }, { id: "settings", label: "Settings", icon: "⚙️" }, { id: "manual", label: "User Manual", icon: "📖" },
     ];

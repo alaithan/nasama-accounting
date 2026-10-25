@@ -39,6 +39,8 @@
   <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.invoices.jsx"></script>
   <!-- insights.jsx after invoices.jsx and future-expenses.jsx: it reuses their helpers. -->
   <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.insights.jsx"></script>
+  <!-- quarterly.jsx after insights.jsx: it reuses insInvoiceMeta for invoice aging when present. -->
+  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.quarterly.jsx"></script>
   <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.reconcile.jsx"></script>
   <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.employees.jsx"></script>
   <!-- deposits.jsx must load AFTER invoices.jsx: it reuses invExportPDF for the receipt PDF. -->
