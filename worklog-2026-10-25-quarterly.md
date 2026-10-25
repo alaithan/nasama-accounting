@@ -37,3 +37,6 @@ New page **Quarterly (AR)** under ACCOUNTING: `nasama-accounting-v2.quarterly.js
 ## Follow-up (same day)
 - Comparison mode selector: previous quarter (QoQ) or the same quarter last year (YoY) — `qtrCompareTarget`.
 - New tab «السنة كاملة (4 أرباع)»: all four statements with Q1–Q4 columns; income/cash flow total across the year, balance sheet/receivables show the year-end column. Year narrative `qtrYearInsights`. Added to the Excel workbook (sheet "السنة كاملة") and appended to the PDF on a new page.
+- Receivables/payables tab: with "إظهار تفصيل الحسابات" on, the payables line splits by WHAT was accrued (the expense account each 2210 accrual debited: Office Rent, Manager Salary …), open until a settlement naming it (accrual_txn_id) is posted; untraceable 2210 balance shown as "other" so lines tie to the ledger. Also in Excel/PDF and in the narrative (largest item). `qtrPayablesBreakdown`.
+- Every statement tab shows Q1–Q4 of the selected year as columns (selected quarter tinted); Δ/% still vs the comparison quarter.
+- Decision (owner asked): office rent and manager fixed salary stay in opex; only commissions/incentives/override are cost of revenue.

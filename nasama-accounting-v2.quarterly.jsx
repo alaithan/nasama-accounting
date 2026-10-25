@@ -81,6 +81,44 @@ const qtrIsReceivable = a => !!a && a.type === "Asset" && (qtrCode(a) === (typeo
 const qtrIsPayable = a => !!a && a.type === "Liability" && !a.isOutputVAT && !["2105", "2230"].includes(qtrCode(a)) && !qtrIsLongTermLiability(a)
   && (["2210", "2240"].includes(qtrCode(a)) || /payable|accrued|supplier|vendor/i.test(a.name || ""));
 
+/**
+ * Open accrued expenses (2210) as of `asOf`, split by WHAT was accrued — the
+ * expense account each accrual debited (Office Rent, Manager Salary, …).
+ * An accrual is open until a settlement that names it (accrual_txn_id) is
+ * posted; voids and reversed pairs are ignored. Anything in 2210 not traceable
+ * to an accrual entry (manual journals, legacy) is returned as "other", so the
+ * lines always sum to the 2210 ledger balance. Other payable accounts (2240 …)
+ * are appended as their own lines.
+ */
+function qtrPayablesBreakdown({ accounts, txns, asOf, ledger }) {
+  const A = accounts || [];
+  const byId = new Map(A.map(a => [a.id, a]));
+  const payable = A.find(a => qtrCode(a) === "2210") || A.find(a => a.type === "Liability" && /accrued/i.test(a.name || ""));
+  const live = (txns || []).filter(t => t && !t.isVoid && (t.date || "") <= asOf);
+  const reversed = typeof reversedTxnIds === "function" ? reversedTxnIds(live) : new Set();
+  const inPair = t => !!t.reversesTxnId || reversed.has(t.id);
+  const settledIds = new Set(live.filter(t => t.accrual_txn_id && !inPair(t)).map(t => t.accrual_txn_id));
+  const open = new Map();
+  if (payable) live.forEach(t => {
+    if (t.txnType !== "AC" || inPair(t) || settledIds.has(t.id)) return;
+    const accrued = (t.lines || []).reduce((sum, l) => l.accountId === payable.id ? sum + (l.credit || 0) - (l.debit || 0) : sum, 0);
+    if (!accrued) return;
+    const expLine = (t.lines || []).find(l => { const a = byId.get(l.accountId); return a && a.type === "Expense" && (l.debit || 0) > 0; });
+    const exp = expLine ? byId.get(expLine.accountId) : null;
+    const key = exp ? qtrCode(exp) : "2210";
+    const cur = open.get(key) || { code: key, name: exp ? `${exp.name} (مستحق غير مدفوع)` : "مصروفات مستحقة غير مصنّفة", amount: 0 };
+    cur.amount += accrued; open.set(key, cur);
+  });
+  const lines = [...open.values()].filter(l => l.amount !== 0);
+  if (payable) {
+    const bal = accountBalance(payable, ledger || {});
+    const other = bal - lines.reduce((s, l) => s + l.amount, 0);
+    if (other !== 0) lines.push({ code: "2210", name: "مصروفات مستحقة أخرى (قيود يدوية أو رصيد سابق)", amount: other });
+  }
+  A.filter(a => qtrIsPayable(a) && a !== payable).forEach(a => { const v = accountBalance(a, ledger || {}); if (v) lines.push({ code: a.code, name: a.name, amount: v }); });
+  return lines.sort((a, b) => qtrCode(a) < qtrCode(b) ? -1 : 1);
+}
+
 // ── 3. ONE QUARTER → SNAPSHOT ──────────────────────
 function computeQuarterSnapshot({ accounts, txns, year, quarter, invoices }) {
   const period = qtrRange(year, quarter);
@@ -129,6 +167,7 @@ function computeQuarterSnapshot({ accounts, txns, year, quarter, invoices }) {
   const dso = revenue > 0 ? Math.round(receivables / revenue * period.days) : null;      // days of sales outstanding
   const dpo = (costOfRevenue + opex) > 0 ? Math.round(payables / (costOfRevenue + opex) * period.days) : null;
   const buckets = qtrAgingBuckets({ invoices, txns: live, accounts: A, asOf: period.to });
+  const agingLines = { receivables: linesOf(qtrIsReceivable, toDate), payables: qtrPayablesBreakdown({ accounts: A, txns: live, asOf: period.to, ledger: toDate }) };
 
   const ratio = (n, d) => d > 0 ? n / d : null;
   return {
@@ -137,7 +176,7 @@ function computeQuarterSnapshot({ accounts, txns, year, quarter, invoices }) {
     balance: { currentAssets, nonCurrentAssets, totalAssets, currentLiabilities, longTermLiabilities, totalLiabilities, equityAccounts, cumulativeProfit, equity, totalLiabilitiesAndEquity,
       check: totalAssets - totalLiabilitiesAndEquity, lines: { currentAssets: caLines, nonCurrentAssets: ncaLines, currentLiabilities: clLines, longTermLiabilities: ltlLines, equity: eqLines } },
     cashflow,
-    aging: { receivables, payables, cash, dso, dpo, buckets },
+    aging: { receivables, payables, cash, dso, dpo, buckets, lines: agingLines },
     ratios: {
       grossMargin: ratio(grossProfit, revenue), netMargin: ratio(netProfit, revenue),
       currentRatio: ratio(currentAssets, currentLiabilities),
@@ -210,6 +249,7 @@ function compareQuarters(cur, prev) {
     revenue: detail(s => s.income.lines.revenue, true), costOfRevenue: detail(s => s.income.lines.costOfRevenue, false), opex: detail(s => s.income.lines.opex, false),
     currentAssets: detail(s => s.balance.lines.currentAssets, true), nonCurrentAssets: detail(s => s.balance.lines.nonCurrentAssets, true),
     currentLiabilities: detail(s => s.balance.lines.currentLiabilities, false), longTermLiabilities: detail(s => s.balance.lines.longTermLiabilities, false), equity: detail(s => s.balance.lines.equity, true),
+    receivableLines: detail(s => s.aging.lines && s.aging.lines.receivables, false), payableLines: detail(s => s.aging.lines && s.aging.lines.payables, false),
   };
   out.kpis = [
     { key: "grossMargin", label: "هامش مجمل الربح", prev: prev.ratios.grossMargin, cur: cur.ratios.grossMargin, fmt: "pct", goodWhenUp: true,
@@ -355,8 +395,11 @@ function qtrInsights(cur, prev, cmp) {
     if (AG.buckets && AG.buckets.d90p > 0) s += `. منها ${qtrFmtAr(AG.buckets.d90p)} متأخرة أكثر من 90 يوماً وتحتاج متابعة عاجلة`;
     push("aging", rAR.delta > 0 && AG.dso != null && AG.dso > 60 ? "warn" : rAR.delta > 0 ? "neutral" : "good", s + ".");
   } else push("aging", "good", "لا توجد مستحقات قائمة لدى العملاء في نهاية الربع؛ كل الإيرادات المسجلة حُصِّلت.");
+  const apLines = (AG.lines && AG.lines.payables) || [];
+  const apTop = apLines.length ? apLines.slice().sort((a, b) => b.amount - a.amount)[0] : null;
   if (AG.payables > 0 || rAP.prev > 0)
     push("aging", rAP.delta > 0 ? "neutral" : "good", `مستحقات الموردين والمصروفات المستحقة ${dir(rAP.delta, "ارتفعت", "انخفضت", "ثابتة")} ${pctOr(rAP)} إلى ${qtrFmtAr(AG.payables)}` +
+      (apTop && apTop.amount > 0 && apLines.length > 1 ? ` (أكبر بند: ${apTop.name.replace(" (مستحق غير مدفوع)", "")} بمبلغ ${qtrFmtAr(apTop.amount)})` : apTop && apTop.amount > 0 ? ` (كلها ${apTop.name.replace(" (مستحق غير مدفوع)", "")})` : "") +
       (AG.cash >= AG.payables ? `، والنقدية المتوفرة (${qtrFmtAr(AG.cash)}) تغطيها بالكامل.` : `، وهي تفوق النقدية المتوفرة (${qtrFmtAr(AG.cash)})؛ يلزم تحصيل جزء من مستحقات العملاء قبل السداد.`));
   else push("aging", "good", "لا توجد مصروفات مستحقة أو ذمم دائنة قائمة في نهاية الربع.");
   return out;
@@ -413,7 +456,7 @@ function qtrExportExcel({ cur, prev, cmp, insights, company, yearSnaps, yearInsi
   sheet("قائمة الدخل", [...cmp.income, ...cmp.detail.revenue, ...cmp.detail.costOfRevenue, ...cmp.detail.opex], note("income"));
   sheet("المركز المالي", [...cmp.balance, ...cmp.detail.currentAssets, ...cmp.detail.nonCurrentAssets, ...cmp.detail.currentLiabilities, ...cmp.detail.longTermLiabilities, ...cmp.detail.equity], note("balance"));
   sheet("التدفقات النقدية", cmp.cashflow, note("cashflow"));
-  sheet("الذمم والسيولة", cmp.aging, note("aging"));
+  sheet("الذمم والسيولة", [...cmp.aging, ...cmp.detail.receivableLines, ...cmp.detail.payableLines], note("aging"));
   const kpi = XLSX.utils.aoa_to_sheet([...title, ["المؤشر", prev.period.label, cur.period.label, "التغير", "التوضيح"],
     ...cmp.kpis.map(k => [k.label, qtrKpiText(k.prev, k.fmt), qtrKpiText(k.cur, k.fmt), k.delta == null ? "" : qtrKpiText(k.delta, k.fmt === "x" ? "x" : "pct"), k.hint])]);
   kpi["!cols"] = [{ wch: 28 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 90 }];
@@ -480,7 +523,7 @@ tr.detail td{color:#475467;font-size:8.8pt}tr.detail td.lbl{padding-right:18pt}
 <h2>${QTR_SECTION_TITLE.income}</h2>${tableG(withDetail(cmp.income, [["تفصيل الإيرادات", cmp.detail.revenue], ["تفصيل تكلفة الإيرادات", cmp.detail.costOfRevenue], ["تفصيل المصروفات التشغيلية والإدارية", cmp.detail.opex]]))}${notes("income")}
 <h2>${QTR_SECTION_TITLE.balance}</h2>${tableG(withDetail(cmp.balance, [["الأصول المتداولة", cmp.detail.currentAssets], ["الأصول غير المتداولة", cmp.detail.nonCurrentAssets], ["الالتزامات المتداولة", cmp.detail.currentLiabilities], ["الالتزامات طويلة الأجل", cmp.detail.longTermLiabilities], ["حقوق الملكية", cmp.detail.equity]]))}${notes("balance")}
 <h2>${QTR_SECTION_TITLE.cashflow}</h2>${table(cmp.cashflow)}${notes("cashflow")}
-<h2>${QTR_SECTION_TITLE.aging}</h2>${table(cmp.aging)}${notes("aging")}
+<h2>${QTR_SECTION_TITLE.aging}</h2>${tableG(withDetail(cmp.aging, [["تفصيل مستحقات العملاء", cmp.detail.receivableLines], ["تفصيل المصروفات المستحقة حسب نوع المصروف", cmp.detail.payableLines]]))}${notes("aging")}
 ${yearSection}
 <div class="basis">أساس الإعداد: أُعدّت هذه القوائم من دفتر الأستاذ العام على أساس الاستحقاق للفواتير الصادرة والمصروفات المستحقة، والمبالغ بين قوسين سالبة. أرقام الميزانية هي أرصدة نهاية الربع، وأرقام الدخل والتدفقات هي حركة الربع فقط. نسبة التغير محسوبة على أساس القيمة المطلقة لرقم الربع السابق.</div>
 <div class="sign"><div>أعدّه</div><div>راجعه</div><div>اعتمده</div></div>
@@ -501,7 +544,7 @@ function qtrPrint(html) {
 // ── 7. PAGE ────────────────────────────────────────
 /** Amount of one account line (detail row) in a quarter snapshot, searched across the section's line groups. */
 function qtrLineAmount(snap, section, code) {
-  const groups = section === "income" ? snap.income.lines : section === "balance" ? snap.balance.lines : null;
+  const groups = section === "income" ? snap.income.lines : section === "balance" ? snap.balance.lines : section === "aging" ? snap.aging.lines : null;
   if (!groups) return 0;
   for (const k in groups) { const l = (groups[k] || []).find(x => x.code === code); if (l) return l.amount; }
   return 0;
@@ -613,7 +656,8 @@ function QuarterlyReportsPage({ accounts, txns, settings }) {
   const sectionInsights = insights.filter(i => i.section === tab);
   const groups = !showDetail ? [] : tab === "income"
     ? [["تفصيل الإيرادات", cmp.detail.revenue], ["تفصيل تكلفة الإيرادات", cmp.detail.costOfRevenue], ["تفصيل المصروفات التشغيلية والإدارية", cmp.detail.opex]]
-    : tab === "balance" ? [["الأصول المتداولة", cmp.detail.currentAssets], ["الأصول غير المتداولة", cmp.detail.nonCurrentAssets], ["الالتزامات المتداولة", cmp.detail.currentLiabilities], ["الالتزامات طويلة الأجل", cmp.detail.longTermLiabilities], ["حقوق الملكية", cmp.detail.equity]] : [];
+    : tab === "balance" ? [["الأصول المتداولة", cmp.detail.currentAssets], ["الأصول غير المتداولة", cmp.detail.nonCurrentAssets], ["الالتزامات المتداولة", cmp.detail.currentLiabilities], ["الالتزامات طويلة الأجل", cmp.detail.longTermLiabilities], ["حقوق الملكية", cmp.detail.equity]]
+    : tab === "aging" ? [["تفصيل مستحقات العملاء", cmp.detail.receivableLines], ["تفصيل المصروفات المستحقة حسب نوع المصروف (ما اعتُمد ولم يُدفع بعد)", cmp.detail.payableLines]] : [];
   const empty = !cur.income.revenue && !cur.income.opex && !cur.income.costOfRevenue && !cur.balance.totalAssets;
   const selStyle = { ...C.select, width: "auto", minWidth: 150, fontFamily: "inherit" };
   const bk = cur.aging.buckets;
@@ -676,7 +720,7 @@ function QuarterlyReportsPage({ accounts, txns, settings }) {
     </div>}
     <QtrInsightsBox items={tab === "year" ? yearInsights : sectionInsights} />
     <div style={{ fontSize: 11.5, color: "#98A2B3", marginTop: 14, lineHeight: 1.7 }}>
-      أساس الإعداد: تكلفة الإيرادات = حسابات العمولات والحوافز المدفوعة للوسطاء ومديري المبيعات ({QTR_COST_OF_REVENUE_CODES.join("، ")}). الأصول غير المتداولة = الحسابات 1500 فأعلى. الالتزامات طويلة الأجل = القروض (2200) ومخصص نهاية الخدمة (2250). حقوق الملكية تشمل أرباح الفترات المتراكمة غير المقفلة حتى تتوازن الميزانية. نسبة التغير محسوبة على القيمة المطلقة لرقم الربع السابق، وتظهر «—» إذا كان صفراً.
+      أساس الإعداد: تكلفة الإيرادات = حسابات العمولات والحوافز المدفوعة للوسطاء ومديري المبيعات ({QTR_COST_OF_REVENUE_CODES.join("، ")}). الأصول غير المتداولة = الحسابات 1500 فأعلى. الالتزامات طويلة الأجل = القروض (2200) ومخصص نهاية الخدمة (2250). حقوق الملكية تشمل أرباح الفترات المتراكمة غير المقفلة حتى تتوازن الميزانية. نسبة التغير محسوبة على القيمة المطلقة لرقم الربع السابق، وتظهر «—» إذا كان صفراً. المصروفات المستحقة (2210) تُفصَّل حسب حساب المصروف الذي اعتُمد له الاستحقاق (إيجار، راتب مدير…) وتبقى مفتوحة حتى تُسوّى بقيد سداد يشير إليها.
     </div>
   </div>;
 }

@@ -22,13 +22,13 @@ const REACT_STUB = { createElement: () => null, Fragment: "F", useState: () => [
 
 // Real ledger primitives from core.jsx (what the module calls in the browser).
 const CORE_NAMES = ["React", "firebase", "db", "auth", "window", "document", "localStorage", "toast", "XLSX", "html2canvas", "jspdf", "logAudit", "console"];
-const CORE = new Function(...CORE_NAMES, compile("nasama-accounting-v2.core.jsx") + "; return { buildLedger, accountBalance, computeCashFlow, withoutClosing, AR_ACCOUNT_CODE, DEFAULT_REPORTING_START_DATE };")
+const CORE = new Function(...CORE_NAMES, compile("nasama-accounting-v2.core.jsx") + "; return { buildLedger, accountBalance, computeCashFlow, withoutClosing, reversedTxnIds, AR_ACCOUNT_CODE, DEFAULT_REPORTING_START_DATE };")
   .apply(null, CORE_NAMES.map(n => n === "React" ? REACT_STUB : n === "console" ? console : () => undefined));
 
 const Q_NAMES = ["React", "useState", "useEffect", "useMemo", "C", "NAVY", "GOLD", "toast", "todayStr", "usePersistedState", "ls_get", "db", "XLSX", "document", "console",
-  "buildLedger", "accountBalance", "computeCashFlow", "withoutClosing", "AR_ACCOUNT_CODE", "DEFAULT_REPORTING_START_DATE"];
+  "buildLedger", "accountBalance", "computeCashFlow", "withoutClosing", "reversedTxnIds", "AR_ACCOUNT_CODE", "DEFAULT_REPORTING_START_DATE"];
 const Q = new Function(...Q_NAMES, compile("nasama-accounting-v2.quarterly.jsx") +
-  "; return { qtrRange, qtrPrevOf, qtrOfDate, qtrListYears, computeQuarterSnapshot, compareQuarters, qtrInsights, qtrTableAoa, qtrPrintHtml, qtrMoney, qtrPct, QTR_ROWS, qtrCompareTarget, computeYearQuarters, qtrYearRows, qtrYearTotals, qtrYearInsights, qtrYearAoa, qtrRowQuarterValues, qtrLineAmount };")
+  "; return { qtrRange, qtrPrevOf, qtrOfDate, qtrListYears, computeQuarterSnapshot, compareQuarters, qtrInsights, qtrTableAoa, qtrPrintHtml, qtrMoney, qtrPct, QTR_ROWS, qtrCompareTarget, computeYearQuarters, qtrYearRows, qtrYearTotals, qtrYearInsights, qtrYearAoa, qtrRowQuarterValues, qtrLineAmount, qtrPayablesBreakdown };")
   .apply(null, Q_NAMES.map(n => n === "React" ? REACT_STUB : n === "console" ? console : n in CORE ? CORE[n] : n === "C" ? {} : () => undefined));
 
 const MOCK = require(path.join(ROOT, "tools", "quarterly-mock-data.js"));
@@ -183,6 +183,28 @@ eq(Q.qtrRowQuarterValues(cmp.detail.revenue.find(r => r.key === "4010"), "income
 eq(Q.qtrRowQuarterValues(cmp.detail.currentLiabilities.find(r => r.key === "2230"), "balance", ys).join(","), "0,5000000,5000000,5000000", "balance detail: client deposits carry forward");
 eq(Q.qtrLineAmount(ys[1], "income", "9999"), 0, "unknown account → 0");
 eq(Q.qtrRowQuarterValues(row("cashflow", "operating"), "cashflow", ys).join(","), "11240000,-18205000,0,0", "cash flow row per quarter");
+
+console.log("▸ accrued expenses split by what was accrued");
+const ap1 = q1.aging.lines.payables, ap2 = q2.aging.lines.payables;
+eq(ap1.length, 1, "Q1: one open accrual"); eq(ap1[0].code, "5110", "Q1: it is the DEWA accrual"); eq(ap1[0].amount, 400000, "Q1: 4,000 open");
+eq(ap2.length, 1, "Q2: March DEWA settled, June DEWA open"); eq(ap2[0].amount, 450000, "Q2: 4,500 open");
+eq(ap2.reduce((s, l) => s + l.amount, 0), q2.aging.payables, "breakdown sums to the payables figure");
+ok(/مستحق غير مدفوع/.test(ap2[0].name), "label says accrued, unpaid");
+// A manual journal into 2210 shows up as 'other' so the breakdown still ties to the ledger
+const manual = { id: "mj", date: "2026-06-29", txnType: "JV", isVoid: false, lines: [{ accountId: "a5100", debit: 100000, credit: 0 }, { accountId: "a2210", debit: 0, credit: 100000 }] };
+const q2m = Q.computeQuarterSnapshot({ accounts: MOCK.accounts, txns: [...MOCK.txns, manual], year: 2026, quarter: 2 });
+eq(q2m.aging.payables, 550000, "manual journal raises 2210 to 5,500");
+eq(q2m.aging.lines.payables.find(l => l.code === "2210").amount, 100000, "untraceable 1,000 reported as 'other'");
+eq(q2m.aging.lines.payables.reduce((s, l) => s + l.amount, 0), q2m.aging.payables, "still ties");
+// Rent + manager salary accrued in the same quarter → two named lines
+const rentAcc = { id: "acR", date: "2026-05-30", txnType: "AC", isVoid: false, lines: [{ accountId: "a5100", debit: 3000000, credit: 0 }, { accountId: "a2210", debit: 0, credit: 3000000 }] };
+const q2r = Q.computeQuarterSnapshot({ accounts: MOCK.accounts, txns: [...MOCK.txns, rentAcc], year: 2026, quarter: 2 });
+eq(q2r.aging.lines.payables.map(l => l.code).join(","), "5100,5110", "rent and DEWA listed separately, sorted by code");
+eq(q2r.aging.lines.payables[0].amount, 3000000, "rent accrual 30,000 open");
+const cmpR = Q.compareQuarters(q2r, q1);
+ok(cmpR.detail.payableLines.some(r => r.key === "5100" && r.cur === 3000000 && r.prev === 0), "comparison detail row for the rent accrual");
+ok(/أكبر بند: Office Rent/.test(Q.qtrInsights(q2r, q1, cmpR).filter(i => i.section === "aging").map(i => i.text).join()), "narrative names the biggest accrued item");
+eq(Q.qtrRowQuarterValues(cmpR.detail.payableLines.find(r => r.key === "5100"), "aging", Q.computeYearQuarters({ accounts: MOCK.accounts, txns: [...MOCK.txns, rentAcc], year: 2026 })).join(","), "0,3000000,3000000,3000000", "accrued rent per quarter column");
 
 // ── Part B: seeded random books ──────────────────────────────────────────────
 console.log("▸ seeded random balanced books × quarters — identities");
