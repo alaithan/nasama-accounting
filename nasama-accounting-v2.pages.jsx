@@ -6958,7 +6958,7 @@ function AuthGate({ children }) {
     const onEnter = e => { if (e.key === "Enter") (mode === "bootstrap" ? handleBootstrap : handleLogin)(); };
     return <div style={{ position: "fixed", inset: 0, background: `linear-gradient(135deg, ${NAVY} 0%, #2D2D45 100%)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ background: "#fff", borderRadius: 16, padding: 40, width: "100%", maxWidth: 420, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
-        <div style={{ textAlign: "center", marginBottom: 24 }}><Logo size={48} /><div style={{ fontWeight: 700, fontSize: 18, color: NAVY, marginTop: 8 }}>Nasama Properties</div><div style={{ fontSize: 13, color: "#6B7280" }}>Accounting System</div></div>
+        <div style={{ textAlign: "center", marginBottom: 24 }}><Logo size={48} style={{ margin: "0 auto" }} /><div style={{ fontWeight: 700, fontSize: 18, color: NAVY, marginTop: 8 }}>Nasama Properties</div><div style={{ fontSize: 13, color: "#6B7280" }}>Accounting System</div><div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 2 }}>v{APP_VERSION}</div></div>
         {error && <div style={C.err}>{error}</div>}
         {notice && <div style={{ ...C.err, background: "#ECFDF5", color: "#047857", border: "1px solid #A7F3D0" }}>{notice}</div>}
         <div style={{ marginBottom: 12 }}><label style={C.label}>Username</label><Inp value={loginName} onChange={e => setLoginName(e.target.value)} placeholder="your username" /></div>
@@ -7908,12 +7908,13 @@ function App({ userRole, userAccess, userEmail, signOut }) {
         {/* ── Header ── */}
         <div style={{ padding: sidebarCollapsed ? "20px 0 16px" : "20px 16px 16px", display: "flex", alignItems: "center", justifyContent: sidebarCollapsed ? "center" : "space-between", gap: 8, flexShrink: 0 }}>
           {sidebarCollapsed
-            ? <Logo size={28} />
+            ? <div title={"Version " + APP_VERSION}><Logo size={28} /></div>
             : <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
                 <Logo size={30} />
                 <div>
                   <div style={{ color: "#C9A044", fontWeight: 800, fontSize: 14, letterSpacing: "0.1em", lineHeight: 1.2 }}>NASAMA</div>
                   <div style={{ color: "#1E2848", fontSize: 9, letterSpacing: "0.2em", marginTop: 2, textTransform: "uppercase" }}>Accounting</div>
+                  <div title="App version running in this browser" style={{ color: "#7C86A8", fontSize: 9.5, marginTop: 3, fontVariantNumeric: "tabular-nums" }}>v{APP_VERSION}</div>
                 </div>
               </div>
           }

@@ -8,8 +8,8 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Nasama Properties - Accounting System v2</title>
-  <link rel="icon" type="image/png" href="./nasama-icon.png" />
-  <link rel="stylesheet" href="./nasama-accounting-v2.css" />
+  <link rel="icon" type="image/png" href="./nasama-icon.png?v=2" />
+  <link rel="stylesheet" href="./nasama-accounting-v2.css?v=2026.11.19.2" />
   <!-- Self-hosted vendor libraries (see vendor/ and SELF-HOST-VENDOR-PROMPT.md).
        Byte-identical to the previously-used CDN files; served locally so no third-party
        CDN can ever change what this app runs. Keep versions/load order as-is. -->
@@ -25,27 +25,31 @@
   <script src="./vendor/jspdf-2.5.1.umd.min.js"></script>
   <script src="./vendor/xlsx-0.18.5.full.min.js"></script>
   <script src="./vendor/pdf-3.11.174.min.js"></script>
-  <script charset="UTF-8" src="./nasama-accounting-v2.firebase.js"></script>
+  <!-- APP VERSION — bump on every release, here AND in every ?v= below (same value).
+       It is shown in the sidebar and on the login screen, and the ?v= makes browsers
+       fetch the new files instead of a cached copy. Format: YYYY.MM.DD.n -->
+  <script>window.NASAMA_APP_VERSION = "2026.11.19.2";</script>
+  <script charset="UTF-8" src="./nasama-accounting-v2.firebase.js?v=2026.11.19.2"></script>
 </head>
 
 <body>
   <div id="root"></div>
-  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.future-expenses.jsx"></script>
-  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.core.jsx"></script>
-  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.reports.jsx"></script>
-  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.reports2.jsx"></script>
-  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.print.jsx"></script>
-  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.print2.jsx"></script>
-  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.invoices.jsx"></script>
+  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.future-expenses.jsx?v=2026.11.19.2"></script>
+  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.core.jsx?v=2026.11.19.2"></script>
+  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.reports.jsx?v=2026.11.19.2"></script>
+  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.reports2.jsx?v=2026.11.19.2"></script>
+  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.print.jsx?v=2026.11.19.2"></script>
+  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.print2.jsx?v=2026.11.19.2"></script>
+  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.invoices.jsx?v=2026.11.19.2"></script>
   <!-- insights.jsx after invoices.jsx and future-expenses.jsx: it reuses their helpers. -->
-  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.insights.jsx"></script>
+  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.insights.jsx?v=2026.11.19.2"></script>
   <!-- quarterly.jsx after insights.jsx: it reuses insInvoiceMeta for invoice aging when present. -->
-  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.quarterly.jsx"></script>
-  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.reconcile.jsx"></script>
-  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.employees.jsx"></script>
+  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.quarterly.jsx?v=2026.11.19.2"></script>
+  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.reconcile.jsx?v=2026.11.19.2"></script>
+  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.employees.jsx?v=2026.11.19.2"></script>
   <!-- deposits.jsx must load AFTER invoices.jsx: it reuses invExportPDF for the receipt PDF. -->
-  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.deposits.jsx"></script>
-  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.pages.jsx"></script>
+  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.deposits.jsx?v=2026.11.19.2"></script>
+  <script type="text/babel" charset="UTF-8" src="./nasama-accounting-v2.pages.jsx?v=2026.11.19.2"></script>
 </body>
 
 </html>
