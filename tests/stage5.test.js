@@ -17,7 +17,7 @@ const compile = f => babel.transform(fs.readFileSync(path.join(ROOT, f), "utf8")
 const REACT_STUB = { createElement: () => null, Fragment: "F", useState: () => [], useEffect: () => {}, useMemo: () => {}, useCallback: () => {}, useRef: () => ({}) };
 const NAMES = ["React", "firebase", "db", "auth", "window", "document", "localStorage", "toast", "XLSX", "html2canvas", "jspdf", "logAudit", "console"];
 const X = new Function(...NAMES, compile("nasama-accounting-v2.core.jsx") + ";\n" + compile("nasama-accounting-v2.reconcile.jsx") + `
-  ; return { reconParseAmount, reconNormDate, reconDetectDateOrder, reconPdfLinesToRows, reconRowsToLines, reconMatch,
+  ; return { reconParseAmount, reconNormDate, reconDetectDateOrder, reconPdfLinesToRows, reconRowsToLines, reconMatch, reconMatchWithPrior,
              reconBookBankTxns, reconBookBalanceAsOf, reconOpenBook, reconOutstanding, reconCellToString,
              reconFindDuplicates, assertNotReconciled, isTxnReconciled };`)
   .apply(null, NAMES.map(n => n === "React" ? REACT_STUB : n === "console" ? console : () => undefined));
@@ -127,6 +127,19 @@ section("5.2 balance as of statement end, carry-forward, already-reconciled");
   ok(out.some(b => b.id === "c"), "February's uncleared cheque carries forward into March");
   const outFirst = X.reconOutstanding(open, { from: "2026-03-01", to: "2026-03-31" }, []);
   ok(!outFirst.some(b => b.id === "c"), "with no saved reconciliation, only the statement window counts");
+
+  // A statement that overlaps an already-reconciled period: its lines pair with
+  // the ticked-off entries instead of all showing as "unrecorded".
+  const L = (id, date, amountC) => ({ id, date, desc: id, amountC });
+  const stmt = [L("s1", "2026-02-10", -20000), L("s2", "2026-02-25", -5000), L("s3", "2026-03-03", -777)];
+  const closed = book.filter(b => b.reconciled);
+  eq(X.reconMatch(stmt, open, 3, 0).statementOnly.length, 2, "(before) the reconciled entry's line looked unrecorded");
+  const rp = X.reconMatchWithPrior(stmt, open, closed, 3, 0);
+  eq(rp.prior.length, 1, "line of an already-reconciled entry pairs with it");
+  eq(rp.prior[0].book[0].id, "b", "…the right entry");
+  eq(rp.statementOnly.map(l => l.id).join(), "s3", "only the genuinely missing line stays unrecorded");
+  eq(rp.matched.length, 1, "open entries still match normally (and first)");
+  ok(!rp.bookOnly.some(b => b.id === "b"), "reconciled entries never appear as outstanding");
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -361,6 +361,25 @@ function reconMatch(lines, bookTxns, toleranceDays, amountTolC, opts = {}) {
   return { matched, near, groups, manual, statementOnly, bookOnly };
 }
 
+// Match against the open entries first, then pair what is left with entries an
+// EARLIER saved reconciliation already ticked off. Without the second step a
+// statement that overlaps a reconciled period showed every one of those lines
+// as "unrecorded" — their book entries were hidden from matching — and counted
+// them twice in the expected balance.
+// Returns reconMatch's result with `statementOnly` reduced and
+// `prior: [{ lines, book, diffC }]` (statement − book) for the already-ticked pairs.
+function reconMatchWithPrior(lines, openBook, closedBook, toleranceDays, amountTolC, opts = {}) {
+  const r = reconMatch(lines, openBook, toleranceDays, amountTolC, opts);
+  if (!(closedBook || []).length || !r.statementOnly.length) return { ...r, prior: [] };
+  const p = reconMatch(r.statementOnly, closedBook, toleranceDays, amountTolC, { unmatchLineIds: opts.unmatchLineIds });
+  const prior = [
+    ...p.matched.map(m => ({ lines: [m.line], book: [m.book], diffC: 0 })),
+    ...p.near.map(m => ({ lines: [m.line], book: [m.book], diffC: m.diffC })),
+    ...p.groups.map(g => ({ lines: g.lines, book: g.book, diffC: g.diffC })),
+  ];
+  return { ...r, statementOnly: p.statementOnly, prior };
+}
+
 const reconFmtSigned = (c) => (c > 0 ? "+" : c < 0 ? "−" : "") + fmtAED(Math.abs(c)).replace("AED ", "");
 
 // ═══════════════════════════════════════════════════════════════════
@@ -415,8 +434,16 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, userR
   // Match only against entries not already ticked off by a saved reconciliation.
   const bookTxns = React.useMemo(() => reconOpenBook(bookAll, period.to, tolerance), [bookAll, period.to, tolerance]);
   const amountTolC = Math.round((parseFloat(amountTol) || 0) * 100);
-  const result = React.useMemo(() => reconMatch(lines, bookTxns, tolerance, amountTolC, { manualPairs, unmatchLineIds: unmatched }),
-    [lines, bookTxns, tolerance, amountTolC, manualPairs, unmatched]);
+  // Entries an earlier saved reconciliation already ticked off: statement lines
+  // that belong to them are "already reconciled", not unrecorded.
+  const bookClosed = React.useMemo(() => {
+    const limit = period.to ? isoAddDays(period.to, tolerance || 0) : "";
+    return bookAll.filter(b => b.reconciled && (!limit || b.date <= limit));
+  }, [bookAll, period.to, tolerance]);
+  const result = React.useMemo(() => reconMatchWithPrior(lines, bookTxns, bookClosed, tolerance, amountTolC, { manualPairs, unmatchLineIds: unmatched }),
+    [lines, bookTxns, bookClosed, tolerance, amountTolC, manualPairs, unmatched]);
+  const priorLineCount = result.prior.reduce((s, p) => s + p.lines.length, 0);
+  const sumPriorDiff = result.prior.reduce((s, p) => s + p.diffC, 0);   // Σ(statement − book) over already-reconciled pairs
 
   // Outstanding = book entries not on the statement — carried forward from the
   // first saved reconciliation when there is one (see reconOutstanding).
@@ -444,9 +471,9 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, userR
   // that entry out, so add it back — otherwise a balanced statement showed it
   // as "unexplained".
   const lateMatchedC = [...result.matched, ...result.near, ...result.manual].map(m => m.book)
-    .concat(...result.groups.map(g => g.book))
+    .concat(...result.groups.map(g => g.book)).concat(...result.prior.map(p => p.book))
     .filter(b => period.to && b.date > period.to).reduce((s, b) => s + b.amountC, 0);
-  const expectedC = bookBalC + sumStmtOnly - sumOutstanding + sumNearDiff + sumGroupDiff + sumManualDiff + lateMatchedC;
+  const expectedC = bookBalC + sumStmtOnly - sumOutstanding + sumNearDiff + sumGroupDiff + sumManualDiff + sumPriorDiff + lateMatchedC;
   const breakdown = [
     [`Book balance${period.to ? ` at ${period.to}` : " (per system)"}`, bookBalC, false],
     ["Add: unrecorded on statement", sumStmtOnly, true],
@@ -454,6 +481,7 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, userR
     ...(result.near.length ? [["Near-match differences (stmt − book)", sumNearDiff, true]] : []),
     ...(result.groups.length ? [["Grouped-match differences (stmt − book)", sumGroupDiff, true]] : []),
     ...(result.manual.length ? [["Manual-pair differences (stmt − book)", sumManualDiff, true]] : []),
+    ...(sumPriorDiff ? [["Already-reconciled differences (stmt − book)", sumPriorDiff, true]] : []),
     ...(lateMatchedC ? [["Add: matched entries booked after the statement end", lateMatchedC, true]] : []),
     ["Expected statement balance", expectedC, false],
   ];
@@ -870,6 +898,12 @@ function BankReconcileModal({ accounts, txns, ledger, journal, persistTxn, userR
                       </tbody>
                     </table>}
               </ReconSection>
+
+              {priorLineCount > 0 && (
+                <div style={{ ...card, marginBottom: 8, fontSize: 12.5, color: "#047857", background: "#ECFDF5", border: "1px solid #A7F3D0" }}>
+                  <strong>✓ Already reconciled · {priorLineCount}</strong> statement line(s) belong to entries ticked off by an earlier saved reconciliation, so they are not listed as unrecorded.
+                </div>
+              )}
 
               {/* Matched */}
               <div style={{ ...card, marginBottom: 8 }}>
